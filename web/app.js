@@ -80,18 +80,29 @@ function renderHeader() {
 function renderKpis(rows) {
   const visibleOfficers = rows.filter(r => state.data.metadata.includeUnmappedInVisibleOfficerKpi || r.status !== "Unmapped").length;
   const total = key => rows.reduce((t,r)=>t+(Number(r[key])||0),0);
-  const till = total("totalPlannedTillDate"), completed = total("distinctPlannedVisitsCompleted");
+  const till = total("totalPlannedTillDate");
+  const completed = total("distinctPlannedVisitsCompleted");
+  const remaining = total("remainingVisits");
+  const remainingPct = till ? (remaining / till * 100) : null;
+
   const cards = [
-    ["Visible Officers", visibleOfficers],
-    ["Total Planned Visits<br>(Full Month)", total("totalPlannedFullMonth")],
-    ["Planned Visits<br>Till Date", till],
-    ["Accepted<br>Responses", total("acceptedResponses")],
-    ["Planned Visits<br>Completed", completed],
-    ["Remaining Visits<br>(No Response)", total("remainingVisits")],
-    ["Never Visited<br>Outlets Till Date", total("neverVisitedOutlets")],
-    ["Completion<br>%", till ? `${(completed/till*100).toFixed(1)}%` : "—"]
+    ["Visible Officers", visibleOfficers, ""],
+    ["Total Planned Visits<br>(Full Month)", total("totalPlannedFullMonth"), ""],
+    ["Planned Visits<br>Till Date", till, ""],
+    ["Accepted<br>Responses", total("acceptedResponses"), ""],
+    ["Planned Visits<br>Completed", completed, ""],
+    ["Remaining Visits<br>(No Response)", remaining, remainingPct === null ? "" : `${remainingPct.toFixed(1)}%`],
+    ["Never Visited<br>Outlets Till Date", total("neverVisitedOutlets"), ""],
+    ["Completion<br>%", till ? `${(completed/till*100).toFixed(1)}%` : "—", ""]
   ];
-  $("kpis").innerHTML = cards.map(([label,value]) => `<div class="kpi-card"><div class="kpi-label">${label}</div><div class="kpi-value">${typeof value === "number" ? numberFmt.format(value) : value}</div></div>`).join("");
+
+  $("kpis").innerHTML = cards.map(([label,value,smallPct]) => {
+    const mainValue = typeof value === "number" ? numberFmt.format(value) : value;
+    const pctHtml = smallPct
+      ? `<span class="kpi-inline-pct" title="Remaining Visits as % of Planned Visits Till Date">(${smallPct})</span>`
+      : "";
+    return `<div class="kpi-card"><div class="kpi-label">${label}</div><div class="kpi-value">${mainValue}${pctHtml}</div></div>`;
+  }).join("");
 }
 function renderTable(rows) {
   const head = $("performance-head");

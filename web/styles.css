@@ -498,3 +498,16 @@ input,
 #performance-table tbody td.completion-cell {
   font-weight: 700 !important;
 }
+
+
+/* v8.5 — small Remaining Visits percentage beside KPI value */
+.kpi-inline-pct{
+  display:inline-block;
+  margin-left:6px;
+  font-size:11px;
+  line-height:1;
+  font-weight:700;
+  color:#a9bac6;
+  vertical-align:middle;
+  letter-spacing:0;
+}
