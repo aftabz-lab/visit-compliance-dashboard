@@ -77,6 +77,11 @@ function renderHeader() {
   $("status-filter").innerHTML = statuses.map(v=>`<option>${esc(v)}</option>`).join("");
   updateOfficerOptions();
 }
+function distinctNeverOutlets(rows) {
+  const set = new Set();
+  rows.forEach(r => (state.data.details[r.officerKey]?.neverVisited || []).forEach(x => set.add(x.siteCode)));
+  return set.size;
+}
 function renderKpis(rows) {
   const visibleOfficers = rows.filter(r => state.data.metadata.includeUnmappedInVisibleOfficerKpi || r.status !== "Unmapped").length;
   const total = key => rows.reduce((t,r)=>t+(Number(r[key])||0),0);
@@ -84,6 +89,7 @@ function renderKpis(rows) {
   const completed = total("distinctPlannedVisitsCompleted");
   const otherUnplanned = total("otherUnplannedResponses");
   const remaining = total("remainingVisits");
+  const neverDistinct = distinctNeverOutlets(rows);
   const remainingPct = till ? (remaining / till * 100) : null;
   const completionPct = till ? ((completed + otherUnplanned) / till * 100) : null;
 
@@ -94,7 +100,7 @@ function renderKpis(rows) {
     ["accepted", "Accepted<br>Responses", total("acceptedResponses"), ""],
     ["completed", "Planned Visits<br>Completed", completed, ""],
     ["remaining", "Remaining Visits<br>(No Response)", remaining, remainingPct === null ? "" : `${remainingPct.toFixed(1)}%`],
-    ["never", "Never Visited<br>Outlets Till Date", total("neverVisitedOutlets"), ""],
+    ["never", "Never Visited<br>Outlets Till Date", neverDistinct, ""],
     ["otherUnplanned", "Other / Unplanned<br>Response List (Till Date)", otherUnplanned, ""],
     ["completion", "Completion<br>%", completionPct === null ? "—" : `${completionPct.toFixed(1)}%`, ""]
   ];
@@ -142,7 +148,14 @@ function kpiOutletRecords(kpiId, rows) {
     case "tillDate": return toOutlet(collect(d => (d.planned || []).filter(p => p.plannedDate <= snapshot)));
     case "completed": return toOutlet(collect(d => d.completed));
     case "remaining": return toOutlet(collect(d => d.remaining));
-    case "never": return toOutlet(collect(d => d.neverVisited));
+    case "never": {
+      const seen = new Set();
+      const uniq = [];
+      for (const x of collect(d => d.neverVisited)) {
+        if (!seen.has(x.siteCode)) { seen.add(x.siteCode); uniq.push(x); }
+      }
+      return toOutlet(uniq);
+    }
     case "accepted": return toOutlet(collect(d => [...(d.plannedDateResponseList || []), ...(d.otherUnplannedResponseList || [])]));
     case "otherUnplanned": return toOutlet(collect(d => d.otherUnplannedResponseList));
     case "completion": return toOutlet([...collect(d => d.completed), ...collect(d => d.otherUnplannedResponseList)]);
@@ -258,7 +271,7 @@ function renderTable(rows) {
     selectOfficer(btn.dataset.officerKey, true);
   }));
   const total = key => rows.reduce((t,r)=>t+(Number(r[key])||0),0);
-  $("summary-caption").textContent = `${rows.length} displayed rows · ${numberFmt.format(total("totalPlannedFullMonth"))} planned visits full month · ${numberFmt.format(total("totalPlannedTillDate"))} planned visits till date · ${numberFmt.format(total("remainingVisits"))} remaining with no response · ${numberFmt.format(total("neverVisitedOutlets"))} never visited outlets`;
+  $("summary-caption").textContent = `${rows.length} displayed rows · ${numberFmt.format(total("totalPlannedFullMonth"))} planned visits full month · ${numberFmt.format(total("totalPlannedTillDate"))} planned visits till date · ${numberFmt.format(total("remainingVisits"))} remaining with no response · ${numberFmt.format(distinctNeverOutlets(rows))} distinct never visited outlets`;
 }
 function detailTable(rows, type) {
   if (!rows.length) return `<div class="details-message">No records in this section.</div>`;
