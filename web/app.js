@@ -12,7 +12,7 @@ const columns = [
   ["completionPct", "Completion %"]
 ];
 const ALL_OFFICERS = "__ALL_OFFICERS__";
-const state = { data: null, status: "All statuses", officerKey: ALL_OFFICERS, search: "", sortKey: "status", sortDir: 1, activeDetailTab: "planned" };
+const state = { data: null, status: "All statuses", officerKey: ALL_OFFICERS, search: "", sortKey: "status", sortDir: 1, activeDetailTab: "planned", activeKpi: null };
 const $ = id => document.getElementById(id);
 const numberFmt = new Intl.NumberFormat("en-US");
 function fmtDate(iso) { return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day:"2-digit", month:"short", year:"numeric", timeZone:"UTC" }); }
@@ -82,27 +82,121 @@ function renderKpis(rows) {
   const total = key => rows.reduce((t,r)=>t+(Number(r[key])||0),0);
   const till = total("totalPlannedTillDate");
   const completed = total("distinctPlannedVisitsCompleted");
+  const otherUnplanned = total("otherUnplannedResponses");
   const remaining = total("remainingVisits");
   const remainingPct = till ? (remaining / till * 100) : null;
+  const completionPct = till ? ((completed + otherUnplanned) / till * 100) : null;
 
   const cards = [
-    ["Visible Officers", visibleOfficers, ""],
-    ["Total Planned Visits<br>(Full Month)", total("totalPlannedFullMonth"), ""],
-    ["Planned Visits<br>Till Date", till, ""],
-    ["Accepted<br>Responses", total("acceptedResponses"), ""],
-    ["Planned Visits<br>Completed", completed, ""],
-    ["Remaining Visits<br>(No Response)", remaining, remainingPct === null ? "" : `${remainingPct.toFixed(1)}%`],
-    ["Never Visited<br>Outlets Till Date", total("neverVisitedOutlets"), ""],
-    ["Completion<br>%", till ? `${(completed/till*100).toFixed(1)}%` : "—", ""]
+    ["visibleOfficers", "Visible Officers", visibleOfficers, ""],
+    ["fullMonth", "Total Planned Visits<br>(Full Month)", total("totalPlannedFullMonth"), ""],
+    ["tillDate", "Planned Visits<br>Till Date", till, ""],
+    ["accepted", "Accepted<br>Responses", total("acceptedResponses"), ""],
+    ["completed", "Planned Visits<br>Completed", completed, ""],
+    ["remaining", "Remaining Visits<br>(No Response)", remaining, remainingPct === null ? "" : `${remainingPct.toFixed(1)}%`],
+    ["never", "Never Visited<br>Outlets Till Date", total("neverVisitedOutlets"), ""],
+    ["otherUnplanned", "Other / Unplanned<br>Response List (Till Date)", otherUnplanned, ""],
+    ["completion", "Completion<br>%", completionPct === null ? "—" : `${completionPct.toFixed(1)}%`, ""]
   ];
 
-  $("kpis").innerHTML = cards.map(([label,value,smallPct]) => {
+  $("kpis").innerHTML = cards.map(([id,label,value,smallPct]) => {
     const mainValue = typeof value === "number" ? numberFmt.format(value) : value;
     const pctHtml = smallPct
       ? `<span class="kpi-inline-pct" title="Remaining Visits as % of Planned Visits Till Date">(${smallPct})</span>`
       : "";
-    return `<div class="kpi-card"><div class="kpi-label">${label}</div><div class="kpi-value">${mainValue}${pctHtml}</div></div>`;
+    const active = state.activeKpi === id ? " kpi-link-active" : "";
+    return `<div class="kpi-card"><div class="kpi-label">${label}</div><div class="kpi-value"><button type="button" class="kpi-link${active}" data-kpi="${id}" title="Click to list outlet code, outlet name, RHO name and zonal name">${mainValue}</button>${pctHtml}</div></div>`;
   }).join("");
+  $("kpis").querySelectorAll(".kpi-link").forEach(btn => btn.addEventListener("click", () => showKpiDrill(btn.dataset.kpi)));
+}
+
+const KPI_TITLES = {
+  visibleOfficers: "Visible Officers",
+  fullMonth: "Total Planned Visits (Full Month)",
+  tillDate: "Planned Visits Till Date",
+  accepted: "Accepted Responses",
+  completed: "Planned Visits Completed",
+  remaining: "Remaining Visits (No Response)",
+  never: "Never Visited Outlets (Till Date)",
+  otherUnplanned: "Other / Unplanned Response List (Till Date)",
+  completion: "Completion basis — Planned Visits Completed + Other / Unplanned Responses"
+};
+const DRILL_COLUMNS = [["siteCode","Outlet Code"],["outletName","Outlet Name"],["rhoName","RHO Name"],["zonalName","Zonal Name"]];
+function outletMeta(siteCode, fallbackName) {
+  const o = (state.data.outlets && state.data.outlets[siteCode]) || {};
+  return {
+    siteCode: siteCode || "",
+    outletName: fallbackName || o.outletName || "",
+    rhoName: o.rhoName || "",
+    zonalName: o.zonalName || ""
+  };
+}
+function kpiOutletRecords(kpiId, rows) {
+  const snapshot = state.data.metadata.snapshotDate;
+  const det = k => state.data.details[k] || {};
+  const keys = rows.map(r => r.officerKey);
+  const collect = picker => keys.flatMap(k => picker(det(k)) || []);
+  const toOutlet = list => list.map(x => outletMeta(x.siteCode, x.outletName));
+  switch (kpiId) {
+    case "fullMonth": return toOutlet(collect(d => d.planned));
+    case "tillDate": return toOutlet(collect(d => (d.planned || []).filter(p => p.plannedDate <= snapshot)));
+    case "completed": return toOutlet(collect(d => d.completed));
+    case "remaining": return toOutlet(collect(d => d.remaining));
+    case "never": return toOutlet(collect(d => d.neverVisited));
+    case "accepted": return toOutlet(collect(d => [...(d.plannedDateResponseList || []), ...(d.otherUnplannedResponseList || [])]));
+    case "otherUnplanned": return toOutlet(collect(d => d.otherUnplannedResponseList));
+    case "completion": return toOutlet([...collect(d => d.completed), ...collect(d => d.otherUnplannedResponseList)]);
+    default: return [];
+  }
+}
+function showKpiDrill(kpiId) {
+  state.activeKpi = kpiId;
+  render();
+  requestAnimationFrame(() => $("kpi-drill-section")?.scrollIntoView({ behavior:"smooth", block:"start" }));
+}
+function renderKpiDrill(rows) {
+  const target = $("kpi-drill-section");
+  if (!target) return;
+  const kpiId = state.activeKpi;
+  if (!kpiId) { target.innerHTML = ""; return; }
+  const title = KPI_TITLES[kpiId] || "Details";
+  const head = `<div class="details-title kpi-drill-title"><span>Selected metric — ${esc(title)}</span><div class="kpi-drill-actions"><button type="button" id="kpi-drill-csv" class="btn secondary">Download this list</button><button type="button" id="kpi-drill-close" class="btn secondary">Close list</button></div></div>`;
+
+  if (kpiId === "visibleOfficers") {
+    const officers = rows.filter(r => state.data.metadata.includeUnmappedInVisibleOfficerKpi || r.status !== "Unmapped");
+    const body = officers.length
+      ? `<div class="detail-table-wrap"><table class="detail-table kpi-drill-table kpi-drill-officers"><thead><tr><th>Status</th><th>Officer</th><th>Planned Visits Till Date</th><th>Completion %</th></tr></thead><tbody>${officers.map(o=>`<tr><td>${esc(o.status)}</td><td>${esc(o.officer)}</td><td>${numberFmt.format(Number(o.totalPlannedTillDate)||0)}</td><td>${pct(o.completionPct)}</td></tr>`).join("")}</tbody></table></div>`
+      : `<div class="details-message">No officers in the current selection.</div>`;
+    target.innerHTML = `${head}<div class="kpi-drill-caption">${officers.length} officer(s) in view · outlet-level columns (Outlet Code / Outlet Name / RHO Name / Zonal Name) appear for the outlet-based metrics.</div>${body}`;
+    wireKpiDrillButtons(kpiId, rows);
+    return;
+  }
+
+  const records = kpiOutletRecords(kpiId, rows);
+  const body = records.length
+    ? `<div class="detail-table-wrap"><table class="detail-table kpi-drill-table"><thead><tr>${DRILL_COLUMNS.map(c=>`<th>${c[1]}</th>`).join("")}</tr></thead><tbody>${records.map(r=>`<tr>${DRILL_COLUMNS.map(([k])=>`<td>${esc(r[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+    : `<div class="details-message">No records for this metric in the current selection.</div>`;
+  target.innerHTML = `${head}<div class="kpi-drill-caption">${numberFmt.format(records.length)} row(s) listed.</div>${body}`;
+  wireKpiDrillButtons(kpiId, rows);
+}
+function wireKpiDrillButtons(kpiId, rows) {
+  $("kpi-drill-close")?.addEventListener("click", () => { state.activeKpi = null; render(); });
+  $("kpi-drill-csv")?.addEventListener("click", () => downloadKpiDrillCsv(kpiId, rows));
+}
+function downloadKpiDrillCsv(kpiId, rows) {
+  let header, lines;
+  if (kpiId === "visibleOfficers") {
+    const officers = rows.filter(r => state.data.metadata.includeUnmappedInVisibleOfficerKpi || r.status !== "Unmapped");
+    header = ["Status","Officer","Planned Visits Till Date","Completion %"];
+    lines = officers.map(o => [o.status, o.officer, Number(o.totalPlannedTillDate)||0, pct(o.completionPct)]);
+  } else {
+    header = DRILL_COLUMNS.map(c => c[1]);
+    lines = kpiOutletRecords(kpiId, rows).map(r => DRILL_COLUMNS.map(([k]) => r[k]));
+  }
+  const out = [header.map(csvEscape).join(",")].concat(lines.map(row => row.map(csvEscape).join(",")));
+  const blob = new Blob(["\ufeff"+out.join("\r\n")], { type:"text/csv;charset=utf-8" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = `${kpiId}_outlet_list.csv`; a.click(); URL.revokeObjectURL(a.href);
 }
 function renderTable(rows) {
   const head = $("performance-head");
@@ -187,7 +281,7 @@ function renderDefinitions() {
 }
 function render() {
   const rows=getFiltered();
-  renderKpis(rows); renderTable(rows); renderDetails(rows);
+  renderKpis(rows); renderTable(rows); renderDetails(rows); renderKpiDrill(rows);
 }
 function csvEscape(v) { const s=String(v??""); return /[",\n]/.test(s)?`"${s.replaceAll('"','""')}"`:s; }
 function downloadCsv() {
@@ -206,7 +300,7 @@ async function init() {
     $("status-filter").addEventListener("change",e=>{state.status=e.target.value;updateOfficerOptions();render();});
     $("officer-filter").addEventListener("change",e=>selectOfficer(e.target.value, true));
     $("officer-search").addEventListener("input",e=>{state.search=e.target.value;render();});
-    $("reset-btn").addEventListener("click",()=>{state.status="All statuses";state.officerKey=ALL_OFFICERS;state.search="";state.activeDetailTab="planned";$("status-filter").value=state.status;$("officer-search").value="";updateOfficerOptions();render();});
+    $("reset-btn").addEventListener("click",()=>{state.status="All statuses";state.officerKey=ALL_OFFICERS;state.search="";state.activeDetailTab="planned";state.activeKpi=null;$("status-filter").value=state.status;$("officer-search").value="";updateOfficerOptions();render();});
     $("download-btn").addEventListener("click",downloadCsv);
   } catch(err) {
     document.querySelector("main").innerHTML=`<div class="error-box"><strong>Dashboard could not load.</strong>\n${esc(err.message)}\n\nIf this is a new GitHub repository, open the Actions tab and confirm the Deploy Visit Compliance Dashboard workflow completed successfully.</div>`;

@@ -27,7 +27,7 @@ select:focus, input:focus { border-color: #2b83a6; box-shadow: 0 0 0 2px rgba(43
 .btn.primary { background: var(--navy); color: white; }
 .btn.secondary { background: #edf3f5; color: #284f60; border: 1px solid #b9ced6; }
 .btn:hover { filter: brightness(.97); }
-.kpi-grid { margin-top: 7px; display: grid; grid-template-columns: repeat(8, minmax(110px, 1fr)); gap: 5px; }
+.kpi-grid { margin-top: 7px; display: grid; grid-template-columns: repeat(9, minmax(92px, 1fr)); gap: 5px; }
 .kpi-card { background: #fff; border: 1px solid var(--border); border-radius: 3px; text-align: center; min-height: 73px; padding: 7px 4px 6px; box-shadow: var(--shadow); display: grid; align-content: center; }
 .kpi-label { color: #234e60; font-size: 10px; line-height: 1.1; font-weight: 700; min-height: 23px; }
 .kpi-value { color: #0a3b57; font-size: 24px; font-weight: 800; line-height: 1.05; }
@@ -510,4 +510,95 @@ input,
   color:#a9bac6;
   vertical-align:middle;
   letter-spacing:0;
+}
+
+
+/* ============================================================
+   v9 — Clickable KPI values + bottom KPI drill-down list
+   (Outlet Code / Outlet Name / RHO Name / Zonal Name)
+   ============================================================ */
+
+.kpi-value .kpi-link {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(125, 199, 236, .55);
+}
+.kpi-value .kpi-link:hover,
+.kpi-value .kpi-link:focus-visible {
+  color: #b6e7ff !important;
+  text-decoration-color: #7ec7ec !important;
+}
+.kpi-value .kpi-link:focus-visible {
+  outline: 2px solid #67c1eb;
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.kpi-link-active {
+  color: #7ec7ec !important;
+  text-decoration-color: #7ec7ec !important;
+}
+
+.kpi-drill-section { margin-top: 7px; }
+.kpi-drill-section:empty { display: none; }
+
+.kpi-drill-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: #111820 !important;
+  border: 1px solid #2b3945 !important;
+  border-bottom: 0 !important;
+}
+.kpi-drill-actions { display: flex; gap: 7px; }
+
+.kpi-drill-caption {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #b4c3cc !important;
+  background: #0f151b !important;
+  border-left: 1px solid #2b3945 !important;
+  border-right: 1px solid #2b3945 !important;
+}
+
+.kpi-drill-section .detail-table-wrap {
+  max-height: 60vh;
+  border: 1px solid #2b3945 !important;
+  background: #090d11 !important;
+}
+.kpi-drill-table { table-layout: fixed; }
+.kpi-drill-table th:nth-child(1), .kpi-drill-table td:nth-child(1) { width: 16%; }
+.kpi-drill-table th:nth-child(2), .kpi-drill-table td:nth-child(2) { width: 40%; }
+.kpi-drill-table th:nth-child(3), .kpi-drill-table td:nth-child(3) { width: 22%; }
+.kpi-drill-table th:nth-child(4), .kpi-drill-table td:nth-child(4) { width: 22%; }
+.kpi-drill-table td {
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.kpi-drill-officers th:nth-child(1), .kpi-drill-officers td:nth-child(1) { width: 14%; }
+.kpi-drill-officers th:nth-child(2), .kpi-drill-officers td:nth-child(2) { width: 46%; }
+.kpi-drill-officers th:nth-child(3), .kpi-drill-officers td:nth-child(3) { width: 22%; text-align: center; }
+.kpi-drill-officers th:nth-child(4), .kpi-drill-officers td:nth-child(4) { width: 18%; text-align: center; }
+
+@media (max-width: 1200px) {
+  .kpi-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 760px) {
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .kpi-drill-title { align-items: stretch; }
 }
