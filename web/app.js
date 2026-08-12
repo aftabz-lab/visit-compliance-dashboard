@@ -12,7 +12,7 @@ const columns = [
   ["completionPct", "Completion %"]
 ];
 const ALL_OFFICERS = "__ALL_OFFICERS__";
-const state = { data: null, status: "All statuses", officerKey: ALL_OFFICERS, search: "", sortKey: "status", sortDir: 1, activeDetailTab: "planned", activeKpi: null };
+const state = { data: null, status: "All statuses", officerKey: ALL_OFFICERS, search: "", sortKey: "status", sortDir: 1, activeDetailTab: "planned", activeKpi: null, drillSortKey: null, drillSortDir: 1 };
 const $ = id => document.getElementById(id);
 const numberFmt = new Intl.NumberFormat("en-US");
 function fmtDate(iso) { return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day:"2-digit", month:"short", year:"numeric", timeZone:"UTC" }); }
@@ -151,8 +151,55 @@ function kpiOutletRecords(kpiId, rows) {
 }
 function showKpiDrill(kpiId) {
   state.activeKpi = kpiId;
+  state.drillSortKey = null;
+  state.drillSortDir = 1;
   render();
   requestAnimationFrame(() => $("kpi-drill-section")?.scrollIntoView({ behavior:"smooth", block:"start" }));
+}
+function drillDataset(kpiId, rows) {
+  if (kpiId === "visibleOfficers") {
+    const inc = state.data.metadata.includeUnmappedInVisibleOfficerKpi;
+    return {
+      cols: [["status","Status"],["officer","Officer"],["totalPlannedTillDate","Planned Visits Till Date","num"],["completionPct","Completion %","pct"]],
+      records: rows.filter(r => inc || r.status !== "Unmapped"),
+      extraClass: "kpi-drill-officers"
+    };
+  }
+  return { cols: DRILL_COLUMNS, records: kpiOutletRecords(kpiId, rows), extraClass: "" };
+}
+function sortDrillRows(records, cols) {
+  const key = state.drillSortKey;
+  if (!key) return records;
+  const col = cols.find(c => c[0] === key);
+  const numeric = !!(col && col[2] === "num");
+  const dir = state.drillSortDir;
+  return [...records].sort((a,b) => {
+    let av = a[key], bv = b[key];
+    if (numeric || (col && col[2] === "pct")) {
+      av = (av == null || av === "") ? null : Number(av);
+      bv = (bv == null || bv === "") ? null : Number(bv);
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return (av - bv) * dir;
+    }
+    return String(av ?? "").localeCompare(String(bv ?? ""), undefined, { numeric:true, sensitivity:"base" }) * dir;
+  });
+}
+function drillTableHtml(cols, records, extraClass) {
+  const sorted = sortDrillRows(records, cols);
+  const headRow = cols.map(([k,label]) => {
+    const ind = state.drillSortKey === k ? (state.drillSortDir === 1 ? "▲" : "▼") : "↕";
+    return `<th data-sort-key="${esc(k)}" title="Sort by ${esc(label)}">${esc(label)} <span class="sort">${ind}</span></th>`;
+  }).join("");
+  const bodyRows = sorted.map(r => `<tr>${cols.map(([k,,type]) => {
+    let cell;
+    if (type === "pct") cell = pct(r[k]);
+    else if (type === "num") cell = numberFmt.format(Number(r[k]) || 0);
+    else cell = esc(r[k]);
+    return `<td>${cell}</td>`;
+  }).join("")}</tr>`).join("");
+  return `<div class="detail-table-wrap"><table class="detail-table kpi-drill-table ${extraClass}"><thead><tr>${headRow}</tr></thead><tbody>${bodyRows}</tbody></table></div>`;
 }
 function renderKpiDrill(rows) {
   const target = $("kpi-drill-section");
@@ -162,21 +209,21 @@ function renderKpiDrill(rows) {
   const title = KPI_TITLES[kpiId] || "Details";
   const head = `<div class="details-title kpi-drill-title"><span>Selected metric — ${esc(title)}</span><div class="kpi-drill-actions"><button type="button" id="kpi-drill-csv" class="btn secondary">Download this list</button><button type="button" id="kpi-drill-close" class="btn secondary">Close list</button></div></div>`;
 
-  if (kpiId === "visibleOfficers") {
-    const officers = rows.filter(r => state.data.metadata.includeUnmappedInVisibleOfficerKpi || r.status !== "Unmapped");
-    const body = officers.length
-      ? `<div class="detail-table-wrap"><table class="detail-table kpi-drill-table kpi-drill-officers"><thead><tr><th>Status</th><th>Officer</th><th>Planned Visits Till Date</th><th>Completion %</th></tr></thead><tbody>${officers.map(o=>`<tr><td>${esc(o.status)}</td><td>${esc(o.officer)}</td><td>${numberFmt.format(Number(o.totalPlannedTillDate)||0)}</td><td>${pct(o.completionPct)}</td></tr>`).join("")}</tbody></table></div>`
-      : `<div class="details-message">No officers in the current selection.</div>`;
-    target.innerHTML = `${head}<div class="kpi-drill-caption">${officers.length} officer(s) in view · outlet-level columns (Outlet Code / Outlet Name / RHO Name / Zonal Name) appear for the outlet-based metrics.</div>${body}`;
-    wireKpiDrillButtons(kpiId, rows);
-    return;
-  }
-
-  const records = kpiOutletRecords(kpiId, rows);
+  const { cols, records, extraClass } = drillDataset(kpiId, rows);
+  const caption = kpiId === "visibleOfficers"
+    ? `${records.length} officer(s) in view · click a column header to sort. Outlet-level columns (Outlet Code / Outlet Name / RHO Name / Zonal Name) appear for the outlet-based metrics.`
+    : `${numberFmt.format(records.length)} row(s) listed · click a column header to sort.`;
   const body = records.length
-    ? `<div class="detail-table-wrap"><table class="detail-table kpi-drill-table"><thead><tr>${DRILL_COLUMNS.map(c=>`<th>${c[1]}</th>`).join("")}</tr></thead><tbody>${records.map(r=>`<tr>${DRILL_COLUMNS.map(([k])=>`<td>${esc(r[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+    ? drillTableHtml(cols, records, extraClass)
     : `<div class="details-message">No records for this metric in the current selection.</div>`;
-  target.innerHTML = `${head}<div class="kpi-drill-caption">${numberFmt.format(records.length)} row(s) listed.</div>${body}`;
+  target.innerHTML = `${head}<div class="kpi-drill-caption">${caption}</div>${body}`;
+
+  target.querySelectorAll(".kpi-drill-table th[data-sort-key]").forEach(th => th.addEventListener("click", () => {
+    const k = th.dataset.sortKey;
+    if (state.drillSortKey === k) state.drillSortDir *= -1;
+    else { state.drillSortKey = k; state.drillSortDir = 1; }
+    renderKpiDrill(getFiltered());
+  }));
   wireKpiDrillButtons(kpiId, rows);
 }
 function wireKpiDrillButtons(kpiId, rows) {
@@ -184,15 +231,10 @@ function wireKpiDrillButtons(kpiId, rows) {
   $("kpi-drill-csv")?.addEventListener("click", () => downloadKpiDrillCsv(kpiId, rows));
 }
 function downloadKpiDrillCsv(kpiId, rows) {
-  let header, lines;
-  if (kpiId === "visibleOfficers") {
-    const officers = rows.filter(r => state.data.metadata.includeUnmappedInVisibleOfficerKpi || r.status !== "Unmapped");
-    header = ["Status","Officer","Planned Visits Till Date","Completion %"];
-    lines = officers.map(o => [o.status, o.officer, Number(o.totalPlannedTillDate)||0, pct(o.completionPct)]);
-  } else {
-    header = DRILL_COLUMNS.map(c => c[1]);
-    lines = kpiOutletRecords(kpiId, rows).map(r => DRILL_COLUMNS.map(([k]) => r[k]));
-  }
+  const { cols, records } = drillDataset(kpiId, rows);
+  const sorted = sortDrillRows(records, cols);
+  const header = cols.map(c => c[1]);
+  const lines = sorted.map(r => cols.map(([k,,type]) => type === "pct" ? pct(r[k]) : (r[k] ?? "")));
   const out = [header.map(csvEscape).join(",")].concat(lines.map(row => row.map(csvEscape).join(",")));
   const blob = new Blob(["\ufeff"+out.join("\r\n")], { type:"text/csv;charset=utf-8" });
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob);

@@ -602,3 +602,8 @@ input,
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }
   .kpi-drill-title { align-items: stretch; }
 }
+
+/* v9.1 — sortable KPI drill-down headers */
+.kpi-drill-table th[data-sort-key] { cursor: pointer; user-select: none; }
+.kpi-drill-table th[data-sort-key]:hover { background: #22303a !important; }
+.kpi-drill-table th .sort { color: #7ec7ec !important; opacity: 1 !important; margin-left: 4px; font-size: 9px; }
