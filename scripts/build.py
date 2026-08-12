@@ -563,7 +563,7 @@ def main() -> None:
             "other": "Other / Unplanned Responses are accepted responses that do not match the same officer, outlet code and planned date.",
             "completed": "Distinct Planned Visits Completed counts each due officer/outlet/date assignment once when one or more matching responses exist.",
             "remaining": "Remaining Visits counts due officer/outlet/date assignments with no same-officer, same-outlet, same-date response.",
-            "neverVisited": "Never Visited Outlets Till Date counts each outlet code once for the officer when it was due on or before the snapshot and the officer has no response for that outlet on any date through the snapshot. A response on a non-planned date removes the outlet from this count.",
+            "neverVisited": "Never Visited Outlets Till Date counts each outlet code once for the officer when it was due on or before the snapshot and the officer has no response for that outlet on any date through the snapshot. A response on a non-planned date removes the outlet from this count. The summary card, drill-down list and table total show the number of distinct outlet codes never visited across the officers in view, so an outlet shared by a Zonal officer and an RHO is counted once there (the per-officer table column still reports it for each officer).",
             "completion": "Completion % = (Distinct Planned Visits Completed + Other / Unplanned Responses) ÷ Total Planned Visits (Till Date).",
         },
     }
