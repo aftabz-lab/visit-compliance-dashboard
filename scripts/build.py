@@ -213,10 +213,11 @@ def discover_inputs() -> tuple[Path, Path]:
     return schedule[0], responses[0]
 
 
-def parse_schedule(path: Path, planned_values: list[str]) -> list[dict]:
+def parse_schedule(path: Path, planned_values: list[str]) -> tuple[list[dict], dict[str, dict]]:
     planned_set = {name_key(v) for v in planned_values}
     book = XlsxWorkbook(path)
     assignments: list[dict] = []
+    outlet_dir: dict[str, dict] = {}
     try:
         for schema in SCHEDULE_SCHEMAS:
             rows = book.iter_rows(schema["sheet"])
@@ -248,6 +249,18 @@ def parse_schedule(path: Path, planned_values: list[str]) -> list[dict]:
                 officer = normalize_text(get(schema["officer_header"]))
                 if not site_code and not officer:
                     continue
+                if site_code:
+                    entry = outlet_dir.setdefault(
+                        site_code,
+                        {"siteCode": site_code, "outletName": "", "rhoName": "", "zonalName": ""},
+                    )
+                    if outlet_name and not entry["outletName"]:
+                        entry["outletName"] = outlet_name
+                    if officer:
+                        if schema["status"] == "RHO":
+                            entry["rhoName"] = officer
+                        elif schema["status"] == "Zonal":
+                            entry["zonalName"] = officer
                 for i, planned_date in date_columns:
                     value = row[i] if i < len(row) else None
                     if name_key(value) in planned_set:
@@ -270,7 +283,7 @@ def parse_schedule(path: Path, planned_values: list[str]) -> list[dict]:
         if key in seen:
             raise RuntimeError(f"Duplicate planned assignment: {a['status']} / {a['officer']} / {a['siteCode']} / {a['plannedDate']}")
         seen.add(key)
-    return assignments
+    return assignments, outlet_dir
 
 
 def parse_responses(path: Path, acceptance: dict) -> tuple[list[dict], dict]:
@@ -433,7 +446,9 @@ def calculate(assignments: list[dict], all_responses: list[dict], officer_dimens
         row["remainingVisits"] = row["totalPlannedTillDate"] - row["distinctPlannedVisitsCompleted"]
         row["neverVisitedOutlets"] = len(never_by_officer.get(ok, set()))
         if row["totalPlannedTillDate"]:
-            row["completionPct"] = row["distinctPlannedVisitsCompleted"] / row["totalPlannedTillDate"] * 100
+            row["completionPct"] = (
+                row["distinctPlannedVisitsCompleted"] + row["otherUnplannedResponses"]
+            ) / row["totalPlannedTillDate"] * 100
 
     # Outlet-name lookup is derived from the schedule workbook so response lists can
     # show outlet names without requiring any additional response-workbook headers.
@@ -456,6 +471,10 @@ def calculate(assignments: list[dict], all_responses: list[dict], officer_dimens
             {"plannedDate": a["plannedDate"], "siteCode": a["siteCode"], "outletName": a["outletName"]}
             for a in due_officer if plan_key(a) not in completed_keys
         ]
+        completed_list = [
+            {"plannedDate": a["plannedDate"], "siteCode": a["siteCode"], "outletName": a["outletName"]}
+            for a in due_officer if plan_key(a) in completed_keys
+        ]
         never_map: dict[str, dict] = {}
         for a in due_officer:
             if (ok, a["siteCode"]) not in visited_pairs:
@@ -477,6 +496,7 @@ def calculate(assignments: list[dict], all_responses: list[dict], officer_dimens
 
         details[ok] = {
             "planned": sorted(planned, key=lambda x: (x["plannedDate"], x["siteCode"])),
+            "completed": sorted(completed_list, key=lambda x: (x["plannedDate"], x["siteCode"])),
             "remaining": sorted(remaining, key=lambda x: (x["plannedDate"], x["siteCode"])),
             "neverVisited": sorted(never_map.values(), key=lambda x: x["siteCode"]),
             "plannedDateResponseList": sorted(
@@ -498,7 +518,7 @@ def main() -> None:
     cfg = read_json(CONFIG_PATH, {})
     aliases = read_json(ALIAS_PATH, [])
     schedule_path, response_path = discover_inputs()
-    assignments = parse_schedule(schedule_path, cfg.get("plannedValues", ["yes"]))
+    assignments, outlet_directory = parse_schedule(schedule_path, cfg.get("plannedValues", ["yes"]))
     parsed_responses, response_diagnostics = parse_responses(response_path, cfg.get("responseAcceptance", {}))
     resolved_responses, officer_dimension, resolution_counts = resolve_responses(parsed_responses, assignments, aliases)
     if not resolved_responses:
@@ -534,6 +554,7 @@ def main() -> None:
         },
         "officers": officers,
         "details": details,
+        "outlets": outlet_directory,
         "definitions": {
             "fullMonth": "Total Planned Visits (Full Month) counts every scheduled assignment in the schedule workbook, including dates after the response snapshot.",
             "tillDate": "Total Planned Visits (Till Date) counts scheduled assignments on or before the response snapshot date.",
@@ -543,7 +564,7 @@ def main() -> None:
             "completed": "Distinct Planned Visits Completed counts each due officer/outlet/date assignment once when one or more matching responses exist.",
             "remaining": "Remaining Visits counts due officer/outlet/date assignments with no same-officer, same-outlet, same-date response.",
             "neverVisited": "Never Visited Outlets Till Date counts each outlet code once for the officer when it was due on or before the snapshot and the officer has no response for that outlet on any date through the snapshot. A response on a non-planned date removes the outlet from this count.",
-            "completion": "Completion % = Distinct Planned Visits Completed ÷ Total Planned Visits (Till Date).",
+            "completion": "Completion % = (Distinct Planned Visits Completed + Other / Unplanned Responses) ÷ Total Planned Visits (Till Date).",
         },
     }
 
