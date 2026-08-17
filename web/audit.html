@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Audit Quality Dashboard</title>
+<link rel="stylesheet" href="styles.css?v=visit-complete-dark-v9-sidebar" />
+<style>
+  body { background: var(--dark-1); }
+  .audit-layout { display: grid; grid-template-columns: 288px minmax(0,1fr); align-items: start; }
+  .audit-main { padding: 20px 26px 50px; display: grid; gap: 18px; min-width: 0; }
+
+  .source-box { display: grid; gap: 10px; }
+  .source-state { font-size: 11.5px; line-height: 1.55; color: var(--muted-text); }
+  .source-state b { color: var(--white-text); }
+  .pill { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; padding: 2px 9px; border-radius: 999px; }
+  .pill.live { background: rgba(28,122,80,.3); color: #8fe3b6; }
+  .pill.idle { background: rgba(120,140,155,.22); color: var(--muted-text); }
+
+  .score-hero {
+    display: grid; grid-template-columns: minmax(210px,260px) minmax(0,1fr); gap: 1px;
+    background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+  }
+  .hero-cell { background: var(--dark-2); padding: 20px 22px; }
+  .hero-score { display: grid; align-content: center; justify-items: center; text-align: center; }
+  .hero-score .big { font-size: 58px; font-weight: 800; line-height: 1; letter-spacing: -1px; }
+  .hero-score .cap { margin-top: 8px; font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted-text); }
+  .hero-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px,1fr)); gap: 16px; align-content: center; }
+  .fact .n { font-size: 24px; font-weight: 800; color: var(--white-text); }
+  .fact .l { font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-text); margin-top: 3px; }
+
+  .bar-row { display: grid; grid-template-columns: minmax(150px,210px) 1fr 56px; gap: 12px; align-items: center; padding: 9px 0; }
+  .bar-row + .bar-row { border-top: 1px solid var(--line); }
+  .bar-row .lbl { font-size: 12.5px; color: var(--white-text); font-weight: 600; }
+  .bar-track { height: 12px; border-radius: 999px; background: var(--dark-4); overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 999px; }
+  .bar-row .val { text-align: right; font-size: 12.5px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+  .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px,1fr)); gap: 18px; }
+  .empty-state { text-align: center; padding: 56px 24px; color: var(--muted-text); font-size: 13.5px; line-height: 1.7; }
+  .empty-state h2 { color: var(--white-text); font-size: 18px; margin: 0 0 10px; }
+  .warn { font-size: 11.5px; color: #ffc9a0; background: rgba(180,95,20,.16); border: 1px solid #8a5320; border-radius: 8px; padding: 9px 12px; line-height: 1.5; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-identity">
+    <h1>Audit Quality Dashboard</h1>
+    <p class="subtitle" id="sub">Store Operations Compliance Audit — answer-level scoring</p>
+  </div>
+  <div class="topbar-actions">
+    <a class="btn link-btn" href="./index.html">Visit compliance</a>
+  </div>
+</header>
+
+<div class="audit-layout">
+  <aside class="rail">
+    <div class="rail-body">
+      <section class="rail-group source-box">
+        <h2 class="rail-heading">Data source</h2>
+        <div id="src-state" class="source-state"></div>
+        <button id="pick-folder" class="btn primary" type="button">Choose data folder</button>
+        <button id="refresh" class="btn secondary" type="button" hidden>Reload latest file</button>
+        <input id="pick-file" type="file" accept=".xlsx,.xlsm" hidden />
+        <button id="pick-file-btn" class="btn secondary" type="button">Pick a single file</button>
+      </section>
+
+      <section class="rail-group">
+        <h2 class="rail-heading">Filter</h2>
+        <label class="rail-field"><span>Category</span><select id="f-cat"></select></label>
+        <label class="rail-field"><span>Outlet code</span><input id="f-site" type="search" placeholder="e.g. F327" autocomplete="off" /></label>
+        <label class="rail-field"><span>Show outlets</span><select id="f-rank">
+          <option value="worst">Weakest first</option>
+          <option value="best">Strongest first</option>
+        </select></label>
+        <button id="reset" class="btn secondary" type="button" style="width:100%">Reset filters</button>
+      </section>
+
+      <section class="rail-group">
+        <h2 class="rail-heading">How the score works</h2>
+        <p class="definitions-text">Score is <b>points earned ÷ points available</b> across every answered question. Questions carrying no marks (free-text notes) are excluded so they cannot dilute the result.</p>
+      </section>
+    </div>
+  </aside>
+
+  <main class="audit-main">
+    <div id="warn-box"></div>
+    <div id="body"></div>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
+const state = { rows: [], file: "", dirHandle: null, cat: "", site: "", rank: "worst" };
+
+// Green through amber to red — the same reading at a glance for any manager.
+function tone(v) {
+  if (v >= 85) return "#3fb27f";
+  if (v >= 75) return "#8cc152";
+  if (v >= 65) return "#e0a53f";
+  return "#d9534f";
+}
+
+const IDB = "audit-dash", KEY = "folder";
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(IDB, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("h");
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function saveHandle(h) { try { const d = await idb(); d.transaction("h","readwrite").objectStore("h").put(h, KEY); } catch {} }
+async function loadHandle() {
+  try { const d = await idb();
+    return await new Promise(res => { const q = d.transaction("h").objectStore("h").get(KEY); q.onsuccess = () => res(q.result); q.onerror = () => res(null); });
+  } catch { return null; }
+}
+
+function setState(html) { $("src-state").innerHTML = html; }
+
+async function newestInFolder(handle) {
+  let best = null;
+  for await (const [name, entry] of handle.entries()) {
+    if (entry.kind !== "file") continue;
+    if (!/\.xlsx?$|\.xlsm$/i.test(name) || name.startsWith("~$")) continue;
+    const file = await entry.getFile();
+    // A date in the filename wins; otherwise the most recently modified file.
+    const m = name.match(/(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})/);
+    const stamp = m ? `${m[1]}${m[2]}${m[3]}` : "";
+    const key = [stamp, file.lastModified];
+    if (!best || key[0] > best.key[0] || (key[0] === best.key[0] && key[1] > best.key[1])) best = { file, key, name };
+  }
+  return best;
+}
+
+async function readWorkbook(file) {
+  setState(`<span class="pill idle">reading</span><br>Parsing <b>${esc(file.name)}</b> (${(file.size/1048576).toFixed(1)} MB)…`);
+  await new Promise(r => setTimeout(r, 30));
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array", sheetRows: 0, cellDates: false, cellStyles: false });
+  const sheet = wb.SheetNames.find(n => n.trim().toLowerCase() === "answer details") || wb.SheetNames[wb.SheetNames.length - 1];
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { defval: "" });
+  if (!rows.length || !("Question Category" in rows[0])) {
+    throw new Error(`"${sheet}" does not look like the Answer Details sheet.`);
+  }
+  state.rows = rows; state.file = file.name;
+  setState(`<span class="pill live">loaded</span><br><b>${esc(file.name)}</b><br>${rows.length.toLocaleString()} answers · ${(file.size/1048576).toFixed(1)} MB`);
+  $("refresh").hidden = !state.dirHandle;
+  render();
+}
+
+async function pickFolder() {
+  if (!window.showDirectoryPicker) {
+    $("warn-box").innerHTML = `<p class="warn">This browser cannot open a folder. Use Chrome or Edge, or press <b>Pick a single file</b> instead.</p>`;
+    return;
+  }
+  try {
+    const handle = await window.showDirectoryPicker({ id: "audit-data", mode: "read" });
+    state.dirHandle = handle; await saveHandle(handle);
+    const newest = await newestInFolder(handle);
+    if (!newest) { setState(`<span class="pill idle">empty</span><br>No Excel file in that folder.`); return; }
+    await readWorkbook(newest.file);
+  } catch (e) { if (e.name !== "AbortError") setState(`<span class="pill idle">error</span><br>${esc(e.message)}`); }
+}
+
+async function refresh() {
+  if (!state.dirHandle) return;
+  try {
+    if ((await state.dirHandle.queryPermission({ mode: "read" })) !== "granted") {
+      if ((await state.dirHandle.requestPermission({ mode: "read" })) !== "granted") return;
+    }
+    const newest = await newestInFolder(state.dirHandle);
+    if (newest) await readWorkbook(newest.file);
+  } catch (e) { setState(`<span class="pill idle">error</span><br>${esc(e.message)}`); }
+}
+
+/* ── aggregation ─────────────────────────────────────────────────────── */
+function aggregate() {
+  const num = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
+  const out = {
+    total: [0,0], cats: new Map(), sites: new Map(), questions: new Map(), days: new Map(),
+    audits: new Set(), outlets: new Set(),
+  };
+  for (const r of state.rows) {
+    const category = r["Question Category"] || "Uncategorised";
+    const site = String(r["Site Code"] || "").trim();
+    if (state.cat && category !== state.cat) continue;
+    if (state.site && !site.toLowerCase().includes(state.site.toLowerCase())) continue;
+    out.audits.add(r["Response ID"]); out.outlets.add(site);
+    const max = num(r["Question Max Score"]), got = num(r["Answer Score"]);
+    if (max === null || max <= 0 || got === null) continue;   // notes carry no marks
+    out.total[0] += got; out.total[1] += max;
+    const add = (map, key, extra) => {
+      const cur = map.get(key) || [0,0,extra];
+      cur[0] += got; cur[1] += max; map.set(key, cur);
+    };
+    add(out.cats, category);
+    add(out.sites, site);
+    add(out.questions, r["Question Title"] || "(untitled)", category);
+    const day = String(r["Date"] || "").split(",")[0].trim();
+    if (day) add(out.days, day);
+  }
+  return out;
+}
+
+function barRows(entries, limit) {
+  return entries.slice(0, limit).map(([label, [got, max, extra]]) => {
+    const v = pct(got, max);
+    return `<div class="bar-row">
+      <span class="lbl">${esc(label)}${extra ? `<br><span style="font-size:10.5px;color:var(--muted-text)">${esc(extra)}</span>` : ""}</span>
+      <span class="bar-track"><span class="bar-fill" style="width:${v.toFixed(1)}%;background:${tone(v)}"></span></span>
+      <span class="val" style="color:${tone(v)}">${v.toFixed(1)}%</span>
+    </div>`;
+  }).join("");
+}
+
+function render() {
+  if (!state.rows.length) {
+    $("body").innerHTML = `<div class="empty-state"><h2>No data loaded yet</h2>
+      Choose the folder on your laptop where the survey export is saved.<br>
+      The newest Excel file in that folder is read automatically — the name can change every month.<br><br>
+      Nothing is uploaded; the file is read on this computer only.</div>`;
+    return;
+  }
+  const a = aggregate();
+  const overall = pct(a.total[0], a.total[1]);
+  const cats = [...a.cats.entries()].sort((x,y) => pct(y[1][0],y[1][1]) - pct(x[1][0],x[1][1]));
+  const sites = [...a.sites.entries()].sort((x,y) => {
+    const d = pct(x[1][0],x[1][1]) - pct(y[1][0],y[1][1]);
+    return state.rank === "worst" ? d : -d;
+  });
+  const weak = [...a.questions.entries()].sort((x,y) => pct(x[1][0],x[1][1]) - pct(y[1][0],y[1][1]));
+  const days = [...a.days.entries()].sort((x,y) => new Date(x[0]) - new Date(y[0]));
+
+  $("body").innerHTML = `
+    <section class="score-hero">
+      <div class="hero-cell hero-score">
+        <span class="big" style="color:${tone(overall)}">${overall.toFixed(1)}%</span>
+        <span class="cap">Overall compliance</span>
+      </div>
+      <div class="hero-cell hero-facts">
+        <div class="fact"><div class="n">${a.audits.size.toLocaleString()}</div><div class="l">Audits</div></div>
+        <div class="fact"><div class="n">${a.outlets.size.toLocaleString()}</div><div class="l">Outlets covered</div></div>
+        <div class="fact"><div class="n">${a.total[1].toLocaleString()}</div><div class="l">Points available</div></div>
+        <div class="fact"><div class="n" style="color:${tone(overall)}">${(a.total[1]-a.total[0]).toLocaleString()}</div><div class="l">Points lost</div></div>
+      </div>
+    </section>
+
+    <div class="split">
+      <section class="panel"><div class="panel-head"><h2>Score by category</h2></div>
+        <div style="padding:8px 18px 16px">${barRows(cats, 10)}</div></section>
+      <section class="panel"><div class="panel-head"><h2>Lowest scoring questions</h2><p class="panel-caption">Where the points are being lost</p></div>
+        <div style="padding:8px 18px 16px">${barRows(weak, 8)}</div></section>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head"><h2>${state.rank === "worst" ? "Outlets needing attention" : "Top performing outlets"}</h2>
+        <p class="panel-caption">${sites.length.toLocaleString()} outlets in view</p></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>Outlet code</th><th class="num">Points earned</th><th class="num">Available</th><th class="num">Score</th></tr></thead>
+        <tbody>${sites.slice(0,25).map(([code,[got,max]],i) => {
+          const v = pct(got,max);
+          return `<tr><td>${i+1}</td><td><b>${esc(code)}</b></td><td class="num">${got.toLocaleString()}</td><td class="num">${max.toLocaleString()}</td>
+            <td class="num" style="color:${tone(v)};font-weight:800">${v.toFixed(1)}%</td></tr>`;
+        }).join("")}</tbody>
+      </table></div>
+    </section>
+
+    ${days.length > 1 ? `<section class="panel"><div class="panel-head"><h2>Daily audit score</h2></div>
+      <div style="padding:8px 18px 16px">${barRows(days, 31)}</div></section>` : ""}`;
+
+  const sel = $("f-cat"), keep = sel.value;
+  sel.innerHTML = `<option value="">All categories</option>` +
+    [...new Set(state.rows.map(r => r["Question Category"]).filter(Boolean))].sort()
+      .map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  sel.value = keep;
+}
+
+/* ── wiring ──────────────────────────────────────────────────────────── */
+$("pick-folder").addEventListener("click", pickFolder);
+$("refresh").addEventListener("click", refresh);
+$("pick-file-btn").addEventListener("click", () => $("pick-file").click());
+$("pick-file").addEventListener("change", e => e.target.files[0] && readWorkbook(e.target.files[0]).catch(err => setState(`<span class="pill idle">error</span><br>${esc(err.message)}`)));
+$("f-cat").addEventListener("change", e => { state.cat = e.target.value; render(); });
+$("f-site").addEventListener("input", e => { state.site = e.target.value; render(); });
+$("f-rank").addEventListener("change", e => { state.rank = e.target.value; render(); });
+$("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; state.rank = "worst";
+  $("f-cat").value = ""; $("f-site").value = ""; $("f-rank").value = "worst"; render(); });
+
+(async () => {
+  render();
+  const handle = await loadHandle();
+  if (handle) {
+    state.dirHandle = handle; $("refresh").hidden = false;
+    setState(`<span class="pill idle">folder remembered</span><br>Press <b>Reload latest file</b> to read it again.`);
+  } else {
+    setState(`<span class="pill idle">no folder</span><br>Choose the folder holding the survey export.`);
+  }
+})();
+</script>
+</body>
+</html>

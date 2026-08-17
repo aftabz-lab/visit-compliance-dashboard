@@ -82,12 +82,6 @@ function renderHeader() {
     if (surveyUrl) { el.href = surveyUrl; el.textContent = surveyLabel; el.hidden = false; }
     else { el.hidden = true; }
   });
-  ["survey-hint", "survey-hint-rail"].forEach(id => {
-    const el = $(id);
-    if (!el) return;
-    if (surveyUrl && surveyHint) { el.textContent = surveyHint; el.hidden = false; }
-    else { el.hidden = true; }
-  });
   $("snapshot-line").textContent = `Response snapshot through ${fmtDate(m.snapshotDate)}`;
   $("snapshot-note").textContent = `Till-date plans are due through this date; full-month plans cover all of ${m.reportMonth}.`;
   const statuses = ["All statuses", ...new Set(state.data.officers.map(r=>r.status))];
@@ -349,8 +343,11 @@ function renderDefinitions() {
   $("definitions-text").textContent = `${d.fullMonth} ${d.remaining} ${d.neverVisited} ${d.completion}`;
   const m=state.data.metadata;
   const unmapped=m.diagnostics.unmappedResponseNames?.length ? ` · Unmapped response names: ${m.diagnostics.unmappedResponseNames.join(", ")}` : "";
+  const superseded = Array.isArray(m.supersededFiles) && m.supersededFiles.length
+    ? ` · Ignoring older upload${m.supersededFiles.length > 1 ? "s" : ""}: ${m.supersededFiles.join(", ")}`
+    : "";
   const surveyFooter = m.surveyReportUrl ? ` · <a href="${esc(m.surveyReportUrl)}" target="_blank" rel="noopener noreferrer">Survey reports</a>` : "";
-  $("source-footer").innerHTML=`Data source: ${esc(m.scheduleFile)} + ${esc(m.responseFile)} · Generated ${esc(new Date(m.generatedAt).toLocaleString())}${esc(unmapped)}${surveyFooter}`;
+  $("source-footer").innerHTML=`Data source: ${esc(m.scheduleFile)} + ${esc(m.responseFile)} · Generated ${esc(new Date(m.generatedAt).toLocaleString())}${esc(unmapped)}${esc(superseded)}${surveyFooter}`;
 }
 function render() {
   const rows=getFiltered();

@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Prepare upload file · Visit Compliance Dashboard</title>
+<link rel="stylesheet" href="styles.css?v=visit-complete-dark-v9-sidebar" />
+<style>
+  .prep-wrap { max-width: 760px; margin: 0 auto; padding: 26px 20px 60px; display: grid; gap: 18px; }
+  .prep-intro { font-size: 13px; line-height: 1.65; color: var(--muted-text); }
+  .prep-intro b { color: var(--white-text); }
+  .drop {
+    border: 2px dashed var(--line); border-radius: 14px; background: var(--dark-2);
+    padding: 34px 20px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.hot { border-color: var(--blue); background: var(--dark-3); }
+  .drop strong { display: block; font-size: 15px; color: var(--white-text); margin-bottom: 6px; }
+  .drop span { font-size: 12px; color: var(--muted-text); }
+  .drop input { display: none; }
+  .sheet-list { display: grid; gap: 8px; }
+  .sheet-row {
+    display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 9px;
+    background: var(--dark-3); border: 1px solid var(--line);
+  }
+  .sheet-row input { width: 16px; height: 16px; accent-color: var(--blue); }
+  .sheet-row .nm { flex: 1; font-size: 13px; font-weight: 700; color: var(--white-text); }
+  .sheet-row .sz { font-size: 11.5px; color: var(--muted-text); font-variant-numeric: tabular-nums; }
+  .sheet-row .tag { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; }
+  .tag.need { background: rgba(45,143,194,.25); color: var(--blue-2); }
+  .tag.drop-tag { background: rgba(156,0,6,.25); color: #ff9f9f; }
+  .result { border-radius: 11px; padding: 15px 17px; font-size: 13px; line-height: 1.6; }
+  .result.ok { background: rgba(28,122,80,.18); border: 1px solid #2f7d57; color: #b9f0d2; }
+  .result.err { background: rgba(156,0,6,.18); border: 1px solid #9c0006; color: #ffc9c9; }
+  .result.busy { background: var(--dark-3); border: 1px solid var(--line); color: var(--muted-text); }
+  .steps { font-size: 12.5px; line-height: 1.8; color: var(--muted-text); padding-left: 18px; }
+  .steps b { color: var(--white-text); }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-identity">
+    <h1>Prepare upload file</h1>
+    <p class="subtitle">Shrinks the survey export so it fits GitHub's 25 MB upload limit</p>
+  </div>
+  <div class="topbar-actions">
+    <a class="btn link-btn" href="./index.html">Back to dashboard</a>
+  </div>
+</header>
+
+<div class="prep-wrap">
+  <p class="prep-intro">
+    The survey export carries an <b>Answer Details</b> sheet holding every individual question answer —
+    tens of thousands of rows the dashboard never reads. It is almost the entire file size.
+    This page drops the sheets you don't need and hands back a small workbook, typically
+    <b>under 1 MB instead of 45 MB</b>. Everything happens inside your browser; the file is never uploaded anywhere.
+  </p>
+
+  <label class="drop" id="drop">
+    <strong>Choose the exported .xlsx — or drag it here</strong>
+    <span>Nothing leaves your computer</span>
+    <input id="file" type="file" accept=".xlsx,.xlsm" />
+  </label>
+
+  <div id="sheets" class="sheet-list"></div>
+  <div id="out"></div>
+
+  <ol class="steps">
+    <li>Export the responses from shwapno.app as usual.</li>
+    <li>Drop the file above and press <b>Prepare file</b>.</li>
+    <li>In GitHub open the <b>data</b> folder → <b>Add file</b> → <b>Upload files</b> → drop the prepared file → <b>Commit</b>.</li>
+    <li>The dashboard rebuilds itself. The newest file wins, so old copies can stay.</li>
+  </ol>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+// Sheets the build actually reads. Anything else is safe to drop.
+const NEEDED = ["response summary", "zonal", "rho"];
+const $ = (id) => document.getElementById(id);
+const mb = (n) => (n / 1048576).toFixed(2) + " MB";
+let loaded = null;
+
+function parseSheets(workbookXml, relsXml) {
+  const sheets = [];
+  const rels = {};
+  relsXml.replace(/Id="(rId\d+)"[^>]*Target="([^"]+)"/g, (_, id, t) => { rels[id] = t; return ""; });
+  workbookXml.replace(/<sheet [^>]*\/>/g, (tag) => {
+    const name = (tag.match(/name="([^"]+)"/) || [])[1];
+    const rid = (tag.match(/r:id="(rId\d+)"/) || [])[1];
+    if (name && rid && rels[rid]) {
+      sheets.push({ name, rid, tag, path: "xl/" + rels[rid].replace(/^\//, "") });
+    }
+    return tag;
+  });
+  return sheets;
+}
+
+async function handleFile(file) {
+  $("sheets").innerHTML = "";
+  $("out").innerHTML = '<div class="result busy">Reading the workbook…</div>';
+  try {
+    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    const workbookXml = await zip.file("xl/workbook.xml").async("string");
+    const relsXml = await zip.file("xl/_rels/workbook.xml.rels").async("string");
+    const sheets = parseSheets(workbookXml, relsXml);
+    if (!sheets.length) throw new Error("No sheets found — is this a real .xlsx export?");
+
+    for (const s of sheets) {
+      const entry = zip.file(s.path);
+      // Compressed size is what actually costs upload space.
+      s.bytes = entry && entry._data ? (entry._data.compressedSize || entry._data.uncompressedSize || 0) : 0;
+      s.needed = NEEDED.includes(s.name.trim().toLowerCase());
+    }
+
+    loaded = { zip, workbookXml, relsXml, sheets, name: file.name, size: file.size };
+    $("sheets").innerHTML =
+      sheets.map((s, i) => `
+        <label class="sheet-row">
+          <input type="checkbox" data-i="${i}" ${s.needed ? "checked" : ""}>
+          <span class="nm">${s.name}</span>
+          <span class="sz">${mb(s.bytes)}</span>
+          <span class="tag ${s.needed ? "need" : "drop-tag"}">${s.needed ? "keep" : "not used"}</span>
+        </label>`).join("") +
+      `<button id="go" class="btn primary" type="button" style="margin-top:6px;height:42px">Prepare file</button>`;
+    $("go").addEventListener("click", prepare);
+    $("out").innerHTML = `<div class="result busy">${file.name} — ${mb(file.size)}. Ticked sheets are kept.</div>`;
+  } catch (err) {
+    $("out").innerHTML = `<div class="result err">Could not read that file: ${err.message}</div>`;
+  }
+}
+
+async function prepare() {
+  if (!loaded) return;
+  const keep = new Set([...document.querySelectorAll(".sheet-row input:checked")].map((c) => Number(c.dataset.i)));
+  if (!keep.size) { $("out").innerHTML = '<div class="result err">Keep at least one sheet.</div>'; return; }
+  $("out").innerHTML = '<div class="result busy">Preparing…</div>';
+  try {
+    const { zip, sheets, name, size } = loaded;
+    let workbookXml = loaded.workbookXml, relsXml = loaded.relsXml;
+    let contentTypes = await zip.file("[Content_Types].xml").async("string");
+
+    sheets.forEach((s, i) => {
+      if (keep.has(i)) return;
+      zip.remove(s.path);                                     // never decompressed
+      workbookXml = workbookXml.replace(s.tag, "");
+      relsXml = relsXml.replace(new RegExp(`<Relationship Id="${s.rid}"[^>]*/>`), "");
+      contentTypes = contentTypes.replace(new RegExp(`<Override PartName="/${s.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[^>]*/>`), "");
+    });
+
+    zip.file("xl/workbook.xml", workbookXml);
+    zip.file("xl/_rels/workbook.xml.rels", relsXml);
+    zip.file("[Content_Types].xml", contentTypes);
+
+    const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 9 } });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+
+    const pct = Math.round((1 - blob.size / size) * 100);
+    $("out").innerHTML = `<div class="result ok"><b>Saved ${name}</b><br>${mb(size)} → ${mb(blob.size)} (${pct}% smaller). Upload this file to the <b>data</b> folder.</div>`;
+  } catch (err) {
+    $("out").innerHTML = `<div class="result err">Could not prepare the file: ${err.message}</div>`;
+  }
+}
+
+$("file").addEventListener("change", (e) => e.target.files[0] && handleFile(e.target.files[0]));
+const drop = $("drop");
+["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("hot"); }));
+["dragleave", "drop"].forEach((t) => drop.addEventListener(t, () => drop.classList.remove("hot")));
+drop.addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+</script>
+</body>
+</html>
