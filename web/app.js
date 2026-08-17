@@ -12,7 +12,7 @@ const columns = [
   ["completionPct", "Completion %"]
 ];
 const ALL_OFFICERS = "__ALL_OFFICERS__";
-const state = { data: null, status: "All statuses", officerKey: ALL_OFFICERS, search: "", sortKey: "status", sortDir: 1, activeDetailTab: "planned", activeKpi: null, drillSortKey: null, drillSortDir: 1 };
+const state = { data: null, outletSearch: "", selectedOutlet: null, status: "All statuses", officerKey: ALL_OFFICERS, search: "", sortKey: "status", sortDir: 1, activeDetailTab: "planned", activeKpi: null, drillSortKey: null, drillSortDir: 1 };
 const $ = id => document.getElementById(id);
 const numberFmt = new Intl.NumberFormat("en-US");
 function fmtDate(iso) { return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day:"2-digit", month:"short", year:"numeric", timeZone:"UTC" }); }
@@ -71,6 +71,16 @@ function renderHeader() {
   document.title = m.title;
   $("page-title").textContent = m.title;
   $("subtitle").textContent = m.subtitle;
+  // Survey report link comes from config/dashboard.config.json so it can change
+  // without editing code. Hidden entirely when no URL is configured.
+  const surveyUrl = m.surveyReportUrl || "";
+  const surveyLabel = m.surveyReportLabel || "Open survey reports";
+  ["survey-link", "survey-link-rail"].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    if (surveyUrl) { el.href = surveyUrl; el.textContent = surveyLabel; el.hidden = false; }
+    else { el.hidden = true; }
+  });
   $("snapshot-line").textContent = `Response snapshot through ${fmtDate(m.snapshotDate)}`;
   $("snapshot-note").textContent = `Till-date plans are due through this date; full-month plans cover all of ${m.reportMonth}.`;
   const statuses = ["All statuses", ...new Set(state.data.officers.map(r=>r.status))];
@@ -332,7 +342,8 @@ function renderDefinitions() {
   $("definitions-text").textContent = `${d.fullMonth} ${d.remaining} ${d.neverVisited} ${d.completion}`;
   const m=state.data.metadata;
   const unmapped=m.diagnostics.unmappedResponseNames?.length ? ` · Unmapped response names: ${m.diagnostics.unmappedResponseNames.join(", ")}` : "";
-  $("source-footer").textContent=`Data source: ${m.scheduleFile} + ${m.responseFile} · Generated ${new Date(m.generatedAt).toLocaleString()}${unmapped}`;
+  const surveyFooter = m.surveyReportUrl ? ` · <a href="${esc(m.surveyReportUrl)}" target="_blank" rel="noopener noreferrer">Survey reports</a>` : "";
+  $("source-footer").innerHTML=`Data source: ${esc(m.scheduleFile)} + ${esc(m.responseFile)} · Generated ${esc(new Date(m.generatedAt).toLocaleString())}${esc(unmapped)}${surveyFooter}`;
 }
 function render() {
   const rows=getFiltered();
@@ -346,6 +357,98 @@ function downloadCsv() {
   const blob=new Blob(["\ufeff"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="visible_visit_compliance.csv"; a.click(); URL.revokeObjectURL(a.href);
 }
+/* ── Outlet lookup ──────────────────────────────────────────────────────
+   Search by outlet name or code, then show one card with the seven fields
+   operations actually asks for: who owns the outlet and when it was last
+   seen, split by Zonal and RHO. Data comes from data.outlets, built in
+   scripts/build.py.                                                      */
+const OUTLET_LIMIT = 40;
+
+function outletList() {
+  const outlets = state.data?.outlets;
+  if (!outlets) return [];
+  return Object.values(outlets);
+}
+
+function matchingOutlets(term) {
+  const q = term.trim().toLowerCase();
+  if (!q) return [];
+  const hits = outletList().filter(o =>
+    String(o.siteCode || "").toLowerCase().includes(q) ||
+    String(o.outletName || "").toLowerCase().includes(q));
+  // Code matches first, then name, both alphabetical - predictable ordering.
+  hits.sort((a, b) => {
+    const ac = String(a.siteCode || "").toLowerCase().startsWith(q) ? 0 : 1;
+    const bc = String(b.siteCode || "").toLowerCase().startsWith(q) ? 0 : 1;
+    if (ac !== bc) return ac - bc;
+    return String(a.outletName || a.siteCode).localeCompare(String(b.outletName || b.siteCode));
+  });
+  return hits;
+}
+
+function renderOutletResults() {
+  const box = $("outlet-results");
+  if (!box) return;
+  const term = state.outletSearch || "";
+  if (!term.trim()) { box.innerHTML = ""; return; }
+  const hits = matchingOutlets(term);
+  if (!hits.length) {
+    box.innerHTML = `<p class="outlet-empty">No outlet matches “${esc(term)}”. Try a code such as D062, or part of the name.</p>`;
+    return;
+  }
+  box.innerHTML = hits.slice(0, OUTLET_LIMIT).map(o => `
+    <button class="outlet-hit" type="button" role="option"
+            aria-selected="${state.selectedOutlet === o.siteCode ? "true" : "false"}"
+            data-code="${esc(o.siteCode)}">
+      <span class="hit-name">${esc(o.outletName || "(name not in schedule)")}</span>
+      <span class="hit-code">${esc(o.siteCode)}</span>
+    </button>`).join("") +
+    (hits.length > OUTLET_LIMIT ? `<p class="outlet-empty">${hits.length - OUTLET_LIMIT} more match — keep typing to narrow.</p>` : "");
+  box.querySelectorAll(".outlet-hit").forEach(btn =>
+    btn.addEventListener("click", () => selectOutlet(btn.dataset.code)));
+}
+
+function visitCell(label, iso, who) {
+  const value = iso
+    ? `${esc(fmtDate(iso))}${who ? `<span class="by">by ${esc(who)}</span>` : ""}`
+    : "Not visited yet";
+  return `<div class="outlet-cell"><dt>${esc(label)}</dt><dd class="${iso ? "" : "none"}">${value}</dd></div>`;
+}
+
+function renderOutletCard() {
+  const card = $("outlet-card");
+  if (!card) return;
+  const outlet = state.selectedOutlet ? state.data.outlets?.[state.selectedOutlet] : null;
+  if (!outlet) { card.hidden = true; card.innerHTML = ""; return; }
+  card.hidden = false;
+  card.innerHTML = `
+    <div class="outlet-card-head">
+      <h2>${esc(outlet.outletName || "Outlet")} <span class="code-chip">${esc(outlet.siteCode)}</span></h2>
+      <button class="outlet-card-close" type="button" id="outlet-card-close">Clear</button>
+    </div>
+    <dl class="outlet-grid">
+      <div class="outlet-cell"><dt>Outlet code</dt><dd>${esc(outlet.siteCode)}</dd></div>
+      <div class="outlet-cell"><dt>Outlet name</dt><dd class="${outlet.outletName ? "" : "none"}">${esc(outlet.outletName || "Not in schedule")}</dd></div>
+      <div class="outlet-cell"><dt>Zonal</dt><dd class="${outlet.zonalName ? "" : "none"}">${esc(outlet.zonalName || "Not assigned")}</dd></div>
+      <div class="outlet-cell"><dt>Regional (RHO)</dt><dd class="${outlet.rhoName ? "" : "none"}">${esc(outlet.rhoName || "Not assigned")}</dd></div>
+      ${visitCell("Last visit", outlet.lastVisit, outlet.lastVisitBy)}
+      ${visitCell("Last visit by Zonal", outlet.lastVisitZonal, outlet.lastVisitZonalBy)}
+      ${visitCell("Last visit by Regional (RHO)", outlet.lastVisitRho, outlet.lastVisitRhoBy)}
+    </dl>`;
+  $("outlet-card-close").addEventListener("click", () => {
+    state.selectedOutlet = null;
+    renderOutletCard();
+    renderOutletResults();
+  });
+}
+
+function selectOutlet(code) {
+  state.selectedOutlet = code;
+  renderOutletCard();
+  renderOutletResults();
+  $("outlet-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 async function init() {
   try {
     const res=await fetch("data/dashboard_data.json",{cache:"no-store"});
@@ -355,8 +458,14 @@ async function init() {
     $("status-filter").addEventListener("change",e=>{state.status=e.target.value;updateOfficerOptions();render();});
     $("officer-filter").addEventListener("change",e=>selectOfficer(e.target.value, true));
     $("officer-search").addEventListener("input",e=>{state.search=e.target.value;render();});
-    $("reset-btn").addEventListener("click",()=>{state.status="All statuses";state.officerKey=ALL_OFFICERS;state.search="";state.activeDetailTab="planned";state.activeKpi=null;$("status-filter").value=state.status;$("officer-search").value="";updateOfficerOptions();render();});
+    $("reset-btn").addEventListener("click",()=>{state.status="All statuses";state.officerKey=ALL_OFFICERS;state.search="";state.activeDetailTab="planned";state.activeKpi=null;$("status-filter").value=state.status;$("officer-search").value="";state.outletSearch="";state.selectedOutlet=null;$("outlet-search").value="";renderOutletResults();renderOutletCard();updateOfficerOptions();render();});
     $("download-btn").addEventListener("click",downloadCsv);
+    $("outlet-search").addEventListener("input", e => { state.outletSearch = e.target.value; renderOutletResults(); });
+    const rail = document.querySelector(".rail");
+    $("rail-toggle").addEventListener("click", () => {
+      const open = rail.classList.toggle("open");
+      $("rail-toggle").setAttribute("aria-expanded", String(open));
+    });
   } catch(err) {
     document.querySelector("main").innerHTML=`<div class="error-box"><strong>Dashboard could not load.</strong>\n${esc(err.message)}\n\nIf this is a new GitHub repository, open the Actions tab and confirm the Deploy Visit Compliance Dashboard workflow completed successfully.</div>`;
   }
