@@ -1,6 +1,8 @@
 {
   "snapshotDateOverride": null,
-  "plannedValues": ["yes"],
+  "plannedValues": [
+    "yes"
+  ],
   "subtitle": "Officer-wise planned visit and audit-response performance",
   "includeUnmappedInVisibleOfficerKpi": false,
   "responseAcceptance": {
@@ -9,5 +11,7 @@
     "requireSiteCode": true,
     "requireOfficer": true,
     "deduplicateByResponseId": true
-  }
+  },
+  "surveyReportUrl": "https://shwapno.app/administration/reports/surveys",
+  "surveyReportLabel": "Open survey reports"
 }
