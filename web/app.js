@@ -75,10 +75,17 @@ function renderHeader() {
   // without editing code. Hidden entirely when no URL is configured.
   const surveyUrl = m.surveyReportUrl || "";
   const surveyLabel = m.surveyReportLabel || "Open survey reports";
+  const surveyHint = m.surveyReportHint || "";
   ["survey-link", "survey-link-rail"].forEach(id => {
     const el = $(id);
     if (!el) return;
     if (surveyUrl) { el.href = surveyUrl; el.textContent = surveyLabel; el.hidden = false; }
+    else { el.hidden = true; }
+  });
+  ["survey-hint", "survey-hint-rail"].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    if (surveyUrl && surveyHint) { el.textContent = surveyHint; el.hidden = false; }
     else { el.hidden = true; }
   });
   $("snapshot-line").textContent = `Response snapshot through ${fmtDate(m.snapshotDate)}`;
