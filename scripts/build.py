@@ -514,6 +514,44 @@ def calculate(assignments: list[dict], all_responses: list[dict], officer_dimens
     return officers, details, responses, due, completed_keys
 
 
+
+def attach_last_visits(outlet_directory: dict, responses: list[dict], officer_dimension: dict) -> dict:
+    """Adds last-visit dates to every outlet: overall, by its Zonal, and by its RHO.
+
+    Responses are already filtered to the snapshot date by calculate(). A response
+    whose site code never appears in the schedule still gets an entry so the outlet
+    remains searchable - it simply has no planned officer against it.
+    """
+    for entry in outlet_directory.values():
+        entry.update({
+            "lastVisit": None, "lastVisitBy": "",
+            "lastVisitZonal": None, "lastVisitZonalBy": "",
+            "lastVisitRho": None, "lastVisitRhoBy": "",
+        })
+    for response in responses:
+        site_code = response["siteCode"]
+        entry = outlet_directory.get(site_code)
+        if entry is None:
+            entry = {
+                "siteCode": site_code, "outletName": "", "rhoName": "", "zonalName": "",
+                "lastVisit": None, "lastVisitBy": "",
+                "lastVisitZonal": None, "lastVisitZonalBy": "",
+                "lastVisitRho": None, "lastVisitRhoBy": "",
+                "unscheduled": True,
+            }
+            outlet_directory[site_code] = entry
+        status = (officer_dimension.get(response["officerKey"]) or {}).get("status", "")
+        visit_date = response["responseDate"]
+        who = response.get("officer", "")
+        if entry["lastVisit"] is None or visit_date > entry["lastVisit"]:
+            entry["lastVisit"], entry["lastVisitBy"] = visit_date, who
+        if status == "Zonal" and (entry["lastVisitZonal"] is None or visit_date > entry["lastVisitZonal"]):
+            entry["lastVisitZonal"], entry["lastVisitZonalBy"] = visit_date, who
+        if status == "RHO" and (entry["lastVisitRho"] is None or visit_date > entry["lastVisitRho"]):
+            entry["lastVisitRho"], entry["lastVisitRhoBy"] = visit_date, who
+    return outlet_directory
+
+
 def main() -> None:
     cfg = read_json(CONFIG_PATH, {})
     aliases = read_json(ALIAS_PATH, [])
@@ -529,6 +567,7 @@ def main() -> None:
     if not snapshot_date:
         raise RuntimeError("Could not determine a valid response snapshot date.")
     officers, details, responses, due, completed_keys = calculate(assignments, resolved_responses, officer_dimension, snapshot_date)
+    outlet_directory = attach_last_visits(outlet_directory, responses, officer_dimension)
     first_plan_date = min(a["plannedDate"] for a in assignments)
     report_month = datetime.strptime(first_plan_date, "%Y-%m-%d").strftime("%B %Y")
     unmapped_names = sorted({r["officer"] for r in responses if r["resolutionMethod"] == "unmapped"}, key=str.casefold)
