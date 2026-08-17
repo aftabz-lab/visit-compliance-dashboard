@@ -27,7 +27,7 @@ select:focus, input:focus { border-color: #2b83a6; box-shadow: 0 0 0 2px rgba(43
 .btn.primary { background: var(--navy); color: white; }
 .btn.secondary { background: #edf3f5; color: #284f60; border: 1px solid #b9ced6; }
 .btn:hover { filter: brightness(.97); }
-.kpi-grid { margin-top: 7px; display: grid; grid-template-columns: repeat(8, minmax(110px, 1fr)); gap: 5px; }
+.kpi-grid { margin-top: 7px; display: grid; grid-template-columns: repeat(9, minmax(92px, 1fr)); gap: 5px; }
 .kpi-card { background: #fff; border: 1px solid var(--border); border-radius: 3px; text-align: center; min-height: 73px; padding: 7px 4px 6px; box-shadow: var(--shadow); display: grid; align-content: center; }
 .kpi-label { color: #234e60; font-size: 10px; line-height: 1.1; font-weight: 700; min-height: 23px; }
 .kpi-value { color: #0a3b57; font-size: 24px; font-weight: 800; line-height: 1.05; }
@@ -497,4 +497,236 @@ input,
 #performance-table tbody td:last-child,
 #performance-table tbody td.completion-cell {
   font-weight: 700 !important;
+}
+
+
+/* v8.5 — small Remaining Visits percentage beside KPI value */
+.kpi-inline-pct{
+  display:inline-block;
+  margin-left:6px;
+  font-size:11px;
+  line-height:1;
+  font-weight:700;
+  color:#a9bac6;
+  vertical-align:middle;
+  letter-spacing:0;
+}
+
+
+/* ============================================================
+   v9 — Clickable KPI values + bottom KPI drill-down list
+   (Outlet Code / Outlet Name / RHO Name / Zonal Name)
+   ============================================================ */
+
+.kpi-value .kpi-link {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(125, 199, 236, .55);
+}
+.kpi-value .kpi-link:hover,
+.kpi-value .kpi-link:focus-visible {
+  color: #b6e7ff !important;
+  text-decoration-color: #7ec7ec !important;
+}
+.kpi-value .kpi-link:focus-visible {
+  outline: 2px solid #67c1eb;
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.kpi-link-active {
+  color: #7ec7ec !important;
+  text-decoration-color: #7ec7ec !important;
+}
+
+.kpi-drill-section { margin-top: 7px; }
+.kpi-drill-section:empty { display: none; }
+
+.kpi-drill-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: #111820 !important;
+  border: 1px solid #2b3945 !important;
+  border-bottom: 0 !important;
+}
+.kpi-drill-actions { display: flex; gap: 7px; }
+
+.kpi-drill-caption {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #b4c3cc !important;
+  background: #0f151b !important;
+  border-left: 1px solid #2b3945 !important;
+  border-right: 1px solid #2b3945 !important;
+}
+
+.kpi-drill-section .detail-table-wrap {
+  max-height: 60vh;
+  border: 1px solid #2b3945 !important;
+  background: #090d11 !important;
+}
+.kpi-drill-table { table-layout: fixed; }
+.kpi-drill-table th:nth-child(1), .kpi-drill-table td:nth-child(1) { width: 16%; }
+.kpi-drill-table th:nth-child(2), .kpi-drill-table td:nth-child(2) { width: 40%; }
+.kpi-drill-table th:nth-child(3), .kpi-drill-table td:nth-child(3) { width: 22%; }
+.kpi-drill-table th:nth-child(4), .kpi-drill-table td:nth-child(4) { width: 22%; }
+.kpi-drill-table td {
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.kpi-drill-officers th:nth-child(1), .kpi-drill-officers td:nth-child(1) { width: 14%; }
+.kpi-drill-officers th:nth-child(2), .kpi-drill-officers td:nth-child(2) { width: 46%; }
+.kpi-drill-officers th:nth-child(3), .kpi-drill-officers td:nth-child(3) { width: 22%; text-align: center; }
+.kpi-drill-officers th:nth-child(4), .kpi-drill-officers td:nth-child(4) { width: 18%; text-align: center; }
+
+@media (max-width: 1200px) {
+  .kpi-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 760px) {
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .kpi-drill-title { align-items: stretch; }
+}
+
+/* v9.1 — sortable KPI drill-down headers */
+.kpi-drill-table th[data-sort-key] { cursor: pointer; user-select: none; }
+.kpi-drill-table th[data-sort-key]:hover { background: #22303a !important; }
+.kpi-drill-table th .sort { color: #7ec7ec !important; opacity: 1 !important; margin-left: 4px; font-size: 9px; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   v9 — sidebar layout. Filters move out of the header strip into a left
+   rail so the main column carries only results, and everything gets more
+   breathing room. Existing table/detail rules above are left untouched.
+   ═══════════════════════════════════════════════════════════════════ */
+
+.skip-link { position: absolute; left: -9999px; }
+.skip-link:focus { left: 12px; top: 12px; z-index: 50; background: var(--blue); color: #fff; padding: 8px 14px; border-radius: 6px; }
+
+.topbar {
+  display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; flex-wrap: wrap;
+  padding: 20px 26px 16px; border-bottom: 1px solid var(--line); background: var(--dark-1);
+}
+.topbar h1 { font-size: 21px !important; color: var(--white-text) !important; letter-spacing: .2px; }
+.topbar .subtitle { margin: 5px 0 0; font-size: 12px; color: var(--muted-text); }
+.topbar-snapshot { text-align: right; font-size: 11px; color: var(--muted-text); line-height: 1.6; }
+.topbar-snapshot .snapshot-line { display: block; font-weight: 700; color: var(--blue-2); }
+
+.layout { display: grid; grid-template-columns: 288px minmax(0, 1fr); gap: 0; align-items: start; }
+
+/* ── left rail ─────────────────────────────────────────────────────── */
+.rail {
+  position: sticky; top: 0; align-self: start; max-height: 100vh; overflow-y: auto;
+  background: var(--dark-2); border-right: 1px solid var(--line); padding: 18px 16px 26px;
+}
+.rail-toggle { display: none; }
+.rail-group { padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid var(--line); }
+.rail-group:last-child { border-bottom: 0; margin-bottom: 0; }
+.rail-heading {
+  margin: 0 0 12px; font-size: 10.5px; font-weight: 800; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--blue-2);
+}
+.rail-field { display: grid; gap: 6px; margin-bottom: 12px; }
+.rail-field > span { font-size: 11px; font-weight: 700; color: var(--muted-text); }
+.rail-field select, .rail-field input {
+  height: 38px !important; width: 100%; background: var(--dark-4) !important;
+  border: 1px solid var(--line) !important; border-radius: 7px !important;
+  color: var(--white-text) !important; padding: 0 11px; font-size: 12.5px;
+}
+.rail-field input::placeholder { color: #6f8494; }
+.rail-field select:focus, .rail-field input:focus { border-color: var(--blue) !important; box-shadow: 0 0 0 3px rgba(45,143,194,.22) !important; }
+.rail-actions { display: grid; gap: 9px; }
+.rail-actions .btn { width: 100%; height: 38px !important; border-radius: 7px !important; font-size: 12px !important; }
+.definitions-text { font-size: 11px; line-height: 1.65; color: var(--muted-text); }
+.definitions-text b { color: var(--white-text); }
+
+/* ── outlet search results ─────────────────────────────────────────── */
+.outlet-results { display: grid; gap: 5px; max-height: 290px; overflow-y: auto; }
+.outlet-hit {
+  width: 100%; text-align: left; cursor: pointer; padding: 9px 11px; border-radius: 7px;
+  background: var(--dark-3); border: 1px solid var(--line); color: var(--white-text);
+  font-family: inherit; display: grid; gap: 2px;
+}
+.outlet-hit:hover, .outlet-hit:focus-visible { border-color: var(--blue); background: var(--dark-4); }
+.outlet-hit[aria-selected="true"] { border-color: var(--blue); background: rgba(45,143,194,.18); }
+.outlet-hit .hit-name { font-size: 12.5px; font-weight: 700; }
+.outlet-hit .hit-code { font-size: 10.5px; color: var(--blue-2); font-weight: 700; letter-spacing: .06em; }
+.outlet-empty { font-size: 11.5px; color: var(--muted-text); padding: 8px 2px; }
+
+/* ── main column ───────────────────────────────────────────────────── */
+.content { padding: 20px 26px 40px; display: grid; gap: 18px; min-width: 0; }
+.content .kpi-grid {
+  margin: 0 !important; gap: 10px !important;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)) !important;
+}
+.content .kpi-card { border-radius: 10px !important; min-height: 88px !important; padding: 14px 12px !important; }
+.content .kpi-label { font-size: 11px !important; min-height: 26px !important; }
+.content .kpi-value { font-size: 27px !important; }
+
+.panel { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--dark-2); }
+.panel-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 14px 18px; background: var(--dark-3); border-bottom: 1px solid var(--line);
+}
+.panel-head h2 { margin: 0; font-size: 14.5px; color: var(--white-text); }
+.panel-caption { margin: 0; font-size: 11.5px; color: var(--muted-text); }
+.panel .table-wrap { max-height: 62vh; }
+.panel table { font-size: 11.5px !important; }
+.panel th, .panel td { padding: 9px 10px !important; }
+
+.details-section:empty { display: none; }
+.source-footer { font-size: 11px; color: var(--muted-text); padding-top: 4px; }
+
+/* ── outlet detail card — the answer to "where does this outlet stand?" */
+.outlet-card { border: 1px solid var(--blue); border-radius: 12px; background: var(--dark-2); overflow: hidden; }
+.outlet-card-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  padding: 14px 18px; background: linear-gradient(180deg, rgba(45,143,194,.22), rgba(45,143,194,.06));
+  border-bottom: 1px solid var(--line);
+}
+.outlet-card-head h2 { margin: 0; font-size: 16px; color: var(--white-text); }
+.outlet-card-head .code-chip {
+  font-size: 11px; font-weight: 800; letter-spacing: .08em; color: #04202f;
+  background: var(--blue-2); border-radius: 999px; padding: 3px 11px;
+}
+.outlet-card-close { background: none; border: 1px solid var(--line); color: var(--muted-text); border-radius: 7px; padding: 5px 12px; cursor: pointer; font-size: 11.5px; font-family: inherit; }
+.outlet-card-close:hover { color: var(--white-text); border-color: var(--blue); }
+.outlet-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1px; background: var(--line); }
+.outlet-cell { background: var(--dark-2); padding: 13px 16px; display: grid; gap: 4px; align-content: start; }
+.outlet-cell dt { font-size: 10.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--blue-2); }
+.outlet-cell dd { margin: 0; font-size: 13.5px; color: var(--white-text); font-weight: 600; line-height: 1.4; }
+.outlet-cell dd .by { display: block; font-size: 11px; font-weight: 400; color: var(--muted-text); margin-top: 3px; }
+.outlet-cell dd.none { color: #7d8f9d; font-weight: 500; }
+
+/* ── responsive: rail collapses above the content on narrow screens ─── */
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .rail { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--line); padding: 12px 16px; }
+  .rail-toggle {
+    display: block; width: 100%; height: 40px; border-radius: 8px; cursor: pointer; font-family: inherit;
+    background: var(--dark-4); color: var(--white-text); border: 1px solid var(--line); font-size: 12.5px; font-weight: 700;
+  }
+  .rail-body { display: none; padding-top: 14px; }
+  .rail.open .rail-body { display: block; }
+  .content { padding: 16px; }
+  .topbar { padding: 14px 16px; }
+  .topbar-snapshot { text-align: left; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
 }

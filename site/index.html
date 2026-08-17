@@ -5,55 +5,89 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>Visit Compliance Dashboard</title>
-  <meta name="dashboard-theme-version" content="visit-complete-dark-v8-20260808" />
-  <link rel="stylesheet" href="styles.css?v=visit-complete-dark-v8-20260808" />
+  <meta name="dashboard-theme-version" content="visit-complete-dark-v9-sidebar" />
+  <link rel="stylesheet" href="styles.css?v=visit-complete-dark-v9-sidebar" />
 </head>
 <body>
-  <main class="page-shell">
-    <header class="dashboard-header">
-      <div>
-        <h1 id="page-title">Visit Compliance Dashboard</h1>
-        <div id="subtitle" class="subtitle"></div>
-      </div>
-      <div class="snapshot-block">
-        <div id="snapshot-line" class="snapshot-line"></div>
-        <div id="snapshot-note" class="snapshot-note"></div>
-      </div>
-    </header>
+  <a class="skip-link" href="#main-content">Skip to content</a>
 
-    <section class="controls-panel">
-      <label>Status<select id="status-filter"></select></label>
-      <label>Select officer<select id="officer-filter"></select></label>
-      <label class="search-label">Search officer<input id="officer-search" type="search" placeholder="Type an officer name" /></label>
-      <div class="action-stack">
-        <button id="reset-btn" class="btn secondary">Reset filters</button>
-        <button id="download-btn" class="btn primary">Download visible CSV</button>
+  <header class="topbar">
+    <div class="topbar-identity">
+      <h1 id="page-title">Visit Compliance Dashboard</h1>
+      <p id="subtitle" class="subtitle"></p>
+    </div>
+    <div class="topbar-snapshot">
+      <span id="snapshot-line" class="snapshot-line"></span>
+      <span id="snapshot-note" class="snapshot-note"></span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="rail" aria-label="Filters and search">
+      <button id="rail-toggle" class="rail-toggle" type="button" aria-expanded="false">Filters &amp; search</button>
+
+      <div class="rail-body" id="rail-body">
+        <section class="rail-group">
+          <h2 class="rail-heading">Find an outlet</h2>
+          <label class="rail-field">
+            <span>Outlet name or code</span>
+            <input id="outlet-search" type="search" autocomplete="off" placeholder="e.g. Gulshan-1 or D062" />
+          </label>
+          <div id="outlet-results" class="outlet-results" role="listbox" aria-label="Matching outlets"></div>
+        </section>
+
+        <section class="rail-group">
+          <h2 class="rail-heading">Filter officers</h2>
+          <label class="rail-field">
+            <span>Status</span>
+            <select id="status-filter"></select>
+          </label>
+          <label class="rail-field">
+            <span>Officer</span>
+            <select id="officer-filter"></select>
+          </label>
+          <label class="rail-field">
+            <span>Search officer</span>
+            <input id="officer-search" type="search" autocomplete="off" placeholder="Type an officer name" />
+          </label>
+        </section>
+
+        <section class="rail-group rail-actions">
+          <button id="download-btn" class="btn primary" type="button">Download visible CSV</button>
+          <button id="reset-btn" class="btn secondary" type="button">Reset all filters</button>
+        </section>
+
+        <section class="rail-group rail-legend">
+          <h2 class="rail-heading">Definitions</h2>
+          <div id="definitions-text" class="definitions-text"></div>
+        </section>
       </div>
-    </section>
+    </aside>
 
-    <section id="kpis" class="kpi-grid"></section>
+    <main id="main-content" class="content">
+      <section id="outlet-card" class="outlet-card" hidden aria-live="polite"></section>
 
-    <section class="table-section">
-      <div class="section-bar">
-        <h2>Officer-wise visit performance</h2>
-        <div id="summary-caption" class="section-caption"></div>
-      </div>
-      <div class="table-wrap">
-        <table id="performance-table">
-          <thead><tr id="performance-head"></tr></thead>
-          <tbody id="performance-body"></tbody>
-        </table>
-      </div>
-    </section>
+      <section id="kpis" class="kpi-grid" aria-label="Headline numbers"></section>
 
-    <section id="details-section" class="details-section"></section>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Officer-wise visit performance</h2>
+          <p id="summary-caption" class="panel-caption"></p>
+        </div>
+        <div class="table-wrap">
+          <table id="performance-table">
+            <thead><tr id="performance-head"></tr></thead>
+            <tbody id="performance-body"></tbody>
+          </table>
+        </div>
+      </section>
 
-    <section class="definitions">
-      <strong>Definitions:</strong>
-      <span id="definitions-text"></span>
-    </section>
-    <footer id="source-footer"></footer>
-  </main>
+      <section id="details-section" class="details-section"></section>
+
+      <footer id="source-footer" class="source-footer"></footer>
+    </main>
+  </div>
+
   <script type="module" src="app.js"></script>
 </body>
 </html>
