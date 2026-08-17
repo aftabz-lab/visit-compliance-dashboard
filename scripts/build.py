@@ -184,7 +184,37 @@ def workbook_role(book: XlsxWorkbook) -> str:
     return "unknown"
 
 
-def discover_inputs() -> tuple[Path, Path]:
+DATE_IN_NAME = re.compile(r"(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})")
+
+
+def _recency_key(path: Path):
+    """Newest-first ordering: a date in the filename wins, then file mtime.
+
+    Uploading a fresh export next to last month's copy is the normal workflow, so
+    the newer file should simply take over rather than breaking the build.
+    """
+    match = DATE_IN_NAME.search(path.name)
+    stamp = ""
+    if match:
+        year, month, day = match.groups()
+        try:
+            stamp = date(int(year), int(month), int(day)).isoformat()
+        except ValueError:
+            stamp = ""
+    return (stamp, path.stat().st_mtime, path.name)
+
+
+def _pick_latest(paths: list[Path], role: str) -> tuple[Path, list[Path]]:
+    if not paths:
+        raise RuntimeError(
+            f"No {role} workbook found in data/. Check that the file still has its "
+            f"expected sheets and column headers."
+        )
+    ordered = sorted(paths, key=_recency_key, reverse=True)
+    return ordered[0], ordered[1:]
+
+
+def discover_inputs() -> tuple[Path, Path, list[str]]:
     files = sorted(
         p for p in DATA_DIR.iterdir()
         if p.is_file() and not p.name.startswith("~$") and p.suffix.lower() in {".xlsx", ".xlsm"}
@@ -202,15 +232,23 @@ def discover_inputs() -> tuple[Path, Path]:
         except (zipfile.BadZipFile, KeyError, ET.ParseError) as exc:
             raise RuntimeError(f"Cannot read {path.name} as a supported .xlsx/.xlsm workbook: {exc}") from exc
         classified.append((path, role))
-    schedule = [p for p, role in classified if role in {"schedule", "both"}]
-    responses = [p for p, role in classified if role in {"responses", "both"}]
-    if len(schedule) != 1 or len(responses) != 1 or schedule[0] == responses[0]:
+
+    schedule_candidates = [p for p, role in classified if role in {"schedule", "both"}]
+    response_candidates = [p for p, role in classified if role in {"responses", "both"}]
+
+    schedule, older_schedules = _pick_latest(schedule_candidates, "schedule")
+    responses, older_responses = _pick_latest(response_candidates, "response")
+
+    if schedule == responses:
         detail = "\n".join(f"  {p.name}: {role}" for p, role in classified)
         raise RuntimeError(
-            "Could not uniquely identify one schedule workbook and one response workbook by their sheets/headers.\n"
-            + detail + "\nRemove old/duplicate Excel workbooks from data/."
+            "The same workbook was identified as both the schedule and the response file.\n" + detail
         )
-    return schedule[0], responses[0]
+
+    superseded = [p.name for p in older_schedules + older_responses]
+    for name in superseded:
+        print(f"note: ignoring older workbook {name}")
+    return schedule, responses, superseded
 
 
 def parse_schedule(path: Path, planned_values: list[str]) -> tuple[list[dict], dict[str, dict]]:
@@ -555,7 +593,7 @@ def attach_last_visits(outlet_directory: dict, responses: list[dict], officer_di
 def main() -> None:
     cfg = read_json(CONFIG_PATH, {})
     aliases = read_json(ALIAS_PATH, [])
-    schedule_path, response_path = discover_inputs()
+    schedule_path, response_path, superseded_files = discover_inputs()
     assignments, outlet_directory = parse_schedule(schedule_path, cfg.get("plannedValues", ["yes"]))
     parsed_responses, response_diagnostics = parse_responses(response_path, cfg.get("responseAcceptance", {}))
     resolved_responses, officer_dimension, resolution_counts = resolve_responses(parsed_responses, assignments, aliases)
@@ -583,6 +621,7 @@ def main() -> None:
             "reportMonth": report_month,
             "scheduleFile": schedule_path.name,
             "responseFile": response_path.name,
+            "supersededFiles": superseded_files,
             "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "includeUnmappedInVisibleOfficerKpi": bool(cfg.get("includeUnmappedInVisibleOfficerKpi", False)),
             "diagnostics": {
