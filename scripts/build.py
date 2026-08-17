@@ -576,6 +576,8 @@ def main() -> None:
         "metadata": {
             "title": f"{report_month} Visit Compliance Dashboard",
             "subtitle": cfg.get("subtitle", "Officer-wise planned visit and audit-response performance"),
+            "surveyReportUrl": cfg.get("surveyReportUrl", ""),
+            "surveyReportLabel": cfg.get("surveyReportLabel", "Open survey reports"),
             "snapshotDate": snapshot_date,
             "reportMonth": report_month,
             "scheduleFile": schedule_path.name,
