@@ -13,5 +13,6 @@
     "deduplicateByResponseId": true
   },
   "surveyReportUrl": "https://shwapno.app/administration/reports/surveys",
-  "surveyReportLabel": "Open survey reports"
+  "surveyReportLabel": "Open survey reports",
+  "surveyReportHint": "Opens in shwapno.app \u2014 sign in once and it'll remember you"
 }
