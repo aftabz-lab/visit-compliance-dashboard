@@ -42,6 +42,7 @@
   .empty-state h2 { color: var(--white-text); font-size: 18px; margin: 0 0 10px; }
   .warn { font-size: 11.5px; color: #ffc9a0; background: rgba(180,95,20,.16); border: 1px solid #8a5320; border-radius: 8px; padding: 9px 12px; line-height: 1.5; }
   th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th .th-note { display: block; font-size: 8.5px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--blue-2); opacity: .85; }
   th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
   th.sortable:hover { color: var(--blue-2); }
   th.sortable .arrow { opacity: .45; font-size: 9px; margin-left: 3px; }
@@ -538,7 +539,8 @@ async function readStockAvailability(file, criteria, onProgress) {
       if (!header) {
         header = splitCsvLine(line);
         columns = header.map((h, i) => [i, String(h).trim().toUpperCase()]).filter(([i, c]) => i >= 2 && c);
-        columns.forEach(([, code]) => counts.set(code, Object.fromEntries(AVAIL_CRITERIA.map(([l]) => [l, 0]))));
+        columns.forEach(([, code]) => counts.set(code,
+          Object.fromEntries(AVAIL_CRITERIA.map(([l]) => [l, { ok: 0, actual: 0 }]))));
         continue;
       }
       scanned += 1;
@@ -551,9 +553,16 @@ async function readStockAvailability(file, criteria, onProgress) {
       const cells = splitCsvLine(line);
       for (const [i, outlet] of columns) {
         const value = parseFloat(cells[i]);
-        if (!Number.isFinite(value) || value <= 0 || value < item.min) continue;   // below minimum = no stock
+        if (!Number.isFinite(value) || value <= 0) continue;
+        // "Actual" is stock physically present; the headline figure also demands
+        // the item reach its Min Stock Should Be.
+        const meetsMinimum = value >= item.min;
         const bucket = counts.get(outlet);
-        for (const [label] of AVAIL_CRITERIA) if (item.flags[label]) bucket[label] += 1;
+        for (const [label] of AVAIL_CRITERIA) {
+          if (!item.flags[label]) continue;
+          bucket[label].actual += 1;
+          if (meetsMinimum) bucket[label].ok += 1;
+        }
       }
     }
   }
@@ -563,7 +572,12 @@ async function readStockAvailability(file, criteria, onProgress) {
     const entry = {};
     for (const [label] of AVAIL_CRITERIA) {
       const total = totals[label];
-      entry[label] = { ok: bucket[label], total, pct: total ? (100 * bucket[label] / total) : 0 };
+      const { ok, actual } = bucket[label];
+      entry[label] = {
+        ok, actual, total,
+        pct: total ? (100 * ok / total) : 0,
+        pctActual: total ? (100 * actual / total) : 0,
+      };
     }
     result.set(outlet, entry);
   });
@@ -739,13 +753,17 @@ function render() {
     ${state.site && availFor(state.site) ? `
     <section class="panel">
       <div class="panel-head"><h2>Availability Status</h2>
-        <p class="panel-caption">SKU availability for ${esc(state.site.toUpperCase())}${state.availFile ? ` · ${esc(state.availFile)}` : ""}${state.stockFile ? ` + ${esc(state.stockFile)}` : ""}</p></div>
+        <p class="panel-caption">Actual = any stock present, whatever the quantity · ${esc(state.site.toUpperCase())}${state.availFile ? ` · ${esc(state.availFile)}` : ""}${state.stockFile ? ` + ${esc(state.stockFile)}` : ""}</p></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Availability Status</th><th class="num">Available</th><th class="num">Total SKU</th><th class="num">%</th></tr></thead>
+        <thead><tr><th>Availability Status</th><th class="num">Avail<br><span class="th-note">(Stock meets the minimum Qty)</span></th>
+          <th class="num">SKUs</th>
+          <th class="num">%<br><span class="th-note">(Stock meets the minimum Qty)</span></th>
+          <th class="num">Avail Actual</th><th class="num">% Actual</th></tr></thead>
         <tbody>${AVAIL_CRITERIA.map(([label]) => {
           const cell = availFor(state.site)[label];
           return `<tr><td><b>${esc(label)}</b></td><td class="num">${cell.ok}</td><td class="num">${cell.total}</td>
-            <td class="num">${scoreCell(cell.pct)}</td></tr>`;
+            <td class="num">${scoreCell(cell.pct)}</td>
+            <td class="num">${cell.actual ?? "—"}</td><td class="num">${cell.pctActual === undefined ? "—" : scoreCell(cell.pctActual)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>
     </section>` : ""}
@@ -845,6 +863,15 @@ function exportCsv() {
   v.cats.forEach(([k,[g,m]]) => lines.push([k, g, m, pct(g,m).toFixed(1)]));
   lines.push([], ["QUESTION", "Category", "Earned", "Available", "Score %"]);
   v.questions.forEach(([k,[g,m,c]]) => lines.push([k, c || "", g, m, pct(g,m).toFixed(1)]));
+  const av = state.site ? availFor(state.site) : null;
+  if (av) {
+    lines.push([], ["AVAILABILITY STATUS", "Avail (Stock meets the minimum Qty)", "SKUs",
+                    "% (Stock meets the minimum Qty)", "Avail Actual", "% Actual"]);
+    AVAIL_CRITERIA.forEach(([label]) => {
+      const c = av[label];
+      lines.push([label, c.ok, c.total, c.pct.toFixed(1), c.actual ?? "", c.pctActual === undefined ? "" : c.pctActual.toFixed(1)]);
+    });
+  }
   lines.push([], ["OUTLET", "Outlet name", "Zonal", "Regional (RHO)", "Earned", "Available", "Score %"]);
   v.outlets.forEach(([k,[g,m]]) => { const d = meta(k); lines.push([k, d.name, d.zonal, d.rho, g, m, pct(g,m).toFixed(1)]); });
   const csv = lines.map(r => r.map(q).join(",")).join("\r\n");
@@ -980,9 +1007,17 @@ function exportPdf() {
     const av = availFor(state.site);
     if (av) {
       const avY = y0 + 37 + catRows.length * 10.5 + 16;
-      table(M, avY, 232, ["Availability Status", ">Avail", ">SKUs", ">%"], [104, 44, 44, 40],
-            AVAIL_CRITERIA.map(([label]) => [label, av[label].ok, av[label].total, av[label].pct.toFixed(1) + "%"]),
+      table(M, avY, 232, ["Availability Status", ">Avail*", ">SKUs", ">%*", ">Act", ">% Act"],
+            [70, 30, 30, 32, 30, 40],
+            AVAIL_CRITERIA.map(([label]) => {
+              const c = av[label];
+              return [label, c.ok, c.total, c.pct.toFixed(1) + "%",
+                      c.actual ?? "—", c.pctActual === undefined ? "—" : c.pctActual.toFixed(1) + "%"];
+            }),
             "Availability Status", 11);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(5.8); doc.setTextColor(110, 122, 135);
+      doc.text("* Avail and % count only stock that meets the minimum Qty", M, avY + 37 + 4 * 11 + 9);
+      doc.text("Act and % Act count any stock present, whatever the quantity", M, avY + 37 + 4 * 11 + 17);
     }
 
     doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(120, 132, 145);
