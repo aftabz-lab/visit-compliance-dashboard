@@ -124,7 +124,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", dir: new Map(), qSort: { key: "score", dir: "asc" }, oSort: { key: "score", dir: "asc" }, savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
+const state = { rows: [], file: "", sig: "", dir: new Map(), baseDir: new Map(), zoneFile: "", qSort: { key: "score", dir: "asc" }, oSort: { key: "score", dir: "asc" }, savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
 
 // Green through amber to red — the same reading at a glance for any manager.
 function tone(v) {
@@ -246,7 +246,22 @@ async function syncFolder({ silent = true } = {}) {
       }
       return;
     }
+    // Same folder scan also yields the outlet-ownership workbook.
+    const zoneCandidates = candidates.filter(f => f !== chosen);
+    const zoneNamed = zoneCandidates.filter(f => /zone|distribution/i.test(f.name));
+    for (const file of [...zoneNamed, ...zoneCandidates.filter(f => !zoneNamed.includes(f))]) {
+      if (!(await isZoneWorkbook(file))) continue;
+      try {
+        const { map } = await readZoneDirectory(file);
+        state.zoneFile = file.name;
+        mergeDirectory(map);
+        await idbPut("cache", "zone", { file: file.name, entries: [...map.entries()] });
+      } catch { /* keep whatever directory we already have */ }
+      break;
+    }
+
     if (signature(chosen) !== state.sig) await readWorkbook(chosen);
+    else render();
   } catch (e) {
     if (!silent) setState(`<span class="pill idle">error</span><br>${esc(e.message)}`);
   }
@@ -298,13 +313,80 @@ async function loadDirectory() {
     const res = await fetch("data/dashboard_data.json", { cache: "no-store" });
     if (!res.ok) return;
     const outlets = (await res.json()).outlets || {};
-    state.dir = new Map(Object.entries(outlets).map(([code, o]) => [code, {
+    state.baseDir = new Map(Object.entries(outlets).map(([code, o]) => [code, {
       name: o.outletName || "", zonal: o.zonalName || "", rho: o.rhoName || "",
     }]));
+    if (!state.dir.size) state.dir = new Map(state.baseDir);
+    else mergeDirectory(new Map(state.dir));
     if (state.rows.length) render();
   } catch { /* directory is optional - codes still work on their own */ }
 }
 const meta = (code) => state.dir.get(code) || { name: "", zonal: "", rho: "" };
+
+// Zonal and Regional (RHO) are taken from the Zone Distribution workbook sitting
+// in the same folder — it is the authority for outlet ownership and is more
+// complete than the published visit-compliance copy. Only the identity columns
+// are read; nothing else from that workbook is used here.
+const ZONE_COLUMNS = {
+  code: "code",
+  name: "outlet name",
+  zonal: "zonal hr name",
+  rho: "regional head hr name",
+};
+
+async function isZoneWorkbook(file) {
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array", sheetRows: 4, cellStyles: false });
+    return wb.SheetNames.some((n) => {
+      const head = (XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: "", blankrows: false })[0] || [])
+        .map((h) => String(h).trim().toLowerCase());
+      return head.includes(ZONE_COLUMNS.code) && head.includes(ZONE_COLUMNS.zonal) && head.includes(ZONE_COLUMNS.rho);
+    });
+  } catch { return false; }
+}
+
+async function readZoneDirectory(file) {
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellStyles: false });
+  for (const sheetName of wb.SheetNames) {
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "", blankrows: false });
+    if (!grid.length) continue;
+    const head = grid[0].map((h) => String(h).trim().toLowerCase());
+    const at = {
+      code: head.indexOf(ZONE_COLUMNS.code),
+      name: head.indexOf(ZONE_COLUMNS.name),
+      zonal: head.indexOf(ZONE_COLUMNS.zonal),
+      rho: head.indexOf(ZONE_COLUMNS.rho),
+    };
+    if (at.code < 0 || at.zonal < 0 || at.rho < 0) continue;
+    const map = new Map();
+    for (const line of grid.slice(1)) {
+      const code = String(line[at.code] ?? "").trim();
+      if (!code) continue;
+      map.set(code, {
+        name: String(at.name >= 0 ? line[at.name] ?? "" : "").trim(),
+        zonal: String(line[at.zonal] ?? "").trim(),
+        rho: String(line[at.rho] ?? "").trim(),
+      });
+    }
+    if (map.size) return { map, sheetName, file: file.name };
+  }
+  throw new Error("No sheet with CODE / Zonal HR Name / Regional Head HR Name.");
+}
+
+// Published copy is the base; the folder's zone workbook overrides it wherever it
+// has a value, so a fresher local file always wins.
+function mergeDirectory(zoneMap) {
+  const merged = new Map(state.baseDir);
+  zoneMap.forEach((v, code) => {
+    const current = merged.get(code) || { name: "", zonal: "", rho: "" };
+    merged.set(code, {
+      name: v.name || current.name,
+      zonal: v.zonal || current.zonal,
+      rho: v.rho || current.rho,
+    });
+  });
+  state.dir = merged;
+}
 
 /* ── aggregation ─────────────────────────────────────────────────────── */
 function aggregate() {
@@ -460,7 +542,7 @@ function render() {
     ${days.length > 1 ? `<section class="panel"><div class="panel-head"><h2>Daily audit score</h2></div>
       <div style="padding:8px 18px 16px">${barRows(days, 31)}</div></section>` : ""}
 
-    <p class="coverage">Every question in the export is listed above. Questions carrying no marks
+    <p class="coverage">${state.zoneFile ? `Zonal and Regional (RHO) read from <b>${esc(state.zoneFile)}</b> in the same folder. ` : ""}Every question in the export is listed above. Questions carrying no marks
       (free-text notes) are excluded from scoring so they cannot dilute the result.</p>`;
 
   document.querySelectorAll("th.sortable").forEach(el => el.addEventListener("click", () => {
@@ -690,6 +772,12 @@ $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; st
   }
   // 2. Reconnect to the remembered folder and follow any change to it.
   loadDirectory();
+  const zoneCache = await idbGet("cache", "zone");
+  if (zoneCache?.entries?.length) {
+    state.zoneFile = zoneCache.file;
+    mergeDirectory(new Map(zoneCache.entries));
+    if (state.rows.length) render();
+  }
   const handle = await idbGet("h", "folder");
   if (!handle) return;
   state.dirHandle = handle;
