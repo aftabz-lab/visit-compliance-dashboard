@@ -301,7 +301,7 @@ async function syncFolder({ silent = true } = {}) {
             state.avail = result;
             state.stockFile = file.name;
             state.availMatched = matched;
-            await idbPut("cache", "avail", { file: state.availFile, stockFile: file.name, matched, entries: [...result.entries()] });
+            await idbPut("cache", "avail", { version: AVAIL_CACHE_VERSION, file: state.availFile, stockFile: file.name, matched, entries: [...result.entries()] });
           } catch { /* availability is optional */ }
           break;
         }
@@ -453,6 +453,9 @@ function mergeDirectory(zoneMap) {
 //   stock_extraction_report*.csv → the stock on hand, one column per outlet.
 // An item counts as available at an outlet only when its stock reaches
 // "Min Stock Should Be"; below that it is treated as zero stock for that outlet.
+// Bumped whenever the shape of a cached availability entry changes, so a copy
+// saved by an older build is discarded instead of being shown with blank columns.
+const AVAIL_CACHE_VERSION = 2;
 const AVAIL_CRITERIA = [["Core SKU", "Core Item"], ["KVI SKU", "KVI"], ["Promo SKU", "Core Promo"], ["HGPHS SKU", "HGPHS"]];
 
 async function isCriteriaWorkbook(file) {
@@ -1091,11 +1094,18 @@ $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; st
   // 2. Reconnect to the remembered folder and follow any change to it.
   loadDirectory();
   const availCache = await idbGet("cache", "avail");
-  if (availCache?.entries?.length) {
+  // An entry from an older build has no "actual" count; drop it and re-read the
+  // folder rather than rendering dashes.
+  const availUsable = availCache?.version === AVAIL_CACHE_VERSION
+    && availCache.entries?.length
+    && availCache.entries.some(([, e]) => e && Object.values(e).some(v => v && v.actual !== undefined));
+  if (availUsable) {
     state.avail = new Map(availCache.entries);
     state.availFile = availCache.file;
     state.stockFile = availCache.stockFile || "";
     state.availMatched = availCache.matched || 0;
+  } else if (availCache) {
+    await idbDel("cache", "avail");   // stale shape - force a fresh read
   }
   const zoneCache = await idbGet("cache", "zone");
   if (zoneCache?.entries?.length) {
