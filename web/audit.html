@@ -358,8 +358,15 @@ function startWatching() {
 async function loadDirectory() {
   try {
     /*
-     * Self-contained last-successful-data fallback.
-     * This page does not require a separate loader file.
+     * Permanent fallback for the Audit page.
+     *
+     * 1. Use the current generated dashboard_data.json when available.
+     * 2. Save the last successful fetch locally.
+     * 3. If current data is unavailable, first use the saved browser copy.
+     * 4. If there is no browser copy (new browser/device), use the
+     *    repository-level dashboard_data_last_good.json.
+     *
+     * This does NOT depend on data-loader-audit.js.
      */
     const LAST_DATA_KEY =
       "visit_compliance_audit_last_successful_data";
@@ -401,16 +408,17 @@ async function loadDirectory() {
           new Date().toISOString()
         );
       } catch (storageError) {
-        console.warn("Could not save fallback data:", storageError);
+        console.warn("Audit local cache unavailable:", storageError);
       }
 
     } catch (currentError) {
 
       console.warn(
-        "Current Audit data unavailable. Using last successful data.",
+        "Audit current data unavailable. Trying last successful data.",
         currentError
       );
 
+      // First try this browser's last successful fetch.
       try {
         const cachedData =
           localStorage.getItem(LAST_DATA_KEY);
@@ -419,19 +427,46 @@ async function loadDirectory() {
           dashboardData = JSON.parse(cachedData);
         }
       } catch (cacheError) {
-        console.warn("Could not read fallback data:", cacheError);
+        console.warn("Audit browser cache unavailable:", cacheError);
+      }
+
+      // If this is a new browser/device, use the permanent repository snapshot.
+      if (!dashboardData) {
+        try {
+          const fallbackResponse = await fetch(
+            `data/dashboard_data_last_good.json?_=${Date.now()}`,
+            { cache: "no-store" }
+          );
+
+          if (fallbackResponse.ok) {
+            const fallbackData =
+              await fallbackResponse.json();
+
+            if (
+              fallbackData &&
+              typeof fallbackData === "object" &&
+              Object.keys(fallbackData).length > 0
+            ) {
+              dashboardData = fallbackData;
+            }
+          }
+        } catch (fallbackError) {
+          console.warn(
+            "Audit permanent fallback unavailable:",
+            fallbackError
+          );
+        }
       }
 
       if (!dashboardData) {
         console.warn(
-          "No previous Audit dataset is available in this browser."
+          "No current or last-good Audit data is available."
         );
         return;
       }
 
       console.info(
-        "Audit is showing last successfully fetched data. Last fetch:",
-        localStorage.getItem(LAST_FETCH_KEY) || "unknown"
+        "Audit is showing last successfully fetched data."
       );
     }
 
