@@ -142,17 +142,33 @@ const fatten = (packed) => packed.map(a => Object.fromEntries(FIELDS.map((f, i) 
 
 function setState(html) { $("src-state").innerHTML = html; }
 
-async function newestInFolder(handle) {
-  let best = null;
+// Every workbook in the folder, newest first. All of them are returned rather
+// than just the newest, because a shared data folder holds exports for other
+// dashboards too — taking the newest outright reads the wrong file.
+async function candidateWorkbooks(handle) {
+  const found = [];
   for await (const [name, entry] of handle.entries()) {
     if (entry.kind !== "file") continue;
     if (!/\.xlsx?$|\.xlsm$/i.test(name) || name.startsWith("~$")) continue;
     const file = await entry.getFile();
     const m = name.match(/(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})/);
-    const key = [m ? `${m[1]}${m[2]}${m[3]}` : "", file.lastModified];
-    if (!best || key[0] > best.key[0] || (key[0] === best.key[0] && key[1] > best.key[1])) best = { file, key };
+    found.push({ file, stamp: m ? `${m[1]}${m[2]}${m[3]}` : "", modified: file.lastModified });
   }
-  return best;
+  found.sort((a, b) => a.stamp === b.stamp ? b.modified - a.modified : b.stamp.localeCompare(a.stamp));
+  return found.map(c => c.file);
+}
+
+// Cheap check: read a handful of rows and look for the Answer Details sheet.
+async function isAuditWorkbook(file) {
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array", sheetRows: 4, cellStyles: false });
+    if (wb.SheetNames.some(n => n.trim().toLowerCase() === "answer details")) return true;
+    return wb.SheetNames.some(n => {
+      const head = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: "", blankrows: false })[0] || [];
+      const lower = head.map(h => String(h).trim().toLowerCase());
+      return lower.includes("question category") && lower.includes("answer score");
+    });
+  } catch { return false; }
 }
 
 const signature = (f) => `${f.name}|${f.lastModified}|${f.size}`;
@@ -185,17 +201,24 @@ async function syncFolder({ silent = true } = {}) {
   if (permission !== "granted") { needsGrant(); return; }
   $("grant").hidden = true;
   try {
-    const newest = await newestInFolder(state.dirHandle);
-    if (!newest) {
+    const candidates = await candidateWorkbooks(state.dirHandle);
+    // Filenames that look like the audit export are tried first; a renamed one is
+    // still found because every workbook is checked for the right sheet.
+    const named = candidates.filter(f => /audit|response|survey|compliance/i.test(f.name));
+    const ordered = [...named, ...candidates.filter(f => !named.includes(f))];
+    let chosen = null;
+    for (const file of ordered) { if (await isAuditWorkbook(file)) { chosen = file; break; } }
+
+    if (!chosen) {
       if (state.rows.length || !silent) {
         state.rows = []; state.sig = ""; state.file = "";
         await idbDel("cache", "last");
-        setState(`<span class="pill idle">folder empty</span><br>No Excel file in the chosen folder.`);
+        setState(`<span class="pill idle">no match</span><br>${candidates.length ? `No workbook in that folder has an <b>Answer Details</b> sheet (checked ${candidates.length}).` : "No Excel file in the chosen folder."}`);
         render();
       }
       return;
     }
-    if (signature(newest.file) !== state.sig) await readWorkbook(newest.file);
+    if (signature(chosen) !== state.sig) await readWorkbook(chosen);
   } catch (e) {
     if (!silent) setState(`<span class="pill idle">error</span><br>${esc(e.message)}`);
   }
