@@ -33,8 +33,8 @@
   .bar-row { display: grid; grid-template-columns: minmax(150px,210px) 1fr 56px; gap: 12px; align-items: center; padding: 9px 0; }
   .bar-row + .bar-row { border-top: 1px solid var(--line); }
   .bar-row .lbl { font-size: 12.5px; color: var(--white-text); font-weight: 600; }
-  .bar-track { height: 12px; border-radius: 999px; background: var(--dark-4); overflow: hidden; }
-  .bar-fill { height: 100%; border-radius: 999px; }
+  .bar-track { display: block; height: 12px; border-radius: 999px; background: var(--dark-4); overflow: hidden; }
+  .bar-fill { display: block; height: 100%; min-width: 2px; border-radius: 999px; }
   .bar-row .val { text-align: right; font-size: 12.5px; font-weight: 800; font-variant-numeric: tabular-nums; }
 
   .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px,1fr)); gap: 18px; }
@@ -42,6 +42,25 @@
   .empty-state h2 { color: var(--white-text); font-size: 18px; margin: 0 0 10px; }
   .warn { font-size: 11.5px; color: #ffc9a0; background: rgba(180,95,20,.16); border: 1px solid #8a5320; border-radius: 8px; padding: 9px 12px; line-height: 1.5; }
   th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  th.sortable:hover { color: var(--blue-2); }
+  th.sortable .arrow { opacity: .45; font-size: 9px; margin-left: 3px; }
+  th.sortable.active .arrow { opacity: 1; color: var(--blue-2); }
+  tr.click-row { cursor: pointer; }
+  tr.click-row:hover td { background: rgba(45,143,194,.14); }
+  tr.click-row.on td { background: rgba(45,143,194,.24); }
+  .mini { display: inline-block; vertical-align: middle; width: 74px; height: 8px; border-radius: 999px; background: var(--dark-4); overflow: hidden; margin-right: 8px; }
+  .mini > i { display: block; height: 100%; border-radius: 999px; }
+  .drill {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 11px 15px;
+    border: 1px solid var(--blue); border-radius: 10px; background: rgba(45,143,194,.14); font-size: 13px; color: var(--white-text);
+  }
+  .drill button { background: none; border: 1px solid var(--line); color: var(--muted-text); border-radius: 7px; padding: 4px 11px; cursor: pointer; font-family: inherit; font-size: 11.5px; }
+  .drill button:hover { color: var(--white-text); border-color: var(--blue); }
+  .coverage { font-size: 11.5px; color: var(--muted-text); }
+  .coverage b { color: var(--white-text); }
+  .exports { display: flex; gap: 9px; flex-wrap: wrap; }
+  .exports .btn { height: 34px; font-size: 11.5px; }
 </style>
 </head>
 <body>
@@ -79,6 +98,14 @@
       </section>
 
       <section class="rail-group">
+        <h2 class="rail-heading">Export what is on screen</h2>
+        <div class="exports">
+          <button id="dl-pdf" class="btn primary" type="button" style="width:100%">PDF summary</button>
+          <button id="dl-csv" class="btn secondary" type="button" style="width:100%">CSV of this view</button>
+        </div>
+      </section>
+
+      <section class="rail-group">
         <h2 class="rail-heading">How the score works</h2>
         <p class="definitions-text">Score is <b>points earned ÷ points available</b> across every answered question. Questions carrying no marks (free-text notes) are excluded so they cannot dilute the result.</p>
       </section>
@@ -92,11 +119,12 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
+const state = { rows: [], file: "", sig: "", qSort: { key: "score", dir: "asc" }, oSort: { key: "score", dir: "asc" }, savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
 
 // Green through amber to red — the same reading at a glance for any manager.
 function tone(v) {
@@ -303,25 +331,64 @@ function barRows(entries, limit) {
   }).join("");
 }
 
+function sortRows(entries, sort) {
+  const val = (e, key) => {
+    const [label, [got, max, extra]] = e;
+    if (key === "name") return String(label).toLowerCase();
+    if (key === "cat") return String(extra || "").toLowerCase();
+    if (key === "got") return got;
+    if (key === "max") return max;
+    return pct(got, max);
+  };
+  const dir = sort.dir === "asc" ? 1 : -1;
+  return [...entries].sort((a, b) => {
+    const x = val(a, sort.key), y = val(b, sort.key);
+    if (x < y) return -1 * dir;
+    if (x > y) return 1 * dir;
+    return 0;
+  });
+}
+
+function th(label, key, sort, table, extraClass = "") {
+  const on = sort.key === key;
+  const arrow = on ? (sort.dir === "asc" ? "▲" : "▼") : "▲";
+  return `<th class="sortable ${on ? "active" : ""} ${extraClass}" data-table="${table}" data-key="${key}">${esc(label)}<span class="arrow">${arrow}</span></th>`;
+}
+
+function scoreCell(v) {
+  return `<span class="mini"><i style="width:${v.toFixed(1)}%;background:${tone(v)}"></i></span><b style="color:${tone(v)}">${v.toFixed(1)}%</b>`;
+}
+
 function render() {
   if (!state.rows.length) {
     $("body").innerHTML = `<div class="empty-state"><h2>No data loaded yet</h2>
       Choose the folder on your laptop where the survey export is saved.<br>
-      The newest Excel file in that folder is read automatically — the name can change every month.<br><br>
+      The newest matching Excel file is read automatically — the name can change every month.<br><br>
       Nothing is uploaded; the file is read on this computer only.</div>`;
     return;
   }
   const a = aggregate();
   const overall = pct(a.total[0], a.total[1]);
-  const cats = [...a.cats.entries()].sort((x,y) => pct(y[1][0],y[1][1]) - pct(x[1][0],x[1][1]));
-  const sites = [...a.sites.entries()].sort((x,y) => {
-    const d = pct(x[1][0],x[1][1]) - pct(y[1][0],y[1][1]);
-    return state.rank === "worst" ? d : -d;
-  });
-  const weak = [...a.questions.entries()].sort((x,y) => pct(x[1][0],x[1][1]) - pct(y[1][0],y[1][1]));
-  const days = [...a.days.entries()].sort((x,y) => new Date(x[0]) - new Date(y[0]));
+  const cats = [...a.cats.entries()].sort((x, y) => pct(y[1][0], y[1][1]) - pct(x[1][0], x[1][1]));
+  const questions = sortRows([...a.questions.entries()], state.qSort);
+  const outlets = sortRows([...a.sites.entries()], state.oSort);
+  const days = [...a.days.entries()].sort((x, y) => new Date(x[0]) - new Date(y[0]));
+  const below = { s60: 0, s70: 0, s80: 0 };
+  for (const [, [got, max]] of a.sites) {
+    const v = pct(got, max);
+    if (v < 60) below.s60 += 1;
+    if (v < 70) below.s70 += 1;
+    if (v < 80) below.s80 += 1;
+  }
+  state.view = { overall, cats, questions, outlets, days, audits: a.audits.size, outletCount: a.outlets.size, total: a.total, below };
+
+  const drill = state.site
+    ? `<div class="drill"><b>Showing outlet ${esc(state.site)}</b>
+         <span class="coverage">every panel below is filtered to this outlet</span>
+         <button id="clear-drill" type="button">Show all outlets</button></div>` : "";
 
   $("body").innerHTML = `
+    ${drill}
     <section class="score-hero">
       <div class="hero-cell hero-score">
         <span class="big" style="color:${tone(overall)}">${overall.toFixed(1)}%</span>
@@ -330,39 +397,159 @@ function render() {
       <div class="hero-cell hero-facts">
         <div class="fact"><div class="n">${a.audits.size.toLocaleString()}</div><div class="l">Audits</div></div>
         <div class="fact"><div class="n">${a.outlets.size.toLocaleString()}</div><div class="l">Outlets covered</div></div>
-        <div class="fact"><div class="n">${a.total[1].toLocaleString()}</div><div class="l">Points available</div></div>
-        <div class="fact"><div class="n" style="color:${tone(overall)}">${(a.total[1]-a.total[0]).toLocaleString()}</div><div class="l">Points lost</div></div>
+        <div class="fact"><div class="n">${questions.length}</div><div class="l">Scored questions</div></div>
+        <div class="fact"><div class="n" style="color:${tone(overall)}">${(a.total[1] - a.total[0]).toLocaleString()}</div><div class="l">Points lost</div></div>
       </div>
     </section>
 
-    <div class="split">
-      <section class="panel"><div class="panel-head"><h2>Score by category</h2></div>
-        <div style="padding:8px 18px 16px">${barRows(cats, 10)}</div></section>
-      <section class="panel"><div class="panel-head"><h2>Lowest scoring questions</h2><p class="panel-caption">Where the points are being lost</p></div>
-        <div style="padding:8px 18px 16px">${barRows(weak, 8)}</div></section>
-    </div>
+    <section class="panel">
+      <div class="panel-head"><h2>Score by category</h2>
+        <p class="panel-caption">${cats.length} categories</p></div>
+      <div style="padding:8px 18px 16px">${barRows(cats, 20)}</div>
+    </section>
 
     <section class="panel">
-      <div class="panel-head"><h2>${state.rank === "worst" ? "Outlets needing attention" : "Top performing outlets"}</h2>
-        <p class="panel-caption">${sites.length.toLocaleString()} outlets in view</p></div>
+      <div class="panel-head"><h2>Every scored question</h2>
+        <p class="panel-caption">${questions.length} questions · click any column to sort</p></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>#</th><th>Outlet code</th><th class="num">Points earned</th><th class="num">Available</th><th class="num">Score</th></tr></thead>
-        <tbody>${sites.slice(0,25).map(([code,[got,max]],i) => {
-          const v = pct(got,max);
-          return `<tr><td>${i+1}</td><td><b>${esc(code)}</b></td><td class="num">${got.toLocaleString()}</td><td class="num">${max.toLocaleString()}</td>
-            <td class="num" style="color:${tone(v)};font-weight:800">${v.toFixed(1)}%</td></tr>`;
-        }).join("")}</tbody>
+        <thead><tr>${th("Question","name",state.qSort,"q")}${th("Category","cat",state.qSort,"q")}
+          ${th("Earned","got",state.qSort,"q","num")}${th("Available","max",state.qSort,"q","num")}${th("Score","score",state.qSort,"q","num")}</tr></thead>
+        <tbody>${questions.map(([label,[got,max,cat]]) => `<tr>
+          <td><b>${esc(label)}</b></td><td>${esc(cat || "")}</td>
+          <td class="num">${got.toLocaleString()}</td><td class="num">${max.toLocaleString()}</td>
+          <td class="num">${scoreCell(pct(got,max))}</td></tr>`).join("")}</tbody>
+      </table></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Outlets</h2>
+        <p class="panel-caption">${outlets.length.toLocaleString()} in view · ${below.s60} below 60% · ${below.s70} below 70% · ${below.s80} below 80% · click a row to drill in</p></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th>${th("Outlet code","name",state.oSort,"o")}
+          ${th("Points earned","got",state.oSort,"o","num")}${th("Available","max",state.oSort,"o","num")}${th("Score","score",state.oSort,"o","num")}</tr></thead>
+        <tbody>${outlets.map(([code,[got,max]],i) => `<tr class="click-row ${state.site === code ? "on" : ""}" data-code="${esc(code)}">
+          <td>${i+1}</td><td><b>${esc(code)}</b></td>
+          <td class="num">${got.toLocaleString()}</td><td class="num">${max.toLocaleString()}</td>
+          <td class="num">${scoreCell(pct(got,max))}</td></tr>`).join("")}</tbody>
       </table></div>
     </section>
 
     ${days.length > 1 ? `<section class="panel"><div class="panel-head"><h2>Daily audit score</h2></div>
-      <div style="padding:8px 18px 16px">${barRows(days, 31)}</div></section>` : ""}`;
+      <div style="padding:8px 18px 16px">${barRows(days, 31)}</div></section>` : ""}
+
+    <p class="coverage">Every question in the export is listed above. Questions carrying no marks
+      (free-text notes) are excluded from scoring so they cannot dilute the result.</p>`;
+
+  document.querySelectorAll("th.sortable").forEach(el => el.addEventListener("click", () => {
+    const sort = el.dataset.table === "q" ? state.qSort : state.oSort;
+    if (sort.key === el.dataset.key) sort.dir = sort.dir === "asc" ? "desc" : "asc";
+    else { sort.key = el.dataset.key; sort.dir = el.dataset.key === "score" ? "asc" : "asc"; }
+    render();
+  }));
+  document.querySelectorAll("tr.click-row").forEach(el => el.addEventListener("click", () => {
+    state.site = state.site === el.dataset.code ? "" : el.dataset.code;
+    $("f-site").value = state.site;
+    render();
+  }));
+  $("clear-drill")?.addEventListener("click", () => { state.site = ""; $("f-site").value = ""; render(); });
 
   const sel = $("f-cat"), keep = sel.value;
   sel.innerHTML = `<option value="">All categories</option>` +
     [...new Set(state.rows.map(r => r["Question Category"]).filter(Boolean))].sort()
       .map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
   sel.value = keep;
+}
+
+/* ── exports: whatever is on screen right now ────────────────────────── */
+function scopeLabel() {
+  const bits = [];
+  if (state.site) bits.push(`Outlet ${state.site}`);
+  if (state.cat) bits.push(state.cat);
+  return bits.length ? bits.join(" · ") : "All outlets and categories";
+}
+
+function downloadBlob(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+function exportCsv() {
+  const v = state.view; if (!v) return;
+  const q = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
+  const lines = [];
+  lines.push(["Audit Quality Dashboard"], [scopeLabel()], [`Source file`, state.file], [`Overall score`, v.overall.toFixed(1) + "%"],
+             [`Audits`, v.audits], [`Outlets covered`, v.outletCount], []);
+  lines.push(["CATEGORY", "Earned", "Available", "Score %"]);
+  v.cats.forEach(([k,[g,m]]) => lines.push([k, g, m, pct(g,m).toFixed(1)]));
+  lines.push([], ["QUESTION", "Category", "Earned", "Available", "Score %"]);
+  v.questions.forEach(([k,[g,m,c]]) => lines.push([k, c || "", g, m, pct(g,m).toFixed(1)]));
+  lines.push([], ["OUTLET", "Earned", "Available", "Score %"]);
+  v.outlets.forEach(([k,[g,m]]) => lines.push([k, g, m, pct(g,m).toFixed(1)]));
+  const csv = lines.map(r => r.map(q).join(",")).join("\r\n");
+  downloadBlob(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }), `audit-quality-${Date.now()}.csv`);
+}
+
+function exportPdf() {
+  const v = state.view; if (!v) return;
+  const { jsPDF } = window.jspdf || {};
+  if (!jsPDF) { alert("PDF library did not load — check the internet connection."); return; }
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+  const W = doc.internal.pageSize.getWidth();
+  let y = 46;
+
+  doc.setFont("helvetica", "bold"); doc.setFontSize(17); doc.setTextColor(15, 36, 58);
+  doc.text("Audit Quality — Executive Summary", 40, y);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(90, 105, 120);
+  y += 15; doc.text(`${scopeLabel()}  ·  ${state.file || "local file"}  ·  ${new Date().toLocaleString()}`, 40, y);
+
+  // headline band
+  y += 16; doc.setDrawColor(0); doc.setLineWidth(0.6); doc.rect(40, y, W - 80, 58);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(30); doc.setTextColor(20, 20, 20);
+  doc.text(`${v.overall.toFixed(1)}%`, 56, y + 38);
+  doc.setFontSize(8); doc.setTextColor(90, 105, 120); doc.setFont("helvetica", "normal");
+  doc.text("OVERALL COMPLIANCE", 56, y + 50);
+  const facts = [["Audits", v.audits], ["Outlets", v.outletCount], ["Questions", v.questions.length],
+                 ["Points lost", (v.total[1] - v.total[0]).toLocaleString()]];
+  facts.forEach(([label, value], i) => {
+    const x = 190 + i * ((W - 240) / 4);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(14); doc.setTextColor(20, 20, 20);
+    doc.text(String(value), x, y + 32);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(90, 105, 120);
+    doc.text(String(label).toUpperCase(), x, y + 46);
+  });
+  y += 76;
+
+  const table = (title, rows, widths, headers) => {
+    if (y > 690) { doc.addPage(); y = 46; }
+    doc.setFont("helvetica", "bold"); doc.setFontSize(10.5); doc.setTextColor(15, 36, 58);
+    doc.text(title, 40, y); y += 10;
+    doc.setFontSize(7.5); doc.setTextColor(255, 255, 255); doc.setFillColor(15, 36, 58);
+    doc.rect(40, y, W - 80, 15, "F");
+    let x = 46; headers.forEach((h, i) => { doc.text(String(h), x, y + 10.5); x += widths[i]; });
+    y += 15; doc.setTextColor(25, 25, 25); doc.setFont("helvetica", "normal");
+    rows.forEach((row, n) => {
+      if (y > 780) { doc.addPage(); y = 46; }
+      if (n % 2) { doc.setFillColor(244, 247, 250); doc.rect(40, y, W - 80, 13, "F"); }
+      x = 46; row.forEach((cell, i) => { doc.text(String(cell).slice(0, 46), x, y + 9); x += widths[i]; });
+      doc.setDrawColor(0); doc.setLineWidth(0.2); doc.line(40, y + 13, W - 40, y + 13);
+      y += 13;
+    });
+    y += 18;
+  };
+
+  table("Score by category", v.cats.map(([k,[g,m]]) => [k, g.toLocaleString(), m.toLocaleString(), pct(g,m).toFixed(1) + "%"]),
+        [210, 90, 90, 60], ["Category", "Earned", "Available", "Score"]);
+  table("Weakest 12 questions", v.questions.slice().sort((a,b) => pct(a[1][0],a[1][1]) - pct(b[1][0],b[1][1])).slice(0,12)
+          .map(([k,[g,m,c]]) => [k, c || "", pct(g,m).toFixed(1) + "%"]),
+        [230, 170, 60], ["Question", "Category", "Score"]);
+  table(`Outlets needing attention (${v.below.s70} below 70%)`,
+        v.outlets.slice().sort((a,b) => pct(a[1][0],a[1][1]) - pct(b[1][0],b[1][1])).slice(0,20)
+          .map(([k,[g,m]]) => [k, g.toLocaleString(), m.toLocaleString(), pct(g,m).toFixed(1) + "%"]),
+        [210, 90, 90, 60], ["Outlet", "Earned", "Available", "Score"]);
+
+  doc.save(`audit-quality-summary-${Date.now()}.pdf`);
 }
 
 /* ── wiring ──────────────────────────────────────────────────────────── */
@@ -373,6 +560,8 @@ $("pick-file").addEventListener("change", e => e.target.files[0] && readWorkbook
 $("f-cat").addEventListener("change", e => { state.cat = e.target.value; render(); });
 $("f-site").addEventListener("input", e => { state.site = e.target.value; render(); });
 $("f-rank").addEventListener("change", e => { state.rank = e.target.value; render(); });
+$("dl-csv").addEventListener("click", exportCsv);
+$("dl-pdf").addEventListener("click", exportPdf);
 $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; state.rank = "worst";
   $("f-cat").value = ""; $("f-site").value = ""; $("f-rank").value = "worst"; render(); });
 
