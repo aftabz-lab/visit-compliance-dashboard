@@ -357,73 +357,22 @@ function startWatching() {
 // visit-compliance dataset published alongside this page, joined on site code.
 async function loadDirectory() {
   try {
-    let dashboardData = null;
+    const { loadAuditDashboardData } =
+      await import("./data-loader-audit.js");
 
-    /*
-     * Current raw data is preferred. If it is unavailable, empty, or invalid,
-     * use the last successfully fetched dataset for this Audit page.
-     */
-    try {
-      const res = await fetch(
-        `data/dashboard_data.json?_=${Date.now()}`,
-        { cache: "no-store" }
-      );
+    const result =
+      await loadAuditDashboardData();
 
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
+    const outlets =
+      (result.data && result.data.outlets) || {};
 
-      const freshData = await res.json();
-
-      if (
-        !freshData ||
-        typeof freshData !== "object" ||
-        Object.keys(freshData).length === 0
-      ) {
-        throw new Error("Current dashboard data is empty.");
-      }
-
-      dashboardData = freshData;
-
-      localStorage.setItem(
-        "visit_compliance_audit_last_successful_data",
-        JSON.stringify(freshData)
-      );
-
-      localStorage.setItem(
-        "visit_compliance_audit_last_successful_fetch",
-        new Date().toISOString()
-      );
-
-    } catch (currentError) {
-
-      console.warn(
-        "Audit current data unavailable. Using last successfully fetched data.",
-        currentError
-      );
-
-      const cachedData = localStorage.getItem(
-        "visit_compliance_audit_last_successful_data"
-      );
-
-      if (!cachedData) {
-        return;
-      }
-
-      dashboardData = JSON.parse(cachedData);
-
-      const cachedAt = localStorage.getItem(
-        "visit_compliance_audit_last_successful_fetch"
-      );
-
+    if (result.usingLastData) {
       console.info(
-        "Audit dashboard is showing the last successfully fetched data:",
-        cachedAt || "previous successful update"
+        "Audit: current raw data unavailable. Showing last successfully fetched data:",
+        result.lastFetched || "previous successful update"
       );
     }
-
-    const outlets = dashboardData.outlets || {};
-    state.baseDir = new Map(Object.entries(outlets).map(([code, o]) => [code, o
+    state.baseDir = new Map(Object.entries(outlets).map(([code, o]) => [code, {
       name: o.outletName || "", zonal: o.zonalName || "", rho: o.rhoName || "",
       lastVisit: o.lastVisit || null,
       lastVisitZonal: o.lastVisitZonal || null, lastVisitZonalBy: o.lastVisitZonalBy || "",
