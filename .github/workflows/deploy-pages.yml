@@ -17,7 +17,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,18 +26,7 @@ jobs:
         with:
           python-version: "3.13"
 
-      # Restore the newest previously successful generated dataset.
-      # This is the key part: GitHub Actions runners are fresh on every run,
-      # so build.py cannot preserve files from an earlier run by itself.
-      - name: Restore last successful dashboard data
-        uses: actions/cache/restore@v4
-        with:
-          path: site/data/dashboard_data.json
-          key: visit-compliance-dashboard-data-${{ github.run_id }}
-          restore-keys: |
-            visit-compliance-dashboard-data-
-
-      - name: Build dashboard or keep last successful data
+      - name: Build dashboard or use last published data
         run: python scripts/build.py
 
       - name: Verify published dashboard data
@@ -47,27 +35,18 @@ jobs:
           test -f site/data/dashboard_data.json
           python - <<'PY'
           import json
-          p = "site/data/dashboard_data.json"
-          with open(p, encoding="utf-8") as f:
-              d = json.load(f)
-          if not isinstance(d, dict) or not d:
+          with open("site/data/dashboard_data.json", encoding="utf-8") as f:
+              data = json.load(f)
+          if not isinstance(data, dict) or not data:
               raise SystemExit("dashboard_data.json is empty or invalid")
           print("dashboard_data.json is valid")
           PY
-
-      # Save this run's successfully published data under a new immutable key.
-      # The next run restores the newest key using restore-keys above.
-      - name: Save last successful dashboard data
-        uses: actions/cache/save@v4
-        with:
-          path: site/data/dashboard_data.json
-          key: visit-compliance-dashboard-data-${{ github.run_id }}
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: site
 
