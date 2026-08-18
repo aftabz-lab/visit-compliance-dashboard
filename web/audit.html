@@ -41,7 +41,7 @@
   .empty-state { text-align: center; padding: 56px 24px; color: var(--muted-text); font-size: 13.5px; line-height: 1.7; }
   .empty-state h2 { color: var(--white-text); font-size: 18px; margin: 0 0 10px; }
   .warn { font-size: 11.5px; color: #ffc9a0; background: rgba(180,95,20,.16); border: 1px solid #8a5320; border-radius: 8px; padding: 9px 12px; line-height: 1.5; }
-  th.num, td.num { text-align: center; font-variant-numeric: tabular-nums; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
   th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
   th.sortable:hover { color: var(--blue-2); }
   th.sortable .arrow { opacity: .45; font-size: 9px; margin-left: 3px; }
@@ -357,10 +357,73 @@ function startWatching() {
 // visit-compliance dataset published alongside this page, joined on site code.
 async function loadDirectory() {
   try {
-    const res = await fetch("data/dashboard_data.json", { cache: "no-store" });
-    if (!res.ok) return;
-    const outlets = (await res.json()).outlets || {};
-    state.baseDir = new Map(Object.entries(outlets).map(([code, o]) => [code, {
+    let dashboardData = null;
+
+    /*
+     * Current raw data is preferred. If it is unavailable, empty, or invalid,
+     * use the last successfully fetched dataset for this Audit page.
+     */
+    try {
+      const res = await fetch(
+        `data/dashboard_data.json?_=${Date.now()}`,
+        { cache: "no-store" }
+      );
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const freshData = await res.json();
+
+      if (
+        !freshData ||
+        typeof freshData !== "object" ||
+        Object.keys(freshData).length === 0
+      ) {
+        throw new Error("Current dashboard data is empty.");
+      }
+
+      dashboardData = freshData;
+
+      localStorage.setItem(
+        "visit_compliance_audit_last_successful_data",
+        JSON.stringify(freshData)
+      );
+
+      localStorage.setItem(
+        "visit_compliance_audit_last_successful_fetch",
+        new Date().toISOString()
+      );
+
+    } catch (currentError) {
+
+      console.warn(
+        "Audit current data unavailable. Using last successfully fetched data.",
+        currentError
+      );
+
+      const cachedData = localStorage.getItem(
+        "visit_compliance_audit_last_successful_data"
+      );
+
+      if (!cachedData) {
+        return;
+      }
+
+      dashboardData = JSON.parse(cachedData);
+
+      const cachedAt = localStorage.getItem(
+        "visit_compliance_audit_last_successful_fetch"
+      );
+
+      console.info(
+        "Audit dashboard is showing the last successfully fetched data:",
+        cachedAt || "previous successful update"
+      );
+    }
+
+    const outlets = dashboardData.outlets || {};
+    state.baseDir = new Map(Object.entries(outlets).map(([code, o]) => [code, o
       name: o.outletName || "", zonal: o.zonalName || "", rho: o.rhoName || "",
       lastVisit: o.lastVisit || null,
       lastVisitZonal: o.lastVisitZonal || null, lastVisitZonalBy: o.lastVisitZonalBy || "",
@@ -757,10 +820,10 @@ function render() {
       <div class="panel-head"><h2>Availability Status</h2>
         <p class="panel-caption">Counts stock that meets the minimum Qty · ${esc(state.site.toUpperCase())}${state.availFile ? ` · ${esc(state.availFile)}` : ""}${state.stockFile ? ` + ${esc(state.stockFile)}` : ""}</p></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Availability Status</th><th class="num">SKUs</th><th class="num">Avail</th><th class="num">%</th></tr></thead>
+        <thead><tr><th>Availability Status</th><th class="num">Avail</th><th class="num">SKUs</th><th class="num">%</th></tr></thead>
         <tbody>${AVAIL_CRITERIA.map(([label]) => {
           const cell = availFor(state.site)[label];
-          return `<tr><td><b>${esc(label)}</b></td><td class="num">${cell.total}</td><td class="num">${cell.ok}</td>
+          return `<tr><td><b>${esc(label)}</b></td><td class="num">${cell.ok}</td><td class="num">${cell.total}</td>
             <td class="num">${scoreCell(cell.pct)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>
@@ -863,11 +926,11 @@ function exportCsv() {
   v.questions.forEach(([k,[g,m,c]]) => lines.push([k, c || "", g, m, pct(g,m).toFixed(1)]));
   const av = state.site ? availFor(state.site) : null;
   if (av) {
-    lines.push([], ["AVAILABILITY STATUS", "SKUs", "Avail (Stock meets the minimum Qty)",
+    lines.push([], ["AVAILABILITY STATUS", "Avail (Stock meets the minimum Qty)", "SKUs",
                     "% (Stock meets the minimum Qty)"]);
     AVAIL_CRITERIA.forEach(([label]) => {
       const c = av[label];
-      lines.push([label, c.total, c.ok, c.pct.toFixed(1)]);
+      lines.push([label, c.ok, c.total, c.pct.toFixed(1)]);
     });
   }
   lines.push([], ["OUTLET", "Outlet name", "Zonal", "Regional (RHO)", "Earned", "Available", "Score %"]);
@@ -919,12 +982,9 @@ function exportPdf() {
     doc.setFont("helvetica", "bold"); doc.setFontSize(6.8); doc.setTextColor(255, 255, 255);
     let cx = x + 4;
     headers.forEach((h, i) => {
-      const raw = String(h);
-      const right = raw.startsWith(">");
-      const center = raw.startsWith("^");
-      const label = (right || center) ? raw.slice(1) : raw;
-      const tx = center ? cx + widths[i] / 2 : (right ? cx + widths[i] - 6 : cx);
-      doc.text(label, tx, y + 9, { align: center ? "center" : (right ? "right" : "left") });
+      const right = String(h).startsWith(">");
+      const label = right ? h.slice(1) : h;
+      doc.text(label, right ? cx + widths[i] - 6 : cx, y + 9, { align: right ? "right" : "left" });
       cx += widths[i];
     });
     y += 13;
@@ -934,15 +994,12 @@ function exportPdf() {
       if (n % 2) { doc.setFillColor(243, 246, 250); doc.rect(x, y, width, rowH, "F"); }
       cx = x + 4;
       row.forEach((cell, i) => {
-        const raw = String(headers[i]);
-        const right = raw.startsWith(">");
-        const center = raw.startsWith("^");
+        const right = String(headers[i]).startsWith(">");
         doc.setTextColor(30, 30, 30);
         const text = String(cell ?? "");
         const room = Math.floor((widths[i] - 8) / 3.05);
-        const tx = center ? cx + widths[i] / 2 : (right ? cx + widths[i] - 6 : cx);
         doc.text(text.length > room ? text.slice(0, room - 1) + "…" : text,
-                 tx, y + rowH - 3.1, { align: center ? "center" : (right ? "right" : "left") });
+                 right ? cx + widths[i] - 6 : cx, y + rowH - 3.1, { align: right ? "right" : "left" });
         cx += widths[i];
       });
       y += rowH;
@@ -987,7 +1044,7 @@ function exportPdf() {
   };
 
   const catRows = v.cats.map(([k, [g, m]]) => [k, g.toLocaleString(), m.toLocaleString(), pct(g, m).toFixed(1) + "%"]);
-  const catHead = ["Category", "^Earned", "^Available", "^Score"];
+  const catHead = ["Category", ">Earned", ">Available", ">Score"];
   const catW = [190, 60, 62, 46];
 
   if (state.site) {
@@ -1019,23 +1076,23 @@ function exportPdf() {
     const y0 = 118;
     table(M, y0, 232, catHead, [116, 40, 42, 34], catRows, "Score by category — lowest first", 10.5);
 
-    const qAll = v.questions.slice();
+    const qAll = v.questions.slice().sort(worst);
     const half = Math.ceil(qAll.length / 2);
-    const qHead = ["Question", "Category", "^Score"];
+    const qHead = ["Question", "Category", ">Score"];
     const qW = [116, 96, 38];
     const rowsOf = (list) => list.map(([k, [g, m, c]]) => [k, c || "", pct(g, m).toFixed(1) + "%"]);
     const rowH = Math.max(6.4, Math.min(10.5, (BOTTOM - y0 - 30) / Math.max(half, 1)));
-    table(M + 248, y0, 250, qHead, qW, rowsOf(qAll.slice(0, half)), `All ${qAll.length} questions, current sort`, rowH);
+    table(M + 248, y0, 250, qHead, qW, rowsOf(qAll.slice(0, half)), `All ${qAll.length} questions, weakest first`, rowH);
     table(M + 512, y0, 250, qHead, qW, rowsOf(qAll.slice(half)), " ", rowH);
 
     // Availability Status sits under the category table, same page.
     const av = availFor(state.site);
     if (av) {
       const avY = y0 + 37 + catRows.length * 10.5 + 16;
-      table(M, avY, 232, ["Availability Status", "^SKUs", "^Avail", "^%"], [104, 44, 44, 40],
+      table(M, avY, 232, ["Availability Status", ">Avail", ">SKUs", ">%"], [104, 44, 44, 40],
             AVAIL_CRITERIA.map(([label]) => {
               const c = av[label];
-              return [label, c.total, c.ok, c.pct.toFixed(1) + "%"];
+              return [label, c.ok, c.total, c.pct.toFixed(1) + "%"];
             }),
             "Availability Status", 11);
     }
@@ -1048,16 +1105,16 @@ function exportPdf() {
     title("Audit Quality — Executive Summary", `${scopeLabel()}   ·   weakest first`);
     let y = headline(62, "OVERALL COMPLIANCE");
     table(M, y, 358, catHead, catW, catRows, "Score by category — lowest to highest");
-    const qHead = ["Question", "Category", "^Score"];
+    const qHead = ["Question", "Category", ">Score"];
     table(M + 420, y, 324, qHead, [150, 130, 44],
-          v.questions.slice(0, 18).map(([k, [g, m, c]]) => [k, c || "", pct(g, m).toFixed(1) + "%"]),
+          v.questions.slice().sort(worst).slice(0, 18).map(([k, [g, m, c]]) => [k, c || "", pct(g, m).toFixed(1) + "%"]),
           "Weakest 18 questions");
     footer(1);
 
     doc.addPage("a4", "landscape");
-    const flagged = v.outlets.filter(([, [g, m]]) => pct(g, m) < 70);
-    title(`Outlets needing attention — ${flagged.length} below 70%`, "Current outlet sort");
-    const oHead = ["Outlet", "Outlet name", "Zonal", "RHO", "^Score"];
+    const flagged = v.outlets.slice().sort(worst).filter(([, [g, m]]) => pct(g, m) < 70);
+    title(`Outlets needing attention — ${flagged.length} below 70%`, "Weakest first");
+    const oHead = ["Outlet", "Outlet name", "Zonal", "RHO", ">Score"];
     const oW = [40, 118, 92, 92, 40];
     const rowsOf = (list) => list.map(([code, [g, m]]) => {
       const d = meta(code);
