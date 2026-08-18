@@ -357,21 +357,85 @@ function startWatching() {
 // visit-compliance dataset published alongside this page, joined on site code.
 async function loadDirectory() {
   try {
-    const { loadAuditDashboardData } =
-      await import("./data-loader-audit.js");
+    /*
+     * Self-contained last-successful-data fallback.
+     * This page does not require a separate loader file.
+     */
+    const LAST_DATA_KEY =
+      "visit_compliance_audit_last_successful_data";
 
-    const result =
-      await loadAuditDashboardData();
+    const LAST_FETCH_KEY =
+      "visit_compliance_audit_last_successful_fetch";
 
-    const outlets =
-      (result.data && result.data.outlets) || {};
+    let dashboardData = null;
 
-    if (result.usingLastData) {
+    try {
+      const res = await fetch(
+        `data/dashboard_data.json?_=${Date.now()}`,
+        { cache: "no-store" }
+      );
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const freshData = await res.json();
+
+      if (
+        !freshData ||
+        typeof freshData !== "object" ||
+        Object.keys(freshData).length === 0
+      ) {
+        throw new Error("Current dashboard data is empty.");
+      }
+
+      dashboardData = freshData;
+
+      try {
+        localStorage.setItem(
+          LAST_DATA_KEY,
+          JSON.stringify(freshData)
+        );
+        localStorage.setItem(
+          LAST_FETCH_KEY,
+          new Date().toISOString()
+        );
+      } catch (storageError) {
+        console.warn("Could not save fallback data:", storageError);
+      }
+
+    } catch (currentError) {
+
+      console.warn(
+        "Current Audit data unavailable. Using last successful data.",
+        currentError
+      );
+
+      try {
+        const cachedData =
+          localStorage.getItem(LAST_DATA_KEY);
+
+        if (cachedData) {
+          dashboardData = JSON.parse(cachedData);
+        }
+      } catch (cacheError) {
+        console.warn("Could not read fallback data:", cacheError);
+      }
+
+      if (!dashboardData) {
+        console.warn(
+          "No previous Audit dataset is available in this browser."
+        );
+        return;
+      }
+
       console.info(
-        "Audit: current raw data unavailable. Showing last successfully fetched data:",
-        result.lastFetched || "previous successful update"
+        "Audit is showing last successfully fetched data. Last fetch:",
+        localStorage.getItem(LAST_FETCH_KEY) || "unknown"
       );
     }
+
+    const outlets = dashboardData.outlets || {};
     state.baseDir = new Map(Object.entries(outlets).map(([code, o]) => [code, {
       name: o.outletName || "", zonal: o.zonalName || "", rho: o.rhoName || "",
       lastVisit: o.lastVisit || null,
