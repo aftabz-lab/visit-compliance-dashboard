@@ -6,7 +6,6 @@ import shutil
 import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
-import urllib.request
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -591,45 +590,13 @@ def attach_last_visits(outlet_directory: dict, responses: list[dict], officer_di
     return outlet_directory
 
 
-
-PUBLISHED_DATA_URL = "https://aftabz-lab.github.io/visit-compliance-dashboard/data/dashboard_data.json"
-
-
-def use_last_published_dashboard_data() -> None:
-    """Use the last successfully published dashboard data when raw Excel is absent."""
-    target = SITE_DIR / "data" / "dashboard_data.json"
-
-    try:
-        request = urllib.request.Request(
-            PUBLISHED_DATA_URL,
-            headers={"User-Agent": "visit-compliance-dashboard-builder"},
-        )
-        with urllib.request.urlopen(request, timeout=30) as response:
-            payload = response.read()
-
-        data = json.loads(payload.decode("utf-8"))
-        if not isinstance(data, dict) or not data:
-            raise RuntimeError("Published dashboard data is empty or invalid.")
-
-        (SITE_DIR / "data").mkdir(parents=True, exist_ok=True)
-        target.write_bytes(payload)
-
-        print("No raw Excel files found.")
-        print("Using the last successfully published dashboard data.")
-        print(f"Restored from: {PUBLISHED_DATA_URL}")
-
-    except Exception as exc:
-        raise RuntimeError(
-            "No raw Excel files were found and the last successfully published "
-            f"dashboard data could not be retrieved. Reason: {exc}"
-        ) from exc
-
-
-
 def main() -> None:
     cfg = read_json(CONFIG_PATH, {})
     aliases = read_json(ALIAS_PATH, [])
 
+    # Raw Excel files are the trigger for a fresh calculation.
+    # If they are absent, preserve the last successfully generated
+    # dashboard_data.json already tracked in site/data/.
     raw_workbooks = sorted(
         p for p in DATA_DIR.iterdir()
         if p.is_file()
@@ -637,15 +604,29 @@ def main() -> None:
         and p.suffix.lower() in {".xlsx", ".xlsm"}
     )
 
-    # No new raw data: preserve the last successfully published dashboard
-    # by retrieving it from the live Pages deployment.
     if len(raw_workbooks) < 2:
-        shutil.rmtree(SITE_DIR, ignore_errors=True)
-        shutil.copytree(WEB_DIR, SITE_DIR)
-        use_last_published_dashboard_data()
+        existing_data = SITE_DIR / "data" / "dashboard_data.json"
+
+        if not existing_data.exists():
+            raise RuntimeError(
+                "No raw Excel files were found and there is no previous "
+                "site/data/dashboard_data.json yet. Run one successful "
+                "build with the raw Excel files present first."
+            )
+
+        # Refresh static files but deliberately preserve the existing
+        # last-successful generated data file.
+        shutil.copytree(WEB_DIR, SITE_DIR, dirs_exist_ok=True)
+        (SITE_DIR / "data").mkdir(parents=True, exist_ok=True)
         (SITE_DIR / ".nojekyll").write_text("", encoding="utf-8")
+
+        print(
+            "No raw Excel files found. Keeping the last successfully "
+            "generated dashboard_data.json."
+        )
         return
 
+    # Fresh raw workbooks exist: perform the normal calculation.
     schedule_path, response_path, superseded_files = discover_inputs()
     assignments, outlet_directory = parse_schedule(schedule_path, cfg.get("plannedValues", ["yes"]))
     parsed_responses, response_diagnostics = parse_responses(response_path, cfg.get("responseAcceptance", {}))
