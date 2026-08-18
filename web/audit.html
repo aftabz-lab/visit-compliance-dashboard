@@ -45,6 +45,14 @@
   th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
   th.sortable:hover { color: var(--blue-2); }
   th.sortable .arrow { opacity: .45; font-size: 9px; margin-left: 3px; }
+  th.sortable .rank { font-size: 8px; color: var(--blue-2); margin-left: 1px; }
+  .sort-chips { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 9px 18px; border-bottom: 1px solid var(--line); background: var(--dark-3); }
+  .sort-chips .sc-label { font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-text); }
+  .sort-chips .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--white-text);
+    background: var(--dark-4); border: 1px solid var(--line); border-radius: 999px; padding: 3px 5px 3px 11px; }
+  .sort-chips .chip button, .chip-clear { background: none; border: 0; color: var(--blue-2); cursor: pointer; font-family: inherit; font-size: 11px; padding: 0 4px; }
+  .sort-chips .chip button:hover, .chip-clear:hover { color: #fff; }
+  .chip-clear { font-weight: 700; text-decoration: underline; }
   th.sortable.active .arrow { opacity: 1; color: var(--blue-2); }
   tr.click-row { cursor: pointer; }
   tr.click-row:hover td { background: rgba(45,143,194,.14); }
@@ -124,7 +132,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", dir: new Map(), baseDir: new Map(), zoneFile: "", qSort: { key: "score", dir: "asc" }, oSort: { key: "score", dir: "asc" }, savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
+const state = { rows: [], file: "", sig: "", dir: new Map(), baseDir: new Map(), zoneFile: "", avail: new Map(), availFile: "", stockFile: "", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
 
 // Green through amber to red — the same reading at a glance for any manager.
 function tone(v) {
@@ -173,6 +181,18 @@ function setState(html) { $("src-state").innerHTML = html; }
 // Every workbook in the folder, newest first. All of them are returned rather
 // than just the newest, because a shared data folder holds exports for other
 // dashboards too — taking the newest outright reads the wrong file.
+async function candidateFiles(handle) {
+  const found = [];
+  for await (const [name, entry] of handle.entries()) {
+    if (entry.kind !== "file" || name.startsWith("~$")) continue;
+    const file = await entry.getFile();
+    const m = name.match(/(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})/);
+    found.push({ file, stamp: m ? `${m[1]}${m[2]}${m[3]}` : "", modified: file.lastModified });
+  }
+  found.sort((a, b) => a.stamp === b.stamp ? b.modified - a.modified : b.stamp.localeCompare(a.stamp));
+  return found.map(c => c.file);
+}
+
 async function candidateWorkbooks(handle) {
   const found = [];
   for await (const [name, entry] of handle.entries()) {
@@ -258,6 +278,33 @@ async function syncFolder({ silent = true } = {}) {
         await idbPut("cache", "zone", { file: file.name, entries: [...map.entries()] });
       } catch { /* keep whatever directory we already have */ }
       break;
+    }
+
+    if (!state.avail.size) {
+      const all = await candidateFiles(state.dirHandle);
+      let criteria = null;
+      for (const file of all) {
+        if (!/\.xlsx$|\.xlsm$/i.test(file.name)) continue;
+        if (!(await isCriteriaWorkbook(file))) continue;
+        try { criteria = await readCriteria(file); state.availFile = file.name; } catch { /* skip */ }
+        break;
+      }
+      if (criteria) {
+        for (const file of all) {
+          if (!(await isStockFile(file))) continue;
+          try {
+            setState(`<span class="pill idle">reading</span><br>Matching stock in <b>${esc(file.name)}</b> (${(file.size / 1048576).toFixed(0)} MB)…`);
+            const { result, matched } = await readStockAvailability(file, criteria, (read) => {
+              setState(`<span class="pill idle">reading</span><br>Stock file: ${(read / 1048576).toFixed(0)} MB scanned…`);
+            });
+            state.avail = result;
+            state.stockFile = file.name;
+            state.availMatched = matched;
+            await idbPut("cache", "avail", { file: state.availFile, stockFile: file.name, matched, entries: [...result.entries()] });
+          } catch { /* availability is optional */ }
+          break;
+        }
+      }
     }
 
     if (signature(chosen) !== state.sig) await readWorkbook(chosen);
@@ -398,6 +445,133 @@ function mergeDirectory(zoneMap) {
   state.dir = merged;
 }
 
+// ── SKU availability ────────────────────────────────────────────────────
+// Two files, both taken from the same folder:
+//   Product_Critaria_Wise_Avaiablity_Report.xlsx → sheet "Compiled ALL", and only
+//     these columns: Item Code, Core Item, Core Promo, KVI, HGPHS, Min Stock Should Be.
+//   stock_extraction_report*.csv → the stock on hand, one column per outlet.
+// An item counts as available at an outlet only when its stock reaches
+// "Min Stock Should Be"; below that it is treated as zero stock for that outlet.
+const AVAIL_CRITERIA = [["Core SKU", "Core Item"], ["KVI SKU", "KVI"], ["Promo SKU", "Core Promo"], ["HGPHS SKU", "HGPHS"]];
+
+async function isCriteriaWorkbook(file) {
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array", sheetRows: 3, cellStyles: false });
+    const name = wb.SheetNames.find(n => n.trim().toLowerCase() === "compiled all");
+    if (!name) return false;
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "", blankrows: false });
+    const head = grid.flat().map(h => String(h).trim().toLowerCase());
+    return head.includes("item code") && head.includes("min stock should be");
+  } catch { return false; }
+}
+
+// Item Code → { min, flags } for the four criteria. Outlet columns are ignored.
+async function readCriteria(file) {
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array", sheetRows: 4000, cellStyles: false });
+  const sheetName = wb.SheetNames.find(n => n.trim().toLowerCase() === "compiled all");
+  const grid = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "", blankrows: false });
+  const headerRow = grid.findIndex(line => line.map(c => String(c).trim().toLowerCase()).includes("item code"));
+  if (headerRow < 0) throw new Error("No 'Item Code' header on Compiled ALL.");
+  const head = grid[headerRow].map(c => String(c).trim().toLowerCase());
+  const at = {
+    code: head.indexOf("item code"),
+    min: head.indexOf("min stock should be"),
+    flags: Object.fromEntries(AVAIL_CRITERIA.map(([label, column]) => [label, head.indexOf(column.toLowerCase())])),
+  };
+  const items = new Map();
+  const totals = Object.fromEntries(AVAIL_CRITERIA.map(([label]) => [label, 0]));
+  for (const line of grid.slice(headerRow + 1)) {
+    const code = String(line[at.code] ?? "").trim();
+    if (!code) continue;
+    const min = Number(line[at.min]) || 0;
+    const flags = {};
+    for (const [label] of AVAIL_CRITERIA) {
+      const on = String(line[at.flags[label]] ?? "").trim().toUpperCase() === "Y";
+      flags[label] = on;
+      if (on) totals[label] += 1;
+    }
+    items.set(code, { min, flags });
+  }
+  return { items, totals };
+}
+
+async function isStockFile(file) {
+  if (!/\.csv$/i.test(file.name)) return false;
+  const head = await file.slice(0, 400).text();
+  return /^\s*productcode\s*,/i.test(head);
+}
+
+function splitCsvLine(line) {
+  const out = []; let cur = "", quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i += 1; } else quoted = false; }
+      else cur += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ",") { out.push(cur); cur = ""; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+// The stock file runs to hundreds of megabytes, so it is streamed and only the
+// ~1,400 rows that appear in the criteria workbook are kept.
+async function readStockAvailability(file, criteria, onProgress) {
+  const { items, totals } = criteria;
+  const counts = new Map();     // outlet code -> { label: available }
+  let header = null, columns = [];
+  let carry = "", scanned = 0, matched = 0, read = 0;
+
+  const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    read += value.length;
+    const chunk = carry + value;
+    const lines = chunk.split("\n");
+    carry = lines.pop() ?? "";
+    for (const raw of lines) {
+      const line = raw.replace(/\r$/, "");
+      if (!line) continue;
+      if (!header) {
+        header = splitCsvLine(line);
+        columns = header.map((h, i) => [i, String(h).trim().toUpperCase()]).filter(([i, c]) => i >= 2 && c);
+        columns.forEach(([, code]) => counts.set(code, Object.fromEntries(AVAIL_CRITERIA.map(([l]) => [l, 0]))));
+        continue;
+      }
+      scanned += 1;
+      if (scanned % 4000 === 0) onProgress?.(read, matched);
+      const comma = line.indexOf(",");
+      const code = line.slice(0, comma).trim();
+      const item = items.get(code);
+      if (!item) continue;
+      matched += 1;
+      const cells = splitCsvLine(line);
+      for (const [i, outlet] of columns) {
+        const value = parseFloat(cells[i]);
+        if (!Number.isFinite(value) || value <= 0 || value < item.min) continue;   // below minimum = no stock
+        const bucket = counts.get(outlet);
+        for (const [label] of AVAIL_CRITERIA) if (item.flags[label]) bucket[label] += 1;
+      }
+    }
+  }
+
+  const result = new Map();
+  counts.forEach((bucket, outlet) => {
+    const entry = {};
+    for (const [label] of AVAIL_CRITERIA) {
+      const total = totals[label];
+      entry[label] = { ok: bucket[label], total, pct: total ? (100 * bucket[label] / total) : 0 };
+    }
+    result.set(outlet, entry);
+  });
+  return { result, matched, scanned };
+}
+
+const availFor = (code) => state.avail.get(String(code ?? "").trim().toUpperCase()) || null;
+
 /* ── aggregation ─────────────────────────────────────────────────────── */
 function aggregate() {
   const num = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
@@ -442,31 +616,67 @@ function barRows(entries, limit) {
   }).join("");
 }
 
-function sortRows(entries, sort) {
-  const val = (e, key) => {
-    const [label, [got, max, extra]] = e;
-    if (key === "name") return String(label).toLowerCase();
-    if (key === "cat") return String(extra || "").toLowerCase();
-    if (key === "oname") return String(meta(label).name).toLowerCase();
-    if (key === "zonal") return String(meta(label).zonal).toLowerCase();
-    if (key === "rho") return String(meta(label).rho).toLowerCase();
-    if (key === "got") return got;
-    if (key === "max") return max;
-    return pct(got, max);
-  };
-  const dir = sort.dir === "asc" ? 1 : -1;
+const SORT_LABELS = { name: "Outlet code", oname: "Outlet name", zonal: "Zonal", rho: "Regional (RHO)",
+  cat: "Category", got: "Earned", max: "Available", score: "Score" };
+
+function sortValue(entry, key) {
+  const [label, [got, max, extra]] = entry;
+  if (key === "name") return String(label).toLowerCase();
+  if (key === "cat") return String(extra || "").toLowerCase();
+  if (key === "oname") return String(meta(label).name).toLowerCase();
+  if (key === "zonal") return String(meta(label).zonal).toLowerCase();
+  if (key === "rho") return String(meta(label).rho).toLowerCase();
+  if (key === "got") return got;
+  if (key === "max") return max;
+  return pct(got, max);
+}
+
+// Sorts on several columns at once: the first entry in the chain wins, the next
+// breaks ties, and so on. Handy for "group by Zonal, then weakest outlet first".
+function sortRows(entries, chain) {
+  const keys = chain.length ? chain : [{ key: "score", dir: "asc" }];
   return [...entries].sort((a, b) => {
-    const x = val(a, sort.key), y = val(b, sort.key);
-    if (x < y) return -1 * dir;
-    if (x > y) return 1 * dir;
+    for (const { key, dir } of keys) {
+      const x = sortValue(a, key), y = sortValue(b, key);
+      if (x < y) return dir === "asc" ? -1 : 1;
+      if (x > y) return dir === "asc" ? 1 : -1;
+    }
     return 0;
   });
 }
 
-function th(label, key, sort, table, extraClass = "") {
-  const on = sort.key === key;
-  const arrow = on ? (sort.dir === "asc" ? "▲" : "▼") : "▲";
-  return `<th class="sortable ${on ? "active" : ""} ${extraClass}" data-table="${table}" data-key="${key}">${esc(label)}<span class="arrow">${arrow}</span></th>`;
+function th(label, key, chain, table, extraClass = "") {
+  const at = chain.findIndex((c) => c.key === key);
+  const active = at >= 0;
+  const arrow = active ? (chain[at].dir === "asc" ? "▲" : "▼") : "▲";
+  const rank = active && chain.length > 1 ? `<sup class="rank">${at + 1}</sup>` : "";
+  return `<th class="sortable ${active ? "active" : ""} ${extraClass}" data-table="${table}" data-key="${key}"
+    title="Click to sort · Shift-click to add another level">${esc(label)}<span class="arrow">${arrow}${rank}</span></th>`;
+}
+
+function sortChips(chain, table) {
+  if (!chain.length) return "";
+  return `<div class="sort-chips"><span class="sc-label">Sorted by</span>` +
+    chain.map((c, i) => `<span class="chip">${i + 1}. ${esc(SORT_LABELS[c.key] || c.key)}
+      <button data-table="${table}" data-flip="${c.key}" title="Reverse">${c.dir === "asc" ? "▲" : "▼"}</button>
+      <button data-table="${table}" data-drop="${c.key}" title="Remove">×</button></span>`).join("") +
+    (chain.length > 1 ? `<button class="chip-clear" data-table="${table}" data-clear="1">Clear all</button>` : "") +
+    `</div>`;
+}
+
+function applySortClick(table, key, additive) {
+  const chain = table === "q" ? state.qSort : state.oSort;
+  const at = chain.findIndex((c) => c.key === key);
+  if (additive) {
+    if (at >= 0) chain[at].dir = chain[at].dir === "asc" ? "desc" : "asc";
+    else chain.push({ key, dir: "asc" });
+  } else if (at === 0 && chain.length === 1) {
+    chain[0].dir = chain[0].dir === "asc" ? "desc" : "asc";
+  } else {
+    chain.length = 0;
+    chain.push({ key, dir: "asc" });
+  }
+  render();
 }
 
 function scoreCell(v) {
@@ -526,6 +736,20 @@ function render() {
       </div>
     </section>
 
+    ${state.site && availFor(state.site) ? `
+    <section class="panel">
+      <div class="panel-head"><h2>Availability Status</h2>
+        <p class="panel-caption">SKU availability for ${esc(state.site.toUpperCase())}${state.availFile ? ` · ${esc(state.availFile)}` : ""}${state.stockFile ? ` + ${esc(state.stockFile)}` : ""}</p></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Availability Status</th><th class="num">Available</th><th class="num">Total SKU</th><th class="num">%</th></tr></thead>
+        <tbody>${AVAIL_CRITERIA.map(([label]) => {
+          const cell = availFor(state.site)[label];
+          return `<tr><td><b>${esc(label)}</b></td><td class="num">${cell.ok}</td><td class="num">${cell.total}</td>
+            <td class="num">${scoreCell(cell.pct)}</td></tr>`;
+        }).join("")}</tbody>
+      </table></div>
+    </section>` : ""}
+
     <section class="panel">
       <div class="panel-head"><h2>Score by category</h2>
         <p class="panel-caption">${cats.length} categories</p></div>
@@ -534,7 +758,8 @@ function render() {
 
     <section class="panel">
       <div class="panel-head"><h2>Every scored question</h2>
-        <p class="panel-caption">${questions.length} questions · click any column to sort</p></div>
+        <p class="panel-caption">${questions.length} questions · click a column to sort · shift-click to add a level</p></div>
+      ${sortChips(state.qSort, "q")}
       <div class="table-wrap"><table>
         <thead><tr>${th("Question","name",state.qSort,"q")}${th("Category","cat",state.qSort,"q")}
           ${th("Earned","got",state.qSort,"q","num")}${th("Available","max",state.qSort,"q","num")}${th("Score","score",state.qSort,"q","num")}</tr></thead>
@@ -547,7 +772,8 @@ function render() {
 
     <section class="panel">
       <div class="panel-head"><h2>Outlets</h2>
-        <p class="panel-caption">${outlets.length.toLocaleString()} in view · ${below.s60} below 60% · ${below.s70} below 70% · ${below.s80} below 80% · click a row to drill in</p></div>
+        <p class="panel-caption">${outlets.length.toLocaleString()} in view · ${below.s60} below 60% · ${below.s70} below 70% · ${below.s80} below 80% · click a row to drill in · shift-click headers for multi-level sorting</p></div>
+      ${sortChips(state.oSort, "o")}
       <div class="table-wrap"><table>
         <thead><tr><th>#</th>${th("Outlet code","name",state.oSort,"o")}${th("Outlet name","oname",state.oSort,"o")}
           ${th("Zonal","zonal",state.oSort,"o")}${th("Regional (RHO)","rho",state.oSort,"o")}
@@ -565,10 +791,19 @@ function render() {
     <p class="coverage">${state.zoneFile ? `Zonal and Regional (RHO) read from <b>${esc(state.zoneFile)}</b> in the same folder. ` : ""}Every question in the export is listed above. Questions carrying no marks
       (free-text notes) are excluded from scoring so they cannot dilute the result.</p>`;
 
-  document.querySelectorAll("th.sortable").forEach(el => el.addEventListener("click", () => {
-    const sort = el.dataset.table === "q" ? state.qSort : state.oSort;
-    if (sort.key === el.dataset.key) sort.dir = sort.dir === "asc" ? "desc" : "asc";
-    else { sort.key = el.dataset.key; sort.dir = el.dataset.key === "score" ? "asc" : "asc"; }
+  document.querySelectorAll("th.sortable").forEach(el => el.addEventListener("click", (ev) =>
+    applySortClick(el.dataset.table, el.dataset.key, ev.shiftKey)));
+  document.querySelectorAll(".sort-chips button").forEach(btn => btn.addEventListener("click", () => {
+    const chain = btn.dataset.table === "q" ? state.qSort : state.oSort;
+    if (btn.dataset.clear) { chain.length = 0; chain.push({ key: "score", dir: "asc" }); }
+    else if (btn.dataset.flip) {
+      const c = chain.find(x => x.key === btn.dataset.flip);
+      if (c) c.dir = c.dir === "asc" ? "desc" : "asc";
+    } else if (btn.dataset.drop) {
+      const i = chain.findIndex(x => x.key === btn.dataset.drop);
+      if (i >= 0) chain.splice(i, 1);
+      if (!chain.length) chain.push({ key: "score", dir: "asc" });
+    }
     render();
   }));
   document.querySelectorAll("tr.click-row").forEach(el => el.addEventListener("click", () => {
@@ -741,6 +976,15 @@ function exportPdf() {
     table(M + 248, y0, 250, qHead, qW, rowsOf(qAll.slice(0, half)), `All ${qAll.length} questions, weakest first`, rowH);
     table(M + 512, y0, 250, qHead, qW, rowsOf(qAll.slice(half)), " ", rowH);
 
+    // Availability Status sits under the category table, same page.
+    const av = availFor(state.site);
+    if (av) {
+      const avY = y0 + 37 + catRows.length * 10.5 + 16;
+      table(M, avY, 232, ["Availability Status", ">Avail", ">SKUs", ">%"], [104, 44, 44, 40],
+            AVAIL_CRITERIA.map(([label]) => [label, av[label].ok, av[label].total, av[label].pct.toFixed(1) + "%"]),
+            "Availability Status", 11);
+    }
+
     doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(120, 132, 145);
     doc.text(`${state.file || "local file"} · generated ${new Date().toLocaleString()}`, M, H - 14);
     doc.text("Page 1 of 1", W - M, H - 14, { align: "right" });
@@ -811,6 +1055,13 @@ $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; st
   }
   // 2. Reconnect to the remembered folder and follow any change to it.
   loadDirectory();
+  const availCache = await idbGet("cache", "avail");
+  if (availCache?.entries?.length) {
+    state.avail = new Map(availCache.entries);
+    state.availFile = availCache.file;
+    state.stockFile = availCache.stockFile || "";
+    state.availMatched = availCache.matched || 0;
+  }
   const zoneCache = await idbGet("cache", "zone");
   if (zoneCache?.entries?.length) {
     state.zoneFile = zoneCache.file;
