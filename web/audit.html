@@ -89,7 +89,7 @@
       <section class="rail-group">
         <h2 class="rail-heading">Filter</h2>
         <label class="rail-field"><span>Category</span><select id="f-cat"></select></label>
-        <label class="rail-field"><span>Outlet code</span><input id="f-site" type="search" placeholder="e.g. F327" autocomplete="off" /></label>
+        <label class="rail-field"><span>Outlet code or name</span><input id="f-site" type="search" placeholder="e.g. F327 or Gulshan" autocomplete="off" /></label>
         <label class="rail-field"><span>Show outlets</span><select id="f-rank">
           <option value="worst">Weakest first</option>
           <option value="best">Strongest first</option>
@@ -124,7 +124,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", qSort: { key: "score", dir: "asc" }, oSort: { key: "score", dir: "asc" }, savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
+const state = { rows: [], file: "", sig: "", dir: new Map(), qSort: { key: "score", dir: "asc" }, oSort: { key: "score", dir: "asc" }, savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
 
 // Green through amber to red — the same reading at a glance for any manager.
 function tone(v) {
@@ -291,6 +291,21 @@ function startWatching() {
   document.addEventListener("visibilitychange", () => { if (!document.hidden) syncFolder(); });
 }
 
+// Outlet name, Zonal and RHO are not in the audit export - they come from the
+// visit-compliance dataset published alongside this page, joined on site code.
+async function loadDirectory() {
+  try {
+    const res = await fetch("data/dashboard_data.json", { cache: "no-store" });
+    if (!res.ok) return;
+    const outlets = (await res.json()).outlets || {};
+    state.dir = new Map(Object.entries(outlets).map(([code, o]) => [code, {
+      name: o.outletName || "", zonal: o.zonalName || "", rho: o.rhoName || "",
+    }]));
+    if (state.rows.length) render();
+  } catch { /* directory is optional - codes still work on their own */ }
+}
+const meta = (code) => state.dir.get(code) || { name: "", zonal: "", rho: "" };
+
 /* ── aggregation ─────────────────────────────────────────────────────── */
 function aggregate() {
   const num = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
@@ -302,7 +317,11 @@ function aggregate() {
     const category = r["Question Category"] || "Uncategorised";
     const site = String(r["Site Code"] || "").trim();
     if (state.cat && category !== state.cat) continue;
-    if (state.site && !site.toLowerCase().includes(state.site.toLowerCase())) continue;
+    if (state.site) {
+      const needle = state.site.toLowerCase();
+      const info = meta(site);
+      if (!site.toLowerCase().includes(needle) && !String(info.name).toLowerCase().includes(needle)) continue;
+    }
     out.audits.add(r["Response ID"]); out.outlets.add(site);
     const max = num(r["Question Max Score"]), got = num(r["Answer Score"]);
     if (max === null || max <= 0 || got === null) continue;   // notes carry no marks
@@ -336,6 +355,9 @@ function sortRows(entries, sort) {
     const [label, [got, max, extra]] = e;
     if (key === "name") return String(label).toLowerCase();
     if (key === "cat") return String(extra || "").toLowerCase();
+    if (key === "oname") return String(meta(label).name).toLowerCase();
+    if (key === "zonal") return String(meta(label).zonal).toLowerCase();
+    if (key === "rho") return String(meta(label).rho).toLowerCase();
     if (key === "got") return got;
     if (key === "max") return max;
     return pct(got, max);
@@ -369,7 +391,7 @@ function render() {
   }
   const a = aggregate();
   const overall = pct(a.total[0], a.total[1]);
-  const cats = [...a.cats.entries()].sort((x, y) => pct(y[1][0], y[1][1]) - pct(x[1][0], x[1][1]));
+  const cats = [...a.cats.entries()].sort((x, y) => pct(x[1][0], x[1][1]) - pct(y[1][0], y[1][1]));
   const questions = sortRows([...a.questions.entries()], state.qSort);
   const outlets = sortRows([...a.sites.entries()], state.oSort);
   const days = [...a.days.entries()].sort((x, y) => new Date(x[0]) - new Date(y[0]));
@@ -425,12 +447,13 @@ function render() {
       <div class="panel-head"><h2>Outlets</h2>
         <p class="panel-caption">${outlets.length.toLocaleString()} in view · ${below.s60} below 60% · ${below.s70} below 70% · ${below.s80} below 80% · click a row to drill in</p></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>#</th>${th("Outlet code","name",state.oSort,"o")}
-          ${th("Points earned","got",state.oSort,"o","num")}${th("Available","max",state.oSort,"o","num")}${th("Score","score",state.oSort,"o","num")}</tr></thead>
-        <tbody>${outlets.map(([code,[got,max]],i) => `<tr class="click-row ${state.site === code ? "on" : ""}" data-code="${esc(code)}">
-          <td>${i+1}</td><td><b>${esc(code)}</b></td>
+        <thead><tr><th>#</th>${th("Outlet code","name",state.oSort,"o")}${th("Outlet name","oname",state.oSort,"o")}
+          ${th("Zonal","zonal",state.oSort,"o")}${th("Regional (RHO)","rho",state.oSort,"o")}
+          ${th("Earned","got",state.oSort,"o","num")}${th("Available","max",state.oSort,"o","num")}${th("Score","score",state.oSort,"o","num")}</tr></thead>
+        <tbody>${outlets.map(([code,[got,max]],i) => { const d = meta(code); return `<tr class="click-row ${state.site === code ? "on" : ""}" data-code="${esc(code)}">
+          <td>${i+1}</td><td><b>${esc(code)}</b></td><td>${esc(d.name)}</td><td>${esc(d.zonal)}</td><td>${esc(d.rho)}</td>
           <td class="num">${got.toLocaleString()}</td><td class="num">${max.toLocaleString()}</td>
-          <td class="num">${scoreCell(pct(got,max))}</td></tr>`).join("")}</tbody>
+          <td class="num">${scoreCell(pct(got,max))}</td></tr>`; }).join("")}</tbody>
       </table></div>
     </section>
 
@@ -485,71 +508,160 @@ function exportCsv() {
   v.cats.forEach(([k,[g,m]]) => lines.push([k, g, m, pct(g,m).toFixed(1)]));
   lines.push([], ["QUESTION", "Category", "Earned", "Available", "Score %"]);
   v.questions.forEach(([k,[g,m,c]]) => lines.push([k, c || "", g, m, pct(g,m).toFixed(1)]));
-  lines.push([], ["OUTLET", "Earned", "Available", "Score %"]);
-  v.outlets.forEach(([k,[g,m]]) => lines.push([k, g, m, pct(g,m).toFixed(1)]));
+  lines.push([], ["OUTLET", "Outlet name", "Zonal", "Regional (RHO)", "Earned", "Available", "Score %"]);
+  v.outlets.forEach(([k,[g,m]]) => { const d = meta(k); lines.push([k, d.name, d.zonal, d.rho, g, m, pct(g,m).toFixed(1)]); });
   const csv = lines.map(r => r.map(q).join(",")).join("\r\n");
   downloadBlob(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }), `audit-quality-${Date.now()}.csv`);
 }
 
+/* Executive summary, always two A4 landscape pages.
+   No outlet selected → page 1 network picture, page 2 every outlet below 70%.
+   Outlet selected     → page 1 that outlet's categories, page 2 all its questions,
+   both ordered weakest first, which is what a review meeting reads down. */
 function exportPdf() {
   const v = state.view; if (!v) return;
   const { jsPDF } = window.jspdf || {};
   if (!jsPDF) { alert("PDF library did not load — check the internet connection."); return; }
-  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
-  const W = doc.internal.pageSize.getWidth();
-  let y = 46;
 
-  doc.setFont("helvetica", "bold"); doc.setFontSize(17); doc.setTextColor(15, 36, 58);
-  doc.text("Audit Quality — Executive Summary", 40, y);
-  doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(90, 105, 120);
-  y += 15; doc.text(`${scopeLabel()}  ·  ${state.file || "local file"}  ·  ${new Date().toLocaleString()}`, 40, y);
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  const W = doc.internal.pageSize.getWidth();     // 842
+  const H = doc.internal.pageSize.getHeight();    // 595
+  const M = 32;
+  const BOTTOM = H - 26;
+  const worst = (a, b) => pct(a[1][0], a[1][1]) - pct(b[1][0], b[1][1]);
 
-  // headline band
-  y += 16; doc.setDrawColor(0); doc.setLineWidth(0.6); doc.rect(40, y, W - 80, 58);
-  doc.setFont("helvetica", "bold"); doc.setFontSize(30); doc.setTextColor(20, 20, 20);
-  doc.text(`${v.overall.toFixed(1)}%`, 56, y + 38);
-  doc.setFontSize(8); doc.setTextColor(90, 105, 120); doc.setFont("helvetica", "normal");
-  doc.text("OVERALL COMPLIANCE", 56, y + 50);
-  const facts = [["Audits", v.audits], ["Outlets", v.outletCount], ["Questions", v.questions.length],
-                 ["Points lost", (v.total[1] - v.total[0]).toLocaleString()]];
-  facts.forEach(([label, value], i) => {
-    const x = 190 + i * ((W - 240) / 4);
-    doc.setFont("helvetica", "bold"); doc.setFontSize(14); doc.setTextColor(20, 20, 20);
-    doc.text(String(value), x, y + 32);
-    doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(90, 105, 120);
-    doc.text(String(label).toUpperCase(), x, y + 46);
-  });
-  y += 76;
-
-  const table = (title, rows, widths, headers) => {
-    if (y > 690) { doc.addPage(); y = 46; }
-    doc.setFont("helvetica", "bold"); doc.setFontSize(10.5); doc.setTextColor(15, 36, 58);
-    doc.text(title, 40, y); y += 10;
-    doc.setFontSize(7.5); doc.setTextColor(255, 255, 255); doc.setFillColor(15, 36, 58);
-    doc.rect(40, y, W - 80, 15, "F");
-    let x = 46; headers.forEach((h, i) => { doc.text(String(h), x, y + 10.5); x += widths[i]; });
-    y += 15; doc.setTextColor(25, 25, 25); doc.setFont("helvetica", "normal");
-    rows.forEach((row, n) => {
-      if (y > 780) { doc.addPage(); y = 46; }
-      if (n % 2) { doc.setFillColor(244, 247, 250); doc.rect(40, y, W - 80, 13, "F"); }
-      x = 46; row.forEach((cell, i) => { doc.text(String(cell).slice(0, 46), x, y + 9); x += widths[i]; });
-      doc.setDrawColor(0); doc.setLineWidth(0.2); doc.line(40, y + 13, W - 40, y + 13);
-      y += 13;
-    });
-    y += 18;
+  const title = (text, sub) => {
+    doc.setFont("helvetica", "bold"); doc.setFontSize(15); doc.setTextColor(15, 36, 58);
+    doc.text(text, M, 34);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(95, 110, 125);
+    doc.text(sub, M, 47);
+    doc.setDrawColor(0); doc.setLineWidth(0.8); doc.line(M, 53, W - M, 53);
+  };
+  const footer = (n) => {
+    doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(120, 132, 145);
+    doc.text(`Page ${n} of 2`, W - M, H - 14, { align: "right" });
+    doc.text(`${state.file || "local file"} · generated ${new Date().toLocaleString()}`, M, H - 14);
   };
 
-  table("Score by category", v.cats.map(([k,[g,m]]) => [k, g.toLocaleString(), m.toLocaleString(), pct(g,m).toFixed(1) + "%"]),
-        [210, 90, 90, 60], ["Category", "Earned", "Available", "Score"]);
-  table("Weakest 12 questions", v.questions.slice().sort((a,b) => pct(a[1][0],a[1][1]) - pct(b[1][0],b[1][1])).slice(0,12)
-          .map(([k,[g,m,c]]) => [k, c || "", pct(g,m).toFixed(1) + "%"]),
-        [230, 170, 60], ["Question", "Category", "Score"]);
-  table(`Outlets needing attention (${v.below.s70} below 70%)`,
-        v.outlets.slice().sort((a,b) => pct(a[1][0],a[1][1]) - pct(b[1][0],b[1][1])).slice(0,20)
-          .map(([k,[g,m]]) => [k, g.toLocaleString(), m.toLocaleString(), pct(g,m).toFixed(1) + "%"]),
-        [210, 90, 90, 60], ["Outlet", "Earned", "Available", "Score"]);
+  // compact table; returns the y it finished at
+  const table = (x, y, width, headers, widths, rows, heading, rowH = 10.5) => {
+    if (heading) {
+      doc.setFont("helvetica", "bold"); doc.setFontSize(9.5); doc.setTextColor(15, 36, 58);
+      doc.text(heading, x, y); y += 9;
+    }
+    doc.setFillColor(15, 36, 58); doc.rect(x, y, width, 13, "F");
+    doc.setFont("helvetica", "bold"); doc.setFontSize(6.8); doc.setTextColor(255, 255, 255);
+    let cx = x + 4;
+    headers.forEach((h, i) => {
+      const right = String(h).startsWith(">");
+      const label = right ? h.slice(1) : h;
+      doc.text(label, right ? cx + widths[i] - 6 : cx, y + 9, { align: right ? "right" : "left" });
+      cx += widths[i];
+    });
+    y += 13;
+    doc.setFont("helvetica", "normal"); doc.setFontSize(Math.min(6.6, rowH - 2.2));
+    rows.forEach((row, n) => {
+      if (n % 2) { doc.setFillColor(243, 246, 250); doc.rect(x, y, width, rowH, "F"); }
+      cx = x + 4;
+      row.forEach((cell, i) => {
+        const right = String(headers[i]).startsWith(">");
+        doc.setTextColor(30, 30, 30);
+        const text = String(cell ?? "");
+        const room = Math.floor((widths[i] - 8) / 3.05);
+        doc.text(text.length > room ? text.slice(0, room - 1) + "…" : text,
+                 right ? cx + widths[i] - 6 : cx, y + rowH - 3.1, { align: right ? "right" : "left" });
+        cx += widths[i];
+      });
+      y += rowH;
+    });
+    doc.setDrawColor(120, 135, 150); doc.setLineWidth(0.3); doc.line(x, y, x + width, y);
+    return y + 14;
+  };
 
-  doc.save(`audit-quality-summary-${Date.now()}.pdf`);
+  const headline = (y, label) => {
+    doc.setDrawColor(0); doc.setLineWidth(0.7); doc.rect(M, y, W - 2 * M, 46);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(26); doc.setTextColor(20, 20, 20);
+    doc.text(`${v.overall.toFixed(1)}%`, M + 14, y + 30);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(6.8); doc.setTextColor(95, 110, 125);
+    doc.text(label, M + 14, y + 40);
+    const facts = [["Audits", v.audits], ["Outlets", v.outletCount], ["Questions", v.questions.length],
+                   ["Points lost", (v.total[1] - v.total[0]).toLocaleString()],
+                   ["Below 70%", v.below.s70], ["Below 80%", v.below.s80]];
+    facts.forEach(([l, n], i) => {
+      const x = M + 130 + i * ((W - 2 * M - 140) / 6);
+      doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(20, 20, 20);
+      doc.text(String(n), x, y + 26);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(6.2); doc.setTextColor(95, 110, 125);
+      doc.text(String(l).toUpperCase(), x, y + 37);
+    });
+    return y + 60;
+  };
+
+  const catRows = v.cats.map(([k, [g, m]]) => [k, g.toLocaleString(), m.toLocaleString(), pct(g, m).toFixed(1) + "%"]);
+  const catHead = ["Category", ">Earned", ">Available", ">Score"];
+  const catW = [190, 60, 62, 46];
+
+  if (state.site) {
+    // ── one outlet ───────────────────────────────────────────────────
+    const d = meta(state.site);
+    title(`Audit Quality — ${state.site}${d.name ? " · " + d.name : ""}`,
+          `Zonal ${d.zonal || "—"}   ·   Regional (RHO) ${d.rho || "—"}   ·   weakest first`);
+    let y = headline(62, "OUTLET COMPLIANCE");
+    table(M, y, 358, catHead, catW, catRows, "Score by category — lowest to highest");
+    const qAll = v.questions.slice().sort(worst);
+    const half = Math.ceil(qAll.length / 2);
+    const qHead = ["Question", "Category", ">Score"];
+    const qW = [150, 130, 44];
+    const rowsOf = (list) => list.map(([k, [g, m, c]]) => [k, c || "", pct(g, m).toFixed(1) + "%"]);
+    table(M + 420, y, 324, qHead, qW, rowsOf(qAll.slice(0, Math.min(half, 34))), `All ${qAll.length} questions (1 of 2)`);
+    footer(1);
+    doc.addPage("a4", "landscape");
+    title(`Audit Quality — ${state.site}${d.name ? " · " + d.name : ""}`, "All questions, weakest first (continued)");
+    const rest = qAll.slice(Math.min(half, 34));
+    const mid = Math.ceil(rest.length / 2);
+    const rowH2 = Math.max(6.4, Math.min(10.5, (BOTTOM - 66 - 20) / Math.max(mid, 1)));
+    table(M, 66, 360, qHead, [170, 145, 45], rowsOf(rest.slice(0, mid)), "", rowH2);
+    table(M + 400, 66, 360, qHead, [170, 145, 45], rowsOf(rest.slice(mid)), "", rowH2);
+    footer(2);
+  } else {
+    // ── whole network ────────────────────────────────────────────────
+    title("Audit Quality — Executive Summary", `${scopeLabel()}   ·   weakest first`);
+    let y = headline(62, "OVERALL COMPLIANCE");
+    table(M, y, 358, catHead, catW, catRows, "Score by category — lowest to highest");
+    const qHead = ["Question", "Category", ">Score"];
+    table(M + 420, y, 324, qHead, [150, 130, 44],
+          v.questions.slice().sort(worst).slice(0, 18).map(([k, [g, m, c]]) => [k, c || "", pct(g, m).toFixed(1) + "%"]),
+          "Weakest 18 questions");
+    footer(1);
+
+    doc.addPage("a4", "landscape");
+    const flagged = v.outlets.slice().sort(worst).filter(([, [g, m]]) => pct(g, m) < 70);
+    title(`Outlets needing attention — ${flagged.length} below 70%`, "Weakest first");
+    const oHead = ["Outlet", "Outlet name", "Zonal", "RHO", ">Score"];
+    const oW = [40, 118, 92, 92, 40];
+    const rowsOf = (list) => list.map(([code, [g, m]]) => {
+      const d = meta(code);
+      return [code, d.name, d.zonal, d.rho, pct(g, m).toFixed(1) + "%"];
+    });
+    // Two columns so the whole list lands on this one page.
+    // Two pages is a hard promise, so if the list is longer than a page can hold
+    // even at the smallest readable row height, the worst are shown and the rest
+    // are called out rather than silently dropped.
+    const maxPerCol = Math.floor((BOTTOM - 66 - 20) / 6.4);
+    const shown = flagged.slice(0, maxPerCol * 2);
+    const omitted = flagged.length - shown.length;
+    const perCol = Math.ceil(shown.length / 2);
+    const rowH = Math.max(6.4, Math.min(10.5, (BOTTOM - 66 - 20) / Math.max(perCol, 1)));
+    if (omitted > 0) {
+      doc.setFont("helvetica", "italic"); doc.setFontSize(7); doc.setTextColor(150, 60, 40);
+      doc.text(`Worst ${shown.length} shown · ${omitted} more below 70% are in the CSV export`, W - M, 47, { align: "right" });
+    }
+    table(M, 66, 382, oHead, oW, rowsOf(shown.slice(0, perCol)), "", rowH);
+    table(M + 400, 66, 382, oHead, oW, rowsOf(shown.slice(perCol)), "", rowH);
+    footer(2);
+  }
+
+  doc.save(`audit-summary-${state.site || "network"}-${Date.now()}.pdf`);
 }
 
 /* ── wiring ──────────────────────────────────────────────────────────── */
@@ -577,6 +689,7 @@ $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; st
     setState(`<span class="pill idle">no folder</span><br>Choose the folder holding the survey export. It is remembered from then on.`);
   }
   // 2. Reconnect to the remembered folder and follow any change to it.
+  loadDirectory();
   const handle = await idbGet("h", "folder");
   if (!handle) return;
   state.dirHandle = handle;
