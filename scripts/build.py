@@ -590,9 +590,64 @@ def attach_last_visits(outlet_directory: dict, responses: list[dict], officer_di
     return outlet_directory
 
 
+
+def preserve_last_successful_site() -> None:
+    """
+    No-new-raw-data mode.
+
+    The repository's existing site/data/dashboard_data.json is the last
+    successfully generated dataset. Do not delete it and do not attempt
+    to regenerate it when the raw Excel folder has no usable workbooks.
+
+    We still copy the current web assets into site/ so HTML/CSS/JS changes
+    are published without touching the existing generated data.
+    """
+    existing_data = SITE_DIR / "data" / "dashboard_data.json"
+
+    if not existing_data.exists():
+        raise RuntimeError(
+            "No raw Excel data is available and no previously generated "
+            "site/data/dashboard_data.json exists to preserve."
+        )
+
+    SITE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Update static dashboard files without deleting the existing data.
+    shutil.copytree(WEB_DIR, SITE_DIR, dirs_exist_ok=True)
+
+    (SITE_DIR / "data").mkdir(parents=True, exist_ok=True)
+    (SITE_DIR / ".nojekyll").write_text("", encoding="utf-8")
+
+    print(
+        "No new raw Excel data found. "
+        "Keeping the last successfully generated dashboard data."
+    )
+    print(f"Preserved dataset: {existing_data}")
+    print("Dashboard will continue to show the last successful data.")
+
+
+
 def main() -> None:
     cfg = read_json(CONFIG_PATH, {})
     aliases = read_json(ALIAS_PATH, [])
+
+    # IMPORTANT:
+    # Raw Excel files are the only trigger for a fresh calculation.
+    # If the raw-data folder has fewer than two Excel workbooks, do NOT
+    # destroy/replace the existing generated dashboard data. Preserve the
+    # last successful dataset already published in site/data/.
+    raw_workbooks = sorted(
+        p for p in DATA_DIR.iterdir()
+        if p.is_file()
+        and not p.name.startswith("~$")
+        and p.suffix.lower() in {".xlsx", ".xlsm"}
+    )
+
+    if len(raw_workbooks) < 2:
+        preserve_last_successful_site()
+        return
+
+    # At least two raw workbooks exist, so perform a normal fresh build.
     schedule_path, response_path, superseded_files = discover_inputs()
     assignments, outlet_directory = parse_schedule(schedule_path, cfg.get("plannedValues", ["yes"]))
     parsed_responses, response_diagnostics = parse_responses(response_path, cfg.get("responseAcceptance", {}))
