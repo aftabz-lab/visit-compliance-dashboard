@@ -71,17 +71,6 @@ function renderHeader() {
   document.title = m.title;
   $("page-title").textContent = m.title;
   $("subtitle").textContent = m.subtitle;
-  // Survey report link comes from config/dashboard.config.json so it can change
-  // without editing code. Hidden entirely when no URL is configured.
-  const surveyUrl = m.surveyReportUrl || "";
-  const surveyLabel = m.surveyReportLabel || "Open survey reports";
-  const surveyHint = m.surveyReportHint || "";
-  ["survey-link", "survey-link-rail"].forEach(id => {
-    const el = $(id);
-    if (!el) return;
-    if (surveyUrl) { el.href = surveyUrl; el.textContent = surveyLabel; el.hidden = false; }
-    else { el.hidden = true; }
-  });
   $("snapshot-line").textContent = `Response snapshot through ${fmtDate(m.snapshotDate)}`;
   $("snapshot-note").textContent = `Till-date plans are due through this date; full-month plans cover all of ${m.reportMonth}.`;
   const statuses = ["All statuses", ...new Set(state.data.officers.map(r=>r.status))];

@@ -61,10 +61,10 @@
       <section class="rail-group source-box">
         <h2 class="rail-heading">Data source</h2>
         <div id="src-state" class="source-state"></div>
-        <button id="pick-folder" class="btn primary" type="button">Choose data folder</button>
-        <button id="refresh" class="btn secondary" type="button" hidden>Reload latest file</button>
+        <button id="grant" class="btn primary" type="button" hidden>Allow folder access</button>
+        <button id="pick-folder" class="btn secondary" type="button">Change folder</button>
         <input id="pick-file" type="file" accept=".xlsx,.xlsm" hidden />
-        <button id="pick-file-btn" class="btn secondary" type="button">Pick a single file</button>
+        <button id="pick-file-btn" class="btn secondary" type="button">Open a single file</button>
       </section>
 
       <section class="rail-group">
@@ -96,7 +96,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", dirHandle: null, cat: "", site: "", rank: "worst" };
+const state = { rows: [], file: "", sig: "", savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
 
 // Green through amber to red — the same reading at a glance for any manager.
 function tone(v) {
@@ -106,20 +106,39 @@ function tone(v) {
   return "#d9534f";
 }
 
-const IDB = "audit-dash", KEY = "folder";
+const IDB = "audit-dash", DB_VER = 2;
 function idb() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open(IDB, 1);
-    r.onupgradeneeded = () => r.result.createObjectStore("h");
+    const r = indexedDB.open(IDB, DB_VER);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      if (!d.objectStoreNames.contains("h")) d.createObjectStore("h");
+      if (!d.objectStoreNames.contains("cache")) d.createObjectStore("cache");
+    };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
 }
-async function saveHandle(h) { try { const d = await idb(); d.transaction("h","readwrite").objectStore("h").put(h, KEY); } catch {} }
-async function loadHandle() {
-  try { const d = await idb();
-    return await new Promise(res => { const q = d.transaction("h").objectStore("h").get(KEY); q.onsuccess = () => res(q.result); q.onerror = () => res(null); });
+async function idbPut(store, key, value) {
+  try { const d = await idb(); d.transaction(store, "readwrite").objectStore(store).put(value, key); } catch {}
+}
+async function idbGet(store, key) {
+  try {
+    const d = await idb();
+    return await new Promise(res => {
+      const q = d.transaction(store).objectStore(store).get(key);
+      q.onsuccess = () => res(q.result); q.onerror = () => res(null);
+    });
   } catch { return null; }
 }
+async function idbDel(store, key) {
+  try { const d = await idb(); d.transaction(store, "readwrite").objectStore(store).delete(key); } catch {}
+}
+
+// Only the seven fields the dashboard reads are cached, which keeps the saved
+// copy small enough to reload instantly and work with no folder access at all.
+const FIELDS = ["Response ID","Site Code","Question Category","Question Title","Question Max Score","Answer Score","Date"];
+const slim = (rows) => rows.map(r => FIELDS.map(f => r[f]));
+const fatten = (packed) => packed.map(a => Object.fromEntries(FIELDS.map((f, i) => [f, a[i]])));
 
 function setState(html) { $("src-state").innerHTML = html; }
 
@@ -129,53 +148,96 @@ async function newestInFolder(handle) {
     if (entry.kind !== "file") continue;
     if (!/\.xlsx?$|\.xlsm$/i.test(name) || name.startsWith("~$")) continue;
     const file = await entry.getFile();
-    // A date in the filename wins; otherwise the most recently modified file.
     const m = name.match(/(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})/);
-    const stamp = m ? `${m[1]}${m[2]}${m[3]}` : "";
-    const key = [stamp, file.lastModified];
-    if (!best || key[0] > best.key[0] || (key[0] === best.key[0] && key[1] > best.key[1])) best = { file, key, name };
+    const key = [m ? `${m[1]}${m[2]}${m[3]}` : "", file.lastModified];
+    if (!best || key[0] > best.key[0] || (key[0] === best.key[0] && key[1] > best.key[1])) best = { file, key };
   }
   return best;
 }
 
-async function readWorkbook(file) {
+const signature = (f) => `${f.name}|${f.lastModified}|${f.size}`;
+
+async function readWorkbook(file, { cache = true } = {}) {
   setState(`<span class="pill idle">reading</span><br>Parsing <b>${esc(file.name)}</b> (${(file.size/1048576).toFixed(1)} MB)…`);
   await new Promise(r => setTimeout(r, 30));
-  const wb = XLSX.read(await file.arrayBuffer(), { type: "array", sheetRows: 0, cellDates: false, cellStyles: false });
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false, cellStyles: false });
   const sheet = wb.SheetNames.find(n => n.trim().toLowerCase() === "answer details") || wb.SheetNames[wb.SheetNames.length - 1];
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { defval: "" });
-  if (!rows.length || !("Question Category" in rows[0])) {
-    throw new Error(`"${sheet}" does not look like the Answer Details sheet.`);
-  }
-  state.rows = rows; state.file = file.name;
-  setState(`<span class="pill live">loaded</span><br><b>${esc(file.name)}</b><br>${rows.length.toLocaleString()} answers · ${(file.size/1048576).toFixed(1)} MB`);
-  $("refresh").hidden = !state.dirHandle;
+  if (!rows.length || !("Question Category" in rows[0])) throw new Error(`"${sheet}" is not the Answer Details sheet.`);
+  state.rows = rows; state.file = file.name; state.sig = signature(file); state.stale = false;
+  if (cache) await idbPut("cache", "last", { file: file.name, sig: state.sig, savedAt: Date.now(), packed: slim(rows) });
+  showLoaded();
   render();
+}
+
+function showLoaded() {
+  const when = state.stale && state.savedAt ? `<br><span style="color:#e0a53f">saved copy from ${new Date(state.savedAt).toLocaleString()}</span>` : "";
+  setState(`<span class="pill ${state.stale ? "idle" : "live"}">${state.stale ? "saved copy" : "live"}</span><br><b>${esc(state.file)}</b><br>${state.rows.length.toLocaleString()} answers${when}`);
+}
+
+// Re-checks the chosen folder and follows whatever is there now: a new file, a
+// replaced file, or none at all. Runs on open, on tab focus and on a timer, so
+// no manual reload button is needed.
+async function syncFolder({ silent = true } = {}) {
+  if (!state.dirHandle) return;
+  let permission = "denied";
+  try { permission = await state.dirHandle.queryPermission({ mode: "read" }); } catch {}
+  if (permission !== "granted") { needsGrant(); return; }
+  $("grant").hidden = true;
+  try {
+    const newest = await newestInFolder(state.dirHandle);
+    if (!newest) {
+      if (state.rows.length || !silent) {
+        state.rows = []; state.sig = ""; state.file = "";
+        await idbDel("cache", "last");
+        setState(`<span class="pill idle">folder empty</span><br>No Excel file in the chosen folder.`);
+        render();
+      }
+      return;
+    }
+    if (signature(newest.file) !== state.sig) await readWorkbook(newest.file);
+  } catch (e) {
+    if (!silent) setState(`<span class="pill idle">error</span><br>${esc(e.message)}`);
+  }
+}
+
+function needsGrant() {
+  $("grant").hidden = false;
+  const extra = state.rows.length ? " Showing the saved copy meanwhile." : "";
+  setState(`<span class="pill idle">folder remembered</span><br>The browser needs one click to reopen it.${extra}`);
 }
 
 async function pickFolder() {
   if (!window.showDirectoryPicker) {
-    $("warn-box").innerHTML = `<p class="warn">This browser cannot open a folder. Use Chrome or Edge, or press <b>Pick a single file</b> instead.</p>`;
+    $("warn-box").innerHTML = `<p class="warn">This browser cannot open a folder. Use Chrome or Edge, or press <b>Open a single file</b>.</p>`;
     return;
   }
   try {
     const handle = await window.showDirectoryPicker({ id: "audit-data", mode: "read" });
-    state.dirHandle = handle; await saveHandle(handle);
-    const newest = await newestInFolder(handle);
-    if (!newest) { setState(`<span class="pill idle">empty</span><br>No Excel file in that folder.`); return; }
-    await readWorkbook(newest.file);
+    state.dirHandle = handle;
+    await idbPut("h", "folder", handle);
+    state.sig = "";
+    await syncFolder({ silent: false });
   } catch (e) { if (e.name !== "AbortError") setState(`<span class="pill idle">error</span><br>${esc(e.message)}`); }
 }
 
-async function refresh() {
-  if (!state.dirHandle) return;
+async function grantAccess() {
+  if (!state.dirHandle) return pickFolder();
   try {
-    if ((await state.dirHandle.queryPermission({ mode: "read" })) !== "granted") {
-      if ((await state.dirHandle.requestPermission({ mode: "read" })) !== "granted") return;
+    if ((await state.dirHandle.requestPermission({ mode: "read" })) === "granted") {
+      $("grant").hidden = true;
+      state.sig = "";
+      await syncFolder({ silent: false });
+      startWatching();
     }
-    const newest = await newestInFolder(state.dirHandle);
-    if (newest) await readWorkbook(newest.file);
   } catch (e) { setState(`<span class="pill idle">error</span><br>${esc(e.message)}`); }
+}
+
+let watchTimer = null;
+function startWatching() {
+  if (watchTimer) return;
+  watchTimer = setInterval(() => { if (!document.hidden) syncFolder(); }, 5000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) syncFolder(); });
 }
 
 /* ── aggregation ─────────────────────────────────────────────────────── */
@@ -282,7 +344,7 @@ function render() {
 
 /* ── wiring ──────────────────────────────────────────────────────────── */
 $("pick-folder").addEventListener("click", pickFolder);
-$("refresh").addEventListener("click", refresh);
+$("grant").addEventListener("click", grantAccess);
 $("pick-file-btn").addEventListener("click", () => $("pick-file").click());
 $("pick-file").addEventListener("change", e => e.target.files[0] && readWorkbook(e.target.files[0]).catch(err => setState(`<span class="pill idle">error</span><br>${esc(err.message)}`)));
 $("f-cat").addEventListener("change", e => { state.cat = e.target.value; render(); });
@@ -293,13 +355,23 @@ $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; st
 
 (async () => {
   render();
-  const handle = await loadHandle();
-  if (handle) {
-    state.dirHandle = handle; $("refresh").hidden = false;
-    setState(`<span class="pill idle">folder remembered</span><br>Press <b>Reload latest file</b> to read it again.`);
+  // 1. Show the last data straight away - works with no folder access at all.
+  const cached = await idbGet("cache", "last");
+  if (cached?.packed?.length) {
+    state.rows = fatten(cached.packed); state.file = cached.file;
+    state.sig = cached.sig; state.savedAt = cached.savedAt; state.stale = true;
+    showLoaded(); render();
   } else {
-    setState(`<span class="pill idle">no folder</span><br>Choose the folder holding the survey export.`);
+    setState(`<span class="pill idle">no folder</span><br>Choose the folder holding the survey export. It is remembered from then on.`);
   }
+  // 2. Reconnect to the remembered folder and follow any change to it.
+  const handle = await idbGet("h", "folder");
+  if (!handle) return;
+  state.dirHandle = handle;
+  let permission = "prompt";
+  try { permission = await handle.queryPermission({ mode: "read" }); } catch {}
+  if (permission === "granted") { await syncFolder({ silent: false }); startWatching(); }
+  else needsGrant();
 })();
 </script>
 </body>
