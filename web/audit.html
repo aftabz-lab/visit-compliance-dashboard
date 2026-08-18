@@ -42,7 +42,6 @@
   .empty-state h2 { color: var(--white-text); font-size: 18px; margin: 0 0 10px; }
   .warn { font-size: 11.5px; color: #ffc9a0; background: rgba(180,95,20,.16); border: 1px solid #8a5320; border-radius: 8px; padding: 9px 12px; line-height: 1.5; }
   th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  th .th-note { display: block; font-size: 8.5px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--blue-2); opacity: .85; }
   th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
   th.sortable:hover { color: var(--blue-2); }
   th.sortable .arrow { opacity: .45; font-size: 9px; margin-left: 3px; }
@@ -756,17 +755,13 @@ function render() {
     ${state.site && availFor(state.site) ? `
     <section class="panel">
       <div class="panel-head"><h2>Availability Status</h2>
-        <p class="panel-caption">Actual = any stock present, whatever the quantity · ${esc(state.site.toUpperCase())}${state.availFile ? ` · ${esc(state.availFile)}` : ""}${state.stockFile ? ` + ${esc(state.stockFile)}` : ""}</p></div>
+        <p class="panel-caption">Counts stock that meets the minimum Qty · ${esc(state.site.toUpperCase())}${state.availFile ? ` · ${esc(state.availFile)}` : ""}${state.stockFile ? ` + ${esc(state.stockFile)}` : ""}</p></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Availability Status</th><th class="num">Avail<br><span class="th-note">(Stock meets the minimum Qty)</span></th>
-          <th class="num">SKUs</th>
-          <th class="num">%<br><span class="th-note">(Stock meets the minimum Qty)</span></th>
-          <th class="num">Avail Actual</th><th class="num">% Actual</th></tr></thead>
+        <thead><tr><th>Availability Status</th><th class="num">Avail</th><th class="num">SKUs</th><th class="num">%</th></tr></thead>
         <tbody>${AVAIL_CRITERIA.map(([label]) => {
           const cell = availFor(state.site)[label];
           return `<tr><td><b>${esc(label)}</b></td><td class="num">${cell.ok}</td><td class="num">${cell.total}</td>
-            <td class="num">${scoreCell(cell.pct)}</td>
-            <td class="num">${cell.actual ?? "—"}</td><td class="num">${cell.pctActual === undefined ? "—" : scoreCell(cell.pctActual)}</td></tr>`;
+            <td class="num">${scoreCell(cell.pct)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>
     </section>` : ""}
@@ -869,10 +864,10 @@ function exportCsv() {
   const av = state.site ? availFor(state.site) : null;
   if (av) {
     lines.push([], ["AVAILABILITY STATUS", "Avail (Stock meets the minimum Qty)", "SKUs",
-                    "% (Stock meets the minimum Qty)", "Avail Actual", "% Actual"]);
+                    "% (Stock meets the minimum Qty)"]);
     AVAIL_CRITERIA.forEach(([label]) => {
       const c = av[label];
-      lines.push([label, c.ok, c.total, c.pct.toFixed(1), c.actual ?? "", c.pctActual === undefined ? "" : c.pctActual.toFixed(1)]);
+      lines.push([label, c.ok, c.total, c.pct.toFixed(1)]);
     });
   }
   lines.push([], ["OUTLET", "Outlet name", "Zonal", "Regional (RHO)", "Earned", "Available", "Score %"]);
@@ -911,11 +906,15 @@ function exportPdf() {
   };
 
   // compact table; returns the y it finished at
+  // Every table is drawn with a full pure-black grid: outer box, a line under each
+  // row and a divider between columns. Grey hairlines look fine on screen but all
+  // but disappear on a printed page.
   const table = (x, y, width, headers, widths, rows, heading, rowH = 10.5) => {
     if (heading) {
       doc.setFont("helvetica", "bold"); doc.setFontSize(9.5); doc.setTextColor(15, 36, 58);
       doc.text(heading, x, y); y += 9;
     }
+    const top = y;
     doc.setFillColor(15, 36, 58); doc.rect(x, y, width, 13, "F");
     doc.setFont("helvetica", "bold"); doc.setFontSize(6.8); doc.setTextColor(255, 255, 255);
     let cx = x + 4;
@@ -926,6 +925,7 @@ function exportPdf() {
       cx += widths[i];
     });
     y += 13;
+
     doc.setFont("helvetica", "normal"); doc.setFontSize(Math.min(6.6, rowH - 2.2));
     rows.forEach((row, n) => {
       if (n % 2) { doc.setFillColor(243, 246, 250); doc.rect(x, y, width, rowH, "F"); }
@@ -941,7 +941,23 @@ function exportPdf() {
       });
       y += rowH;
     });
-    doc.setDrawColor(120, 135, 150); doc.setLineWidth(0.3); doc.line(x, y, x + width, y);
+
+    // grid, drawn last so no fill paints over it
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.45);
+    doc.rect(x, top, width, y - top);                 // outer box
+    doc.line(x, top + 13, x + width, top + 13);       // under the header
+    doc.setLineWidth(0.25);
+    for (let n = 1; n <= rows.length; n += 1) {       // under each row
+      const ly = top + 13 + n * rowH;
+      if (ly < y) doc.line(x, ly, x + width, ly);
+    }
+    let vx = x;                                        // between columns
+    widths.forEach((w, i) => {
+      if (i === widths.length - 1) return;
+      vx += w;
+      doc.line(vx, top, vx, y);
+    });
     return y + 14;
   };
 
@@ -1010,17 +1026,12 @@ function exportPdf() {
     const av = availFor(state.site);
     if (av) {
       const avY = y0 + 37 + catRows.length * 10.5 + 16;
-      table(M, avY, 232, ["Availability Status", ">Avail*", ">SKUs", ">%*", ">Act", ">% Act"],
-            [70, 30, 30, 32, 30, 40],
+      table(M, avY, 232, ["Availability Status", ">Avail", ">SKUs", ">%"], [104, 44, 44, 40],
             AVAIL_CRITERIA.map(([label]) => {
               const c = av[label];
-              return [label, c.ok, c.total, c.pct.toFixed(1) + "%",
-                      c.actual ?? "—", c.pctActual === undefined ? "—" : c.pctActual.toFixed(1) + "%"];
+              return [label, c.ok, c.total, c.pct.toFixed(1) + "%"];
             }),
             "Availability Status", 11);
-      doc.setFont("helvetica", "normal"); doc.setFontSize(5.8); doc.setTextColor(110, 122, 135);
-      doc.text("* Avail and % count only stock that meets the minimum Qty", M, avY + 37 + 4 * 11 + 9);
-      doc.text("Act and % Act count any stock present, whatever the quantity", M, avY + 37 + 4 * 11 + 17);
     }
 
     doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(120, 132, 145);
