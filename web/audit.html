@@ -315,13 +315,27 @@ async function loadDirectory() {
     const outlets = (await res.json()).outlets || {};
     state.baseDir = new Map(Object.entries(outlets).map(([code, o]) => [code, {
       name: o.outletName || "", zonal: o.zonalName || "", rho: o.rhoName || "",
+      lastVisit: o.lastVisit || null,
+      lastVisitZonal: o.lastVisitZonal || null, lastVisitZonalBy: o.lastVisitZonalBy || "",
+      lastVisitRho: o.lastVisitRho || null, lastVisitRhoBy: o.lastVisitRhoBy || "",
     }]));
     if (!state.dir.size) state.dir = new Map(state.baseDir);
     else mergeDirectory(new Map(state.dir));
     if (state.rows.length) render();
   } catch { /* directory is optional - codes still work on their own */ }
 }
-const meta = (code) => state.dir.get(code) || { name: "", zonal: "", rho: "" };
+const EMPTY_META = { name: "", zonal: "", rho: "", lastVisit: null, lastVisitZonal: null, lastVisitRho: null, lastVisitZonalBy: "", lastVisitRhoBy: "" };
+// Codes are typed by hand, so "f245" has to find F245.
+const meta = (code) => {
+  const key = String(code ?? "").trim();
+  return state.dir.get(key) || state.dir.get(key.toUpperCase()) || state.dir.get(key.toLowerCase()) || EMPTY_META;
+};
+const fmtVisit = (iso) => {
+  if (!iso) return "Not visited";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? String(iso)
+    : d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+};
 
 // Zonal and Regional (RHO) are taken from the Zone Distribution workbook sitting
 // in the same folder — it is the authority for outlet ownership and is more
@@ -379,11 +393,7 @@ function mergeDirectory(zoneMap) {
   const merged = new Map(state.baseDir);
   zoneMap.forEach((v, code) => {
     const current = merged.get(code) || { name: "", zonal: "", rho: "" };
-    merged.set(code, {
-      name: v.name || current.name,
-      zonal: v.zonal || current.zonal,
-      rho: v.rho || current.rho,
-    });
+    merged.set(code, { ...current, name: v.name || current.name, zonal: v.zonal || current.zonal, rho: v.rho || current.rho });
   });
   state.dir = merged;
 }
@@ -485,9 +495,11 @@ function render() {
     if (v < 80) below.s80 += 1;
   }
   state.view = { overall, cats, questions, outlets, days, audits: a.audits.size, outletCount: a.outlets.size, total: a.total, below };
+  state.view.drillMeta = state.site ? meta(state.site) : null;
 
+  const drillMeta = state.site ? meta(state.site) : EMPTY_META;
   const drill = state.site
-    ? `<div class="drill"><b>Showing outlet ${esc(state.site)}</b>
+    ? `<div class="drill"><b>Showing outlet ${esc(state.site.toUpperCase())}${drillMeta.name ? " · " + esc(drillMeta.name) : ""}</b>
          <span class="coverage">every panel below is filtered to this outlet</span>
          <button id="clear-drill" type="button">Show all outlets</button></div>` : "";
 
@@ -500,9 +512,17 @@ function render() {
       </div>
       <div class="hero-cell hero-facts">
         <div class="fact"><div class="n">${a.audits.size.toLocaleString()}</div><div class="l">Audits</div></div>
-        <div class="fact"><div class="n">${a.outlets.size.toLocaleString()}</div><div class="l">Outlets covered</div></div>
-        <div class="fact"><div class="n">${questions.length}</div><div class="l">Scored questions</div></div>
+        <div class="fact"><div class="n">${state.site ? questions.length : a.outlets.size.toLocaleString()}</div><div class="l">${state.site ? "Scored questions" : "Outlets covered"}</div></div>
         <div class="fact"><div class="n" style="color:${tone(overall)}">${(a.total[1] - a.total[0]).toLocaleString()}</div><div class="l">Points lost</div></div>
+        ${state.site ? `
+        <div class="fact"><div class="n" style="font-size:15px">${esc(fmtVisit(drillMeta.lastVisitZonal))}</div>
+          <div class="l">Last visit · Zonal${drillMeta.lastVisitZonalBy ? ` · ${esc(drillMeta.lastVisitZonalBy)}` : ""}</div></div>
+        <div class="fact"><div class="n" style="font-size:15px">${esc(fmtVisit(drillMeta.lastVisitRho))}</div>
+          <div class="l">Last visit · RHO${drillMeta.lastVisitRhoBy ? ` · ${esc(drillMeta.lastVisitRhoBy)}` : ""}</div></div>`
+        : `
+        <div class="fact"><div class="n">${questions.length}</div><div class="l">Scored questions</div></div>
+        <div class="fact"><div class="n">${below.s70}</div><div class="l">Below 70%</div></div>
+        <div class="fact"><div class="n">${below.s80}</div><div class="l">Below 80%</div></div>`}
       </div>
     </section>
 
@@ -684,27 +704,46 @@ function exportPdf() {
   const catW = [190, 60, 62, 46];
 
   if (state.site) {
-    // ── one outlet ───────────────────────────────────────────────────
+    // ── one outlet: everything on a single landscape page ────────────
     const d = meta(state.site);
-    title(`Audit Quality — ${state.site}${d.name ? " · " + d.name : ""}`,
-          `Zonal ${d.zonal || "—"}   ·   Regional (RHO) ${d.rho || "—"}   ·   weakest first`);
-    let y = headline(62, "OUTLET COMPLIANCE");
-    table(M, y, 358, catHead, catW, catRows, "Score by category — lowest to highest");
+    const code = state.site.toUpperCase();
+    title(`Audit Quality — ${code}${d.name ? " · " + d.name : ""}`,
+          `Zonal ${d.zonal || "—"}   ·   Regional (RHO) ${d.rho || "—"}   ·   `
+          + `Last visit by Zonal ${fmtVisit(d.lastVisitZonal)}   ·   by RHO ${fmtVisit(d.lastVisitRho)}   ·   weakest first`);
+
+    // compact headline band
+    doc.setDrawColor(0); doc.setLineWidth(0.7); doc.rect(M, 62, W - 2 * M, 42);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(23); doc.setTextColor(20, 20, 20);
+    doc.text(`${v.overall.toFixed(1)}%`, M + 13, 89);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(6.2); doc.setTextColor(95, 110, 125);
+    doc.text("OUTLET COMPLIANCE", M + 13, 99);
+    [["Audits", v.audits], ["Questions", v.questions.length],
+     ["Points lost", (v.total[1] - v.total[0]).toLocaleString()],
+     ["Last visit · Zonal", fmtVisit(d.lastVisitZonal)],
+     ["Last visit · RHO", fmtVisit(d.lastVisitRho)]].forEach(([l, n], i) => {
+      const x = M + 128 + i * ((W - 2 * M - 138) / 5);
+      doc.setFont("helvetica", "bold"); doc.setFontSize(String(n).length > 8 ? 8.5 : 12);
+      doc.setTextColor(20, 20, 20); doc.text(String(n), x, 86);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.setTextColor(95, 110, 125);
+      doc.text(String(l).toUpperCase(), x, 97);
+    });
+
+    // categories on the left, all questions in two columns beside them
+    const y0 = 118;
+    table(M, y0, 232, catHead, [116, 40, 42, 34], catRows, "Score by category — lowest first", 10.5);
+
     const qAll = v.questions.slice().sort(worst);
     const half = Math.ceil(qAll.length / 2);
     const qHead = ["Question", "Category", ">Score"];
-    const qW = [150, 130, 44];
+    const qW = [116, 96, 38];
     const rowsOf = (list) => list.map(([k, [g, m, c]]) => [k, c || "", pct(g, m).toFixed(1) + "%"]);
-    table(M + 420, y, 324, qHead, qW, rowsOf(qAll.slice(0, Math.min(half, 34))), `All ${qAll.length} questions (1 of 2)`);
-    footer(1);
-    doc.addPage("a4", "landscape");
-    title(`Audit Quality — ${state.site}${d.name ? " · " + d.name : ""}`, "All questions, weakest first (continued)");
-    const rest = qAll.slice(Math.min(half, 34));
-    const mid = Math.ceil(rest.length / 2);
-    const rowH2 = Math.max(6.4, Math.min(10.5, (BOTTOM - 66 - 20) / Math.max(mid, 1)));
-    table(M, 66, 360, qHead, [170, 145, 45], rowsOf(rest.slice(0, mid)), "", rowH2);
-    table(M + 400, 66, 360, qHead, [170, 145, 45], rowsOf(rest.slice(mid)), "", rowH2);
-    footer(2);
+    const rowH = Math.max(6.4, Math.min(10.5, (BOTTOM - y0 - 30) / Math.max(half, 1)));
+    table(M + 248, y0, 250, qHead, qW, rowsOf(qAll.slice(0, half)), `All ${qAll.length} questions, weakest first`, rowH);
+    table(M + 512, y0, 250, qHead, qW, rowsOf(qAll.slice(half)), " ", rowH);
+
+    doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(120, 132, 145);
+    doc.text(`${state.file || "local file"} · generated ${new Date().toLocaleString()}`, M, H - 14);
+    doc.text("Page 1 of 1", W - M, H - 14, { align: "right" });
   } else {
     // ── whole network ────────────────────────────────────────────────
     title("Audit Quality — Executive Summary", `${scopeLabel()}   ·   weakest first`);
