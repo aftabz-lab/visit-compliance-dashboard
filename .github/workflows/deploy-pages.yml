@@ -26,8 +26,13 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Build dashboard from the two Excel workbooks
+      - name: Build dashboard or preserve last successful data
         run: python scripts/build.py
+
+      - name: Verify Pages data exists
+        run: |
+          test -f site/data/dashboard_data.json
+          test -f site/index.html
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
