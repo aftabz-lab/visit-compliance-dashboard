@@ -3,11 +3,11 @@
  *
  * Three-level, last-successful-snapshot loader:
  *   1. Current generated snapshot in site/data/dashboard_data.json
- *   2. Last successful snapshot stored in this browser
- *   3. Last successful snapshot committed to the repository
+ *   2. Last successful snapshot committed to the repository
+ *   3. Last successful snapshot stored in this browser
  *
- * The third level makes the dashboard safe on a new browser or device after
- * the raw Excel files have been removed from data/.
+ * The repository snapshot is tried before browser storage so every browser and
+ * device sees the newest retained dashboard when the raw Excel files are gone.
  */
 
 const CURRENT_DATA_URL = "./data/dashboard_data.json";
@@ -76,19 +76,18 @@ export async function loadDashboardData() {
     console.warn("Current dashboard snapshot unavailable. Trying the retained snapshot.", currentError);
   }
 
-  // Mirror the Audit Quality Dashboard: use this browser's last successful
-  // load first, then use the permanent repository-level fallback.
-  const cached = cachedSnapshot();
-  if (cached) {
-    return { ...cached, source: "browser-cache", usingLastData: true };
-  }
-
   try {
     const data = await fetchSnapshot(LAST_GOOD_DATA_URL, "Last-good dashboard snapshot");
     const timestamp = new Date().toISOString();
     cacheSnapshot(data, timestamp);
     return { data, source: "published-backup", usingLastData: true, lastFetched: timestamp };
   } catch (fallbackError) {
+    // Browser storage is intentionally last: it is useful offline, but the
+    // published backup is the authoritative last snapshot for all users.
+    const cached = cachedSnapshot();
+    if (cached) {
+      return { ...cached, source: "browser-cache", usingLastData: true };
+    }
     throw new Error(
       "The current dashboard snapshot and the retained last-good snapshot could not be loaded. "
       + "Run the workflow once with the raw Excel files present."

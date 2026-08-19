@@ -18,6 +18,15 @@ const state = { data: null, dataLoad: null, outletSearch: "", selectedOutlet: nu
 const $ = id => document.getElementById(id);
 const numberFmt = new Intl.NumberFormat("en-US");
 function fmtDate(iso) { return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day:"2-digit", month:"short", year:"numeric", timeZone:"UTC" }); }
+function fmtSnapshotTimestamp(value) {
+  const timestamp = value ? new Date(value) : null;
+  if (!timestamp || Number.isNaN(timestamp.getTime())) return "not available";
+  return timestamp.toLocaleString("en-US", {
+    day: "numeric", month: "short", year: "numeric",
+    hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
+    timeZone: "Asia/Dhaka",
+  });
+}
 function esc(v) { return String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
 function pct(v) { return v == null || Number.isNaN(Number(v)) ? "—" : `${Number(v).toFixed(1)}%`; }
 function getFiltered() {
@@ -75,9 +84,30 @@ function renderHeader() {
   $("subtitle").textContent = m.subtitle;
   $("snapshot-line").textContent = `Response snapshot through ${fmtDate(m.snapshotDate)}`;
   $("snapshot-note").textContent = `Till-date plans are due through this date; full-month plans cover all of ${m.reportMonth}.`;
+  renderDataSource();
   const statuses = ["All statuses", ...new Set(state.data.officers.map(r=>r.status))];
   $("status-filter").innerHTML = statuses.map(v=>`<option>${esc(v)}</option>`).join("");
   updateOfficerOptions();
+}
+
+function renderDataSource() {
+  const m = state.data.metadata || {};
+  const dataLoad = state.dataLoad || {};
+  const source = dataLoad.source || "current";
+  const isSavedCopy = source !== "current";
+  const responseSheet = m.responseSheet || "Response Summary";
+  const acceptedResponses = Number(m.diagnostics?.acceptedResponses);
+  const snapshotTakenAt = m.snapshotTakenAt || m.generatedAt || dataLoad.lastFetched;
+
+  $("data-source-badge").textContent = isSavedCopy ? "SAVED COPY" : "PUBLISHED SNAPSHOT";
+  $("data-source-badge").classList.toggle("is-saved-copy", isSavedCopy);
+  $("data-source-file").textContent = m.responseFile || "Response workbook";
+  $("data-source-sheet").textContent = `Sheet: ${responseSheet} only`;
+  $("data-source-count").textContent = Number.isFinite(acceptedResponses)
+    ? `${numberFmt.format(acceptedResponses)} accepted responses`
+    : "Accepted response total unavailable";
+  $("data-source-taken").textContent = `Snapshot taken ${fmtSnapshotTimestamp(snapshotTakenAt)}`;
+  $("data-source-note").textContent = `${getDataStatus(dataLoad).text} This dashboard reads only the “${responseSheet}” sheet.`;
 }
 function distinctNeverOutlets(rows) {
   const set = new Set();
