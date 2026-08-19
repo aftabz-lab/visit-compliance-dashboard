@@ -1,4 +1,4 @@
-import { attachPcRawDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=pc-folder-fast-v5";
+import { attachPcRawDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=pc-raw-folder-v7";
 
 const columns = [
   ["status", "Status"],
@@ -88,7 +88,7 @@ function renderHeader() {
     : "PC raw-data folder required";
   $("snapshot-note").textContent = hasLocalSnapshot
     ? `Till-date plans are due through this date; full-month plans cover all of ${m.reportMonth}.`
-    : "Choose the folder on this PC that contains the visit schedule and response workbooks.";
+    : "Choose the PC raw-data folder containing Store_Operations_Compliance_Audit_responses and the Visit Schedule workbook.";
   renderDataSource();
   const statuses = ["All statuses", ...new Set(state.data.officers.map(r=>r.status))];
   $("status-filter").innerHTML = statuses.map(v=>`<option>${esc(v)}</option>`).join("");
@@ -101,6 +101,7 @@ function renderDataSource() {
   const source = dataLoad.source || "awaiting-local";
   const localStatus = dataLoad.localStatus || {};
   const isPcFolder = source === "pc-folder";
+  const isPcFolderSelection = source === "pc-folder-selection";
   const isPcFile = source === "pc-file";
   const isSavedCopy = source === "local-cache";
   const isWaiting = source === "awaiting-local";
@@ -110,27 +111,31 @@ function renderDataSource() {
 
   $("data-source-badge").textContent = isPcFolder
     ? "PC FOLDER — LIVE"
-    : isPcFile
-      ? "PC FILE — LIVE"
-      : isSavedCopy
-        ? "SAVED COPY"
-        : "PC FOLDER REQUIRED";
+    : isPcFolderSelection
+      ? "PC FOLDER — LOADED"
+      : isPcFile
+        ? "PC FILE — LIVE"
+        : isSavedCopy
+          ? "SAVED COPY"
+          : "PC FOLDER REQUIRED";
   $("data-source-badge").classList.toggle("is-saved-copy", isSavedCopy);
   $("data-source-file").textContent = isWaiting
     ? "Choose your PC raw-data folder"
     : m.responseFile || "Response workbook";
   $("data-source-sheet").textContent = `Sheet: ${responseSheet} only`;
   $("data-source-count").textContent = isWaiting
-    ? "No local snapshot saved yet"
+    ? "Waiting for selected PC raw-data folder"
     : Number.isFinite(acceptedResponses)
     ? `${numberFmt.format(acceptedResponses)} accepted responses`
     : "Accepted response total unavailable";
   $("data-source-taken").textContent = snapshotTakenAt && !isWaiting
     ? `Snapshot taken ${fmtSnapshotTimestamp(snapshotTakenAt)}`
     : "Snapshot not yet taken";
-  $("data-source-note").textContent = `${localStatus.message || getDataStatus(dataLoad).text} This dashboard reads only the “${responseSheet}” sheet.`;
+  $("data-source-note").textContent = `${localStatus.message || getDataStatus(dataLoad).text} The response source must be a local file named like “Store_Operations_Compliance_Audit_responses…xlsx”; only “${responseSheet}” is read.`;
   const grantButton = $("grant-folder");
   if (grantButton) grantButton.hidden = localStatus.kind !== "needs-grant";
+  const fallbackButton = $("pick-folder-fallback-btn");
+  if (fallbackButton && localStatus.kind === "needs-folder-fallback") fallbackButton.hidden = false;
 }
 function distinctNeverOutlets(rows) {
   const set = new Set();

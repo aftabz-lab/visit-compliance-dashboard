@@ -1,11 +1,13 @@
 /*
  * Visit Compliance Dashboard data loader
  *
- * This dashboard reads its working data from the user's PC raw-data folder.
- * The selected folder handle and the last successful calculated dashboard are
- * retained in this browser's IndexedDB, so deleting/replacing raw files never
- * blanks the dashboard. Repository dashboard data is never read by this
- * module.
+ * STRICT PC RAW-DATA MODE
+ *
+ * The dashboard reads the current workbooks only from the PC folder selected
+ * by the user. Repository Excel/JSON files and previously calculated dashboard
+ * snapshots are not used as a data source. The browser may remember only the
+ * folder handle so it can reopen the same local folder after permission is
+ * granted.
  */
 
 const RESPONSE_SHEET = "Response Summary";
@@ -22,7 +24,7 @@ const OFFICER_ALIASES = [
 
 const PC_DB = "visit-compliance-pc-raw-data";
 const PC_DB_VERSION = 1;
-const PC_READER_VERSION = "pc-fast-v5";
+const PC_READER_VERSION = "pc-raw-folder-v7";
 
 const DEFAULT_DEFINITIONS = Object.freeze({
   fullMonth: "Total Planned Visits (Full Month) counts every scheduled assignment in the selected PC visit-plan workbook.",
@@ -180,7 +182,7 @@ function parseDateOnly(value, date1904 = false) {
 }
 
 function requiredXlsx() {
-  if (!globalThis.XLSX) throw new Error("Excel reader did not load. Check your internet connection, refresh the page, and try again.");
+  if (!globalThis.XLSX) throw new Error("The built-in Excel reader did not load. Refresh the page once and try again.");
   return globalThis.XLSX;
 }
 
@@ -317,6 +319,24 @@ const ZIP_LOCAL_SIGNATURE = 0x04034b50;
 const ZIP_METHOD_STORED = 0;
 const ZIP_METHOD_DEFLATE = 8;
 const ZIP_TAIL_BYTES = 1024 * 1024;
+let DEFLATE_RAW_SUPPORTED = null;
+
+function supportsDeflateRaw() {
+  if (DEFLATE_RAW_SUPPORTED != null) return DEFLATE_RAW_SUPPORTED;
+  if (typeof DecompressionStream !== "function") {
+    DEFLATE_RAW_SUPPORTED = false;
+    return false;
+  }
+  try {
+    // Some Chromium-family browsers expose DecompressionStream but do not
+    // implement the deflate-raw format used by .xlsx ZIP entries.
+    new DecompressionStream("deflate-raw");
+    DEFLATE_RAW_SUPPORTED = true;
+  } catch {
+    DEFLATE_RAW_SUPPORTED = false;
+  }
+  return DEFLATE_RAW_SUPPORTED;
+}
 
 function zipDataView(bytes) {
   return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -411,7 +431,7 @@ class LocalXlsxZip {
 }
 
 async function openLocalXlsxZip(file) {
-  if (!/\.xlsx$/i.test(file?.name || "") || typeof DecompressionStream !== "function" || !file?.slice) return null;
+  if (!/\.xlsx$/i.test(file?.name || "") || !supportsDeflateRaw() || !file?.slice) return null;
   const tailLength = Math.min(Number(file.size) || 0, ZIP_TAIL_BYTES);
   if (!tailLength) throw new Error("The selected response workbook is empty.");
   const tailStart = Math.max(0, file.size - tailLength);
@@ -729,8 +749,16 @@ async function readResponseWorkbookFast(file) {
 }
 
 async function readResponseWorkbook(file) {
-  const fast = await readResponseWorkbookFast(file);
-  return fast || readResponseWorkbookWithSheetJs(file);
+  // Prefer the selective ZIP reader because it never opens answer/detail tabs.
+  // If the browser cannot decode raw DEFLATE (or a workbook uses an unusual
+  // ZIP layout), fall back to the bundled SheetJS reader instead of failing.
+  try {
+    const fast = await readResponseWorkbookFast(file);
+    if (fast) return fast;
+  } catch {
+    // Compatibility fallback below.
+  }
+  return readResponseWorkbookWithSheetJs(file);
 }
 
 async function readScheduleWorkbookFast(file) {
@@ -918,8 +946,13 @@ async function readScheduleWorkbookWithSheetJs(file) {
 }
 
 async function readScheduleWorkbook(file) {
-  const fast = await readScheduleWorkbookFast(file);
-  return fast || readScheduleWorkbookWithSheetJs(file);
+  try {
+    const fast = await readScheduleWorkbookFast(file);
+    if (fast) return fast;
+  } catch {
+    // Compatibility fallback below.
+  }
+  return readScheduleWorkbookWithSheetJs(file);
 }
 
 function clone(value) {
@@ -1227,22 +1260,24 @@ async function folderWorkbookFiles(handle) {
   return files;
 }
 
+function isTargetResponseFilename(file) {
+  // The operational export is expected to be named like:
+  // Store_Operations_Compliance_Audit_responses_2026-08-19.xlsx
+  // Allow spaces / hyphens / underscores between the fixed words, but do not
+  // scan unrelated workbooks in the selected folder.
+  const stem = String(file?.name || "").replace(/\.(xlsx|xlsm|xls)$/i, "");
+  return /^store[\s_-]*operations[\s_-]*compliance[\s_-]*audit[\s_-]*responses?(?:[\s_-]|$)/i.test(stem);
+}
+
 function responseFilePriority(file) {
-  const name = nameKey(file?.name);
-  const isSchedule = /visit\s*schedule|visit\s*plan|compiled\s*visit|\bschedule\b/.test(name);
-  if (isSchedule) return 9;
-  if (/store\s*operations.*compliance.*audit.*response/.test(name)) return 0;
-  if (/\bresponse\b.*\baudit\b|\baudit\b.*\bresponse\b/.test(name)) return 1;
-  if (/\bresponse\b/.test(name)) return 2;
-  if (/\baudit\b/.test(name)) return 3;
-  return 5;
+  return isTargetResponseFilename(file) ? 0 : 99;
 }
 
 function scheduleFilePriority(file) {
   const name = nameKey(file?.name);
   if (/master.*compiled.*visit|compiled.*visit|visit.*schedule/.test(name)) return 0;
   if (/\bschedule\b|\bvisit\s*plan\b|\bplan\b/.test(name)) return 1;
-  return 5;
+  return 99;
 }
 
 function orderFilesByPriority(files, priority) {
@@ -1254,28 +1289,34 @@ function orderFilesByPriority(files, priority) {
 }
 
 async function findResponseFile(files) {
-  // In normal use the response file name contains "response" or "audit".
-  // Check it first, then fall back to other workbooks only when needed.  The
-  // actual confirmation is still the exact Response Summary sheet + headers.
-  for (const file of orderFilesByPriority(files, responseFilePriority)) {
-    try {
-      const parsed = await readResponseWorkbook(file);
-      return { file, parsed };
-    } catch {
-      // The exact Response Summary sheet is absent or not usable. Try the
-      // next workbook without reading its unrelated sheets.
-    }
+  const candidates = orderFilesByPriority(
+    files.filter(isTargetResponseFilename),
+    responseFilePriority,
+  );
+  if (!candidates.length) {
+    throw new Error('No workbook named like "Store_Operations_Compliance_Audit_responses...xlsx" was found in the selected PC raw-data folder.');
   }
-  return null;
+
+  // Use the newest matching local response export only.  We deliberately do
+  // not probe the visit-plan workbook or any repository file.
+  const file = candidates[0];
+  try {
+    const parsed = await readResponseWorkbook(file);
+    return { file, parsed };
+  } catch (error) {
+    throw new Error(file.name + ': ' + (error?.message || 'Could not read the Response Summary sheet.'));
+  }
 }
 
 async function findScheduleFile(files, responseFile) {
-  const ordered = orderFilesByPriority(files.filter((file) => file !== responseFile), scheduleFilePriority);
+  const candidates = files.filter((file) => file !== responseFile && scheduleFilePriority(file) < 99);
+  const ordered = orderFilesByPriority(candidates, scheduleFilePriority);
   for (const file of ordered) {
     try {
       return { file, schedule: await readScheduleWorkbook(file) };
     } catch {
-      // This workbook is not the required Zonal/RHO visit schedule.
+      // Try the next local visit-plan candidate only. Unrelated workbooks are
+      // intentionally never scanned.
     }
   }
   return null;
@@ -1294,6 +1335,8 @@ class PcRawDataSource {
     this.watchTimer = null;
     this.boundVisibility = false;
     this.refreshPromise = null;
+    this.watchAllowed = false;
+    this.lastStatusKey = "";
   }
 
   result(data, source, usingLastData, status) {
@@ -1308,22 +1351,13 @@ class PcRawDataSource {
   }
 
   async initialize() {
+    // Remember only the folder handle. Never restore old calculated data.
     this.dirHandle = await pcDbGet("handles", "folder");
-    const saved = await pcDbGet("snapshots", "latest");
-    if (saved?.data && validDashboardData(saved.data) && saved.data.metadata?.localSource) {
-      this.currentData = saved.data;
-      const sameReader = saved.readerVersion === PC_READER_VERSION;
-      // Force exactly one fresh folder read after a loader upgrade.  The old
-      // snapshot can still be displayed immediately, but an old folder
-      // signature must not cause the new parser to skip its first refresh.
-      this.currentSignature = sameReader ? (saved.signature || "") : "";
-      this.currentFolderSignature = sameReader ? (saved.folderSignature || "") : "";
-      this.savedAt = saved.savedAt || saved.data.metadata?.snapshotTakenAt || null;
-      return this.result(saved.data, "local-cache", true, {
-        kind: "saved",
-        message: "Showing the last successful snapshot saved in this browser.",
-      });
-    }
+    try { await pcDbPut("snapshots", "latest", null); } catch { /* no-op */ }
+    this.currentData = null;
+    this.currentSignature = "";
+    this.currentFolderSignature = "";
+    this.savedAt = null;
     return null;
   }
 
@@ -1332,11 +1366,19 @@ class PcRawDataSource {
     this.onData = onData;
     this.onStatus = onStatus;
     this.bindControls();
-    this.refreshFolder({ silent: true });
-    this.startWatching();
+    // A remembered folder is checked once on startup.  Continuous watching is
+    // enabled only after the browser confirms read permission and a usable
+    // local snapshot exists.  This prevents the 5-second status flashing that
+    // occurred when a folder was unreadable or a workbook parse failed.
+    this.refreshFolder({ silent: true }).then(() => {
+      if (this.watchAllowed && this.currentData) this.startWatching();
+    }).catch(() => {});
   }
 
   setStatus(status) {
+    const key = String(status?.kind || "") + "|" + String(status?.message || "");
+    if (key === this.lastStatusKey) return;
+    this.lastStatusKey = key;
     if (this.onStatus) this.onStatus(status);
   }
 
@@ -1347,49 +1389,50 @@ class PcRawDataSource {
   }
 
   async saveLatest(data, signature, folderStateSignature = "") {
+    // Keep only the current-session result.  Strict PC-folder mode never
+    // persists calculated dashboard data for use on a later page load.
     this.currentData = data;
     this.currentSignature = signature;
     this.currentFolderSignature = folderStateSignature;
     this.savedAt = data.metadata?.snapshotTakenAt || new Date().toISOString();
-    await pcDbPut("snapshots", "latest", {
-      data,
-      signature,
-      folderSignature: folderStateSignature,
-      readerVersion: PC_READER_VERSION,
-      savedAt: this.savedAt,
-    });
   }
 
   bindControls() {
     const grant = document.getElementById("grant-folder");
     const folder = document.getElementById("pick-folder");
-    const input = document.getElementById("pick-file");
-    const single = document.getElementById("pick-file-btn");
+    const folderFallback = document.getElementById("pick-folder-fallback");
+    const folderFallbackButton = document.getElementById("pick-folder-fallback-btn");
     grant?.addEventListener("click", () => this.grantFolder());
     folder?.addEventListener("click", () => this.pickFolder());
-    single?.addEventListener("click", () => input?.click());
-    input?.addEventListener("change", () => {
-      const file = input.files?.[0];
-      input.value = "";
-      if (file) this.useSingleFile(file);
+    folderFallbackButton?.addEventListener("click", () => folderFallback?.click());
+    folderFallback?.addEventListener("change", () => {
+      const files = [...(folderFallback.files || [])];
+      folderFallback.value = "";
+      if (files.length) this.useFolderFiles(files);
     });
   }
 
   async pickFolder() {
+    const fallbackButton = document.getElementById("pick-folder-fallback-btn");
     if (!window.showDirectoryPicker) {
-      this.setStatus({ kind: "error", message: "This browser cannot open folders. Use Chrome or Edge, or select the response Excel with Open a single file." });
+      if (fallbackButton) fallbackButton.hidden = false;
+      this.setStatus({ kind: "needs-folder-fallback", message: "This browser cannot keep direct folder access. Click Open folder (compatibility) and choose the same raw-data folder." });
       return;
     }
     try {
+      this.stopWatching();
       const handle = await window.showDirectoryPicker({ id: "visit-compliance-raw-data", mode: "read" });
       this.dirHandle = handle;
       this.currentSignature = "";
       this.currentFolderSignature = "";
+      this.watchAllowed = false;
       await pcDbPut("handles", "folder", handle);
       await this.refreshFolder({ silent: false });
-      this.startWatching();
+      if (this.watchAllowed && this.currentData) this.startWatching();
     } catch (error) {
-      if (error?.name !== "AbortError") this.setStatus({ kind: "error", message: error.message || "Could not open the selected folder." });
+      if (error?.name === "AbortError") return;
+      if (fallbackButton) fallbackButton.hidden = false;
+      this.setStatus({ kind: "error", message: (error?.message || "Could not open the selected folder.") + " You can also use Open folder (compatibility)." });
     }
   }
 
@@ -1401,7 +1444,7 @@ class PcRawDataSource {
         this.currentSignature = "";
         this.currentFolderSignature = "";
         await this.refreshFolder({ silent: false });
-        this.startWatching();
+        if (this.watchAllowed && this.currentData) this.startWatching();
       }
     } catch (error) {
       this.setStatus({ kind: "error", message: error.message || "Folder access was not granted." });
@@ -1417,9 +1460,12 @@ class PcRawDataSource {
     }
   }
 
-  fallback(reason, kind = "saved") {
+  fallback(reason, kind = "error") {
     if (!this.currentData) return false;
-    this.sendData(this.currentData, "local-cache", true, { kind, message: reason });
+    // The currently displayed data came from the selected local folder in
+    // this same browser session. Keep it visible, but never re-label it as a
+    // saved/repository copy.
+    this.setStatus({ kind, message: reason });
     return true;
   }
 
@@ -1443,41 +1489,44 @@ class PcRawDataSource {
     }
     const permission = await this.folderPermission();
     if (permission !== "granted") {
+      this.watchAllowed = false;
+      this.stopWatching();
       document.getElementById("grant-folder").hidden = false;
       const message = "The browser needs one click to reopen your remembered PC folder.";
       if (!this.fallback(message, "needs-grant")) this.setStatus({ kind: "needs-grant", message });
       return;
     }
+    this.watchAllowed = true;
     document.getElementById("grant-folder").hidden = true;
     try {
-      this.setStatus({ kind: "reading", message: "Scanning the selected PC raw-data folder…" });
-      await browserYield();
+      const showProgress = !silent || !this.currentData;
+      if (showProgress) {
+        this.setStatus({ kind: "reading", message: "Scanning the selected PC raw-data folder…" });
+        await browserYield();
+      }
       const files = await folderWorkbookFiles(this.dirHandle);
       const currentFolderSignature = folderSignature(files);
 
-      // After the first snapshot, checking file names, sizes and modified
-      // times is enough.  Do not reopen the large response workbook on every
-      // watcher tick when the PC folder has not changed.
+      // A silent background check must stay visually silent when the folder
+      // has not changed.  The previous v5 code changed the badge to “Reading”
+      // and back every five seconds, which looked like the dashboard was
+      // blinking even though nothing had changed.
       if (this.currentData && currentFolderSignature === this.currentFolderSignature) {
-        this.setStatus({ kind: "live", message: "Watching the selected PC folder. Only the Response Summary sheet is read." });
+        if (!silent) this.setStatus({ kind: "live", message: "Live from the selected PC raw-data folder. Response Summary only; repository data is ignored." });
         return;
       }
 
-      this.setStatus({ kind: "reading", message: "Finding and reading the Response Summary sheet…" });
+      this.setStatus({ kind: "reading", message: "Finding Store_Operations_Compliance_Audit_responses… and reading Response Summary only…" });
       await browserYield();
+      if (!files.length) throw new Error("The selected PC raw-data folder is empty.");
       const responseSource = await findResponseFile(files);
-      if (!responseSource) {
-        const message = files.length ? 'No Excel file in this folder contains the exact "Response Summary" sheet.' : "The selected PC raw-data folder is empty.";
-        if (!this.fallback(message)) this.setStatus({ kind: "empty", message });
-        return;
-      }
       this.setStatus({ kind: "reading", message: "Response Summary loaded (" + responseSource.parsed.responses.length.toLocaleString() + " responses). Reading the Zonal/RHO visit plan…" });
       await browserYield();
       const scheduleSource = await findScheduleFile(files, responseSource.file);
       const signature = fileSignature(responseSource.file) + "|" + (scheduleSource ? fileSignature(scheduleSource.file) : "retained-plan");
       if (signature === this.currentSignature && this.currentData) {
         this.currentFolderSignature = currentFolderSignature;
-        this.setStatus({ kind: "live", message: "Watching the selected PC folder. Only the Response Summary sheet is read." });
+        this.setStatus({ kind: "live", message: "Live from the selected PC raw-data folder. Response Summary only; repository data is ignored." });
         return;
       }
       this.setStatus({ kind: "reading", message: "Reading Response Summary directly from " + responseSource.file.name + " (answer tabs are skipped)…" });
@@ -1492,25 +1541,46 @@ class PcRawDataSource {
       );
     } catch (error) {
       const message = error?.message || "Could not read the PC raw-data folder.";
-      // "silent" suppresses routine watcher noise, not actual failures.  On
-      // the first remembered-folder refresh there may be no saved fallback;
-      // leaving the previous "Reading…" text in that case looks like an
-      // endless load even though the parse has already failed.
+      // If the first local read fails, do not keep retrying every few seconds.
+      // Show one stable error until the user chooses the folder again.
+      if (!this.currentData) {
+        this.watchAllowed = false;
+        this.stopWatching();
+      }
       if (!this.fallback(message)) this.setStatus({ kind: "error", message });
     }
   }
 
-  async useSingleFile(file) {
+  async useFolderFiles(fileList) {
     try {
+      this.stopWatching();
+      this.watchAllowed = false;
       this.dirHandle = null;
       await pcDbPut("handles", "folder", null);
-      this.setStatus({ kind: "reading", message: "Reading " + file.name + " from your PC…" });
-      await this.applyResponseFile(file, "pc-file", null, fileSignature(file) + "|single-file");
+      const files = [...fileList]
+        .filter((file) => file && !String(file.name || "").startsWith("~$") && /\.(xlsx|xlsm|xls)$/i.test(file.name || ""))
+        .sort((a, b) => b.lastModified - a.lastModified || a.name.localeCompare(b.name));
+      if (!files.length) throw new Error("No Excel workbook was found in the selected folder.");
+      this.setStatus({ kind: "reading", message: "Reading the selected PC folder…" });
+      await browserYield();
+      const responseSource = await findResponseFile(files);
+      const scheduleSource = await findScheduleFile(files, responseSource.file);
+      const signature = fileSignature(responseSource.file) + "|" + (scheduleSource ? fileSignature(scheduleSource.file) : "retained-plan");
+      await this.applyResponseFile(
+        responseSource.file,
+        "pc-folder-selection",
+        scheduleSource?.file || null,
+        signature,
+        responseSource.parsed,
+        scheduleSource?.schedule || null,
+        folderSignature(files),
+      );
     } catch (error) {
-      const message = error?.message || "Could not read the selected response workbook.";
+      const message = error?.message || "Could not read the selected PC folder.";
       if (!this.fallback(message)) this.setStatus({ kind: "error", message });
     }
   }
+
 
   async applyResponseFile(responseFile, source, scheduleFile, signature, parsedResponse = null, parsedSchedule = null, folderStateSignature = "") {
     const responseData = parsedResponse || await readResponseWorkbook(responseFile);
@@ -1520,11 +1590,7 @@ class PcRawDataSource {
       schedule = parsedSchedule || await readScheduleWorkbook(scheduleFile);
       schedule.isRaw = true;
     } else {
-      if (!this.currentData?.metadata?.localSource) {
-        throw new Error("For the first PC-folder setup, keep the Visit Schedule workbook in the same folder as the response workbook. After one successful local snapshot, the response workbook alone is enough.");
-      }
-      schedule = retainedSchedule(this.currentData);
-      schedule.isRaw = false;
+      throw new Error("No Visit Schedule workbook was found in the selected PC raw-data folder. Keep the current Visit Schedule workbook in the same folder as the Store_Operations_Compliance_Audit_responses workbook.");
     }
     const baseline = this.currentData || this.baseData;
     this.setStatus({ kind: "reading", message: "Calculating dashboard from the loaded Response Summary and visit plan…" });
@@ -1537,20 +1603,29 @@ class PcRawDataSource {
       kind: "live",
       message: source === "pc-folder"
         ? "Live from your selected PC raw-data folder. Only the Response Summary sheet is read."
-        : "Live from the response workbook selected on your PC. The snapshot is saved in this browser.",
+        : source === "pc-folder-selection"
+          ? "Loaded from the selected PC raw-data folder. Use Change folder again whenever the raw files are replaced."
+          : "Live from the response workbook selected on your PC. The snapshot is saved in this browser.",
     });
   }
 
   startWatching() {
-    if (!this.dirHandle || this.watchTimer) return;
+    if (!this.dirHandle || !this.watchAllowed || !this.currentData || this.watchTimer) return;
     this.watchTimer = window.setInterval(() => {
       if (!document.hidden) this.refreshFolder({ silent: true });
-    }, 5000);
+    }, 10000);
     if (!this.boundVisibility) {
       document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) this.refreshFolder({ silent: true });
+        if (!document.hidden && this.watchAllowed && this.currentData) this.refreshFolder({ silent: true });
       });
       this.boundVisibility = true;
+    }
+  }
+
+  stopWatching() {
+    if (this.watchTimer) {
+      clearInterval(this.watchTimer);
+      this.watchTimer = null;
     }
   }
 }
@@ -1566,7 +1641,7 @@ export async function loadDashboardData() {
     lastFetched: null,
     localStatus: {
       kind: "idle",
-      message: "No repository data is used. Choose your PC raw-data folder to load the visit schedule and response workbook.",
+      message: "Choose your PC raw-data folder. The dashboard will read the local Store_Operations_Compliance_Audit_responses workbook (Response Summary only) and the local Visit Schedule workbook. Repository data is ignored.",
     },
     localSource,
   };
@@ -1578,7 +1653,7 @@ export function attachPcRawDataSource(localSource, options) {
 
 export function getDataStatus(result) {
   if (result?.source === "pc-folder") return { type: "pc-folder", text: "Showing a live snapshot from the selected PC raw-data folder." };
+  if (result?.source === "pc-folder-selection") return { type: "pc-folder-selection", text: "Showing data loaded from the selected PC raw-data folder." };
   if (result?.source === "pc-file") return { type: "pc-file", text: "Showing a live snapshot from the response workbook selected on this PC." };
-  if (result?.source === "local-cache") return { type: "local-cache", text: "The local source is unavailable. Showing the last successful snapshot saved in this browser." };
-  return { type: "awaiting-local", text: "No local snapshot yet. Choose your PC raw-data folder to load the dashboard." };
+  return { type: "awaiting-local", text: "Choose your PC raw-data folder to load the current local workbooks." };
 }
