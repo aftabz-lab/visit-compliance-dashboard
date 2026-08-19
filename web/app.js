@@ -1,4 +1,4 @@
-import { attachPcRawDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=pc-response-dashboard-plan-v8";
+import { attachPcRawDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=pc-response-dashboard-plan-v9-retained-snapshot";
 
 const columns = [
   ["status", "Status"],
@@ -88,7 +88,7 @@ function renderHeader() {
     : "PC raw-data folder required";
   $("snapshot-note").textContent = hasLocalSnapshot
     ? `Till-date plans are due through this date; full-month plans cover all of ${m.reportMonth}.`
-    : "Choose the PC raw-data folder containing Store_Operations_Compliance_Audit_responses and the Visit Schedule workbook.";
+    : "Choose the PC raw-data folder containing Store_Operations_Compliance_Audit_responses. A Visit Schedule workbook is optional in that folder.";
   renderDataSource();
   const statuses = ["All statuses", ...new Set(state.data.officers.map(r=>r.status))];
   $("status-filter").innerHTML = statuses.map(v=>`<option>${esc(v)}</option>`).join("");
@@ -116,7 +116,7 @@ function renderDataSource() {
       : isPcFile
         ? "PC FILE — LIVE"
         : isSavedCopy
-          ? "SAVED COPY"
+          ? "RETAINED SNAPSHOT"
           : "PC FOLDER REQUIRED";
   $("data-source-badge").classList.toggle("is-saved-copy", isSavedCopy);
   $("data-source-file").textContent = isWaiting
@@ -547,7 +547,7 @@ async function init() {
       },
     });
   } catch(err) {
-    document.querySelector("main").innerHTML=`<div class="error-box"><strong>Dashboard could not load.</strong>\n${esc(err.message)}\n\nUse Chrome or Edge, then choose the PC raw-data folder that contains the visit schedule and response workbooks.</div>`;
+    document.querySelector("main").innerHTML=`<div class="error-box"><strong>Dashboard could not load.</strong>\n${esc(err.message)}\n\nUse Chrome or Edge, then choose the PC raw-data folder containing Store_Operations_Compliance_Audit_responses.</div>`;
   }
 }
 init();

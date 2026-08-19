@@ -25,7 +25,7 @@ const OFFICER_ALIASES = [
 
 const PC_DB = "visit-compliance-pc-raw-data";
 const PC_DB_VERSION = 1;
-const PC_READER_VERSION = "pc-response-dashboard-plan-v8";
+const PC_READER_VERSION = "pc-response-dashboard-plan-v9-retained-snapshot";
 
 const DEFAULT_DEFINITIONS = Object.freeze({
   fullMonth: "Total Planned Visits (Full Month) counts every scheduled assignment in the current visit plan (local Zonal/RHO workbook when present, otherwise the dashboard visit plan).",
@@ -1361,9 +1361,25 @@ class PcRawDataSource {
   }
 
   async initialize() {
-    // Remember only the folder handle. Never restore old calculated data.
+    // Remember the selected folder AND the last successfully calculated local
+    // dashboard snapshot.  The snapshot is only a retained copy of data that
+    // was previously read from the user's PC Response Summary workbook; it is
+    // never replaced by repository response data.  This allows the dashboard
+    // to keep showing the last good numbers when the raw-data folder is later
+    // emptied or the page is refreshed.
     this.dirHandle = await pcDbGet("handles", "folder");
-    try { await pcDbPut("snapshots", "latest", null); } catch { /* no-op */ }
+    const saved = await pcDbGet("snapshots", "latest");
+    const data = saved?.data;
+    if (validDashboardData(data) && data?.metadata?.localSource) {
+      this.currentData = data;
+      this.currentSignature = String(saved?.signature || "");
+      this.currentFolderSignature = String(saved?.folderStateSignature || "");
+      this.savedAt = saved?.savedAt || data.metadata?.snapshotTakenAt || null;
+      return this.result(data, "local-cache", true, {
+        kind: "retained",
+        message: "Showing the retained data. Rechecking the selected PC raw-data folder…",
+      });
+    }
     this.currentData = null;
     this.currentSignature = "";
     this.currentFolderSignature = "";
@@ -1401,12 +1417,19 @@ class PcRawDataSource {
   }
 
   async saveLatest(data, signature, folderStateSignature = "") {
-    // Keep only the current-session result.  Strict PC-folder mode never
-    // persists calculated dashboard data for use on a later page load.
+    // Persist the last successful PC-derived result in this browser.  If the
+    // user removes the raw workbook afterwards, this retained snapshot remains
+    // visible until a newer valid PC workbook is read.
     this.currentData = data;
     this.currentSignature = signature;
     this.currentFolderSignature = folderStateSignature;
     this.savedAt = data.metadata?.snapshotTakenAt || new Date().toISOString();
+    await pcDbPut("snapshots", "latest", {
+      data,
+      signature: this.currentSignature,
+      folderStateSignature: this.currentFolderSignature,
+      savedAt: this.savedAt,
+    });
   }
 
   bindControls() {
@@ -1472,12 +1495,13 @@ class PcRawDataSource {
     }
   }
 
-  fallback(reason, kind = "error") {
+  fallback(reason, kind = "retained") {
     if (!this.currentData) return false;
-    // The currently displayed data came from the selected local folder in
-    // this same browser session. Keep it visible, but never re-label it as a
-    // saved/repository copy.
-    this.setStatus({ kind, message: reason });
+    // Keep the last successful PC-derived calculation visible and explicitly
+    // mark it as retained rather than live.
+    const status = { kind, message: reason };
+    this.setStatus(status);
+    if (this.onData) this.onData(this.result(this.currentData, "local-cache", true, status));
     return true;
   }
 
@@ -1519,6 +1543,16 @@ class PcRawDataSource {
       const files = await folderWorkbookFiles(this.dirHandle);
       const currentFolderSignature = folderSignature(files);
 
+      // Check emptiness BEFORE the unchanged-folder shortcut.  An empty folder
+      // has an empty signature, so doing the signature check first could
+      // incorrectly label an empty folder as LIVE after Change folder.
+      if (!files.length) {
+        this.currentFolderSignature = currentFolderSignature;
+        const retainedMessage = "Showing the retained data. The raw data folder is empty.";
+        if (this.fallback(retainedMessage, "retained")) return;
+        throw new Error("The raw data folder is empty.");
+      }
+
       // A silent background check must stay visually silent when the folder
       // has not changed.  The previous v5 code changed the badge to “Reading”
       // and back every five seconds, which looked like the dashboard was
@@ -1530,7 +1564,6 @@ class PcRawDataSource {
 
       this.setStatus({ kind: "reading", message: "Finding Store_Operations_Compliance_Audit_responses… and reading Response Summary only…" });
       await browserYield();
-      if (!files.length) throw new Error("The selected PC raw-data folder is empty.");
       const responseSource = await findResponseFile(files);
       this.setStatus({ kind: "reading", message: "Response Summary loaded (" + responseSource.parsed.responses.length.toLocaleString() + " responses). Checking for a local Zonal/RHO visit plan…" });
       await browserYield();
@@ -1701,5 +1734,6 @@ export function getDataStatus(result) {
   if (result?.source === "pc-folder") return { type: "pc-folder", text: "Showing a live snapshot from the selected PC raw-data folder." };
   if (result?.source === "pc-folder-selection") return { type: "pc-folder-selection", text: "Showing data loaded from the selected PC raw-data folder." };
   if (result?.source === "pc-file") return { type: "pc-file", text: "Showing a live snapshot from the response workbook selected on this PC." };
+  if (result?.source === "local-cache") return { type: "local-cache", text: "Showing the retained data from the last successful PC raw-data read." };
   return { type: "awaiting-local", text: "Choose your PC raw-data folder to load the current Response Summary." };
 }
