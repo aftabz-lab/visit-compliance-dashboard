@@ -38,6 +38,10 @@
           <div id="data-source-count" class="data-source-count"></div>
           <div id="data-source-taken" class="data-source-taken"></div>
           <p id="data-source-note" class="data-source-note"></p>
+          <button id="grant-folder" class="btn primary" type="button" hidden style="width:100%">Allow folder access</button>
+          <button id="pick-folder" class="btn secondary" type="button" style="width:100%">Change folder</button>
+          <input id="pick-file" type="file" accept=".xlsx,.xlsm,.xls" hidden />
+          <button id="pick-file-btn" class="btn secondary" type="button" style="width:100%">Open a single file</button>
         </section>
 
         <section class="rail-group">
@@ -103,6 +107,7 @@
     </main>
   </div>
 
-  <script type="module" src="app.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script type="module" src="app.js?v=pc-folder-local-v2"></script>
 </body>
 </html>

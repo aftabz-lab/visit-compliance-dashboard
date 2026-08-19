@@ -1,4 +1,4 @@
-import { getDataStatus, loadDashboardData } from "./data-loader.js";
+import { attachPcRawDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=pc-folder-local-v2";
 
 const columns = [
   ["status", "Status"],
@@ -82,8 +82,13 @@ function renderHeader() {
   document.title = m.title;
   $("page-title").textContent = m.title;
   $("subtitle").textContent = m.subtitle;
-  $("snapshot-line").textContent = `Response snapshot through ${fmtDate(m.snapshotDate)}`;
-  $("snapshot-note").textContent = `Till-date plans are due through this date; full-month plans cover all of ${m.reportMonth}.`;
+  const hasLocalSnapshot = Boolean(m.snapshotDate && state.data.officers.length);
+  $("snapshot-line").textContent = hasLocalSnapshot
+    ? `Response snapshot through ${fmtDate(m.snapshotDate)}`
+    : "PC raw-data folder required";
+  $("snapshot-note").textContent = hasLocalSnapshot
+    ? `Till-date plans are due through this date; full-month plans cover all of ${m.reportMonth}.`
+    : "Choose the folder on this PC that contains the visit schedule and response workbooks.";
   renderDataSource();
   const statuses = ["All statuses", ...new Set(state.data.officers.map(r=>r.status))];
   $("status-filter").innerHTML = statuses.map(v=>`<option>${esc(v)}</option>`).join("");
@@ -93,21 +98,39 @@ function renderHeader() {
 function renderDataSource() {
   const m = state.data.metadata || {};
   const dataLoad = state.dataLoad || {};
-  const source = dataLoad.source || "current";
-  const isSavedCopy = source !== "current";
+  const source = dataLoad.source || "awaiting-local";
+  const localStatus = dataLoad.localStatus || {};
+  const isPcFolder = source === "pc-folder";
+  const isPcFile = source === "pc-file";
+  const isSavedCopy = source === "local-cache";
+  const isWaiting = source === "awaiting-local";
   const responseSheet = m.responseSheet || "Response Summary";
   const acceptedResponses = Number(m.diagnostics?.acceptedResponses);
   const snapshotTakenAt = m.snapshotTakenAt || m.generatedAt || dataLoad.lastFetched;
 
-  $("data-source-badge").textContent = isSavedCopy ? "SAVED COPY" : "PUBLISHED SNAPSHOT";
+  $("data-source-badge").textContent = isPcFolder
+    ? "PC FOLDER — LIVE"
+    : isPcFile
+      ? "PC FILE — LIVE"
+      : isSavedCopy
+        ? "SAVED COPY"
+        : "PC FOLDER REQUIRED";
   $("data-source-badge").classList.toggle("is-saved-copy", isSavedCopy);
-  $("data-source-file").textContent = m.responseFile || "Response workbook";
+  $("data-source-file").textContent = isWaiting
+    ? "Choose your PC raw-data folder"
+    : m.responseFile || "Response workbook";
   $("data-source-sheet").textContent = `Sheet: ${responseSheet} only`;
-  $("data-source-count").textContent = Number.isFinite(acceptedResponses)
+  $("data-source-count").textContent = isWaiting
+    ? "No local snapshot saved yet"
+    : Number.isFinite(acceptedResponses)
     ? `${numberFmt.format(acceptedResponses)} accepted responses`
     : "Accepted response total unavailable";
-  $("data-source-taken").textContent = `Snapshot taken ${fmtSnapshotTimestamp(snapshotTakenAt)}`;
-  $("data-source-note").textContent = `${getDataStatus(dataLoad).text} This dashboard reads only the “${responseSheet}” sheet.`;
+  $("data-source-taken").textContent = snapshotTakenAt && !isWaiting
+    ? `Snapshot taken ${fmtSnapshotTimestamp(snapshotTakenAt)}`
+    : "Snapshot not yet taken";
+  $("data-source-note").textContent = `${localStatus.message || getDataStatus(dataLoad).text} This dashboard reads only the “${responseSheet}” sheet.`;
+  const grantButton = $("grant-folder");
+  if (grantButton) grantButton.hidden = localStatus.kind !== "needs-grant";
 }
 function distinctNeverOutlets(rows) {
   const set = new Set();
@@ -369,6 +392,10 @@ function renderDefinitions() {
     : "";
   const dataStatus = state.dataLoad ? ` · ${getDataStatus(state.dataLoad).text}` : "";
   const surveyFooter = m.surveyReportUrl ? ` · <a href="${esc(m.surveyReportUrl)}" target="_blank" rel="noopener noreferrer">Survey reports</a>` : "";
+  if (state.dataLoad?.source === "awaiting-local") {
+    $("source-footer").textContent = "Data source: waiting for a PC raw-data folder. Repository dashboard data is not used.";
+    return;
+  }
   $("source-footer").innerHTML=`Data source: ${esc(m.scheduleFile)} + ${esc(m.responseFile)} · Generated ${esc(new Date(m.generatedAt).toLocaleString())}${esc(unmapped)}${esc(superseded)}${esc(dataStatus)}${surveyFooter}`;
 }
 function render() {
@@ -475,6 +502,21 @@ function selectOutlet(code) {
   $("outlet-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function applyDataLoad(nextLoad) {
+  state.dataLoad = nextLoad;
+  state.data = nextLoad.data;
+  const statuses = new Set(["All statuses", ...state.data.officers.map(row => row.status)]);
+  if (!statuses.has(state.status)) state.status = "All statuses";
+  if (!state.data.officers.some(row => row.officerKey === state.officerKey)) state.officerKey = ALL_OFFICERS;
+  if (state.selectedOutlet && !state.data.outlets?.[state.selectedOutlet]) state.selectedOutlet = null;
+  renderHeader();
+  $("status-filter").value = state.status;
+  renderDefinitions();
+  render();
+  renderOutletResults();
+  renderOutletCard();
+}
+
 async function init() {
   try {
     state.dataLoad=await loadDashboardData();
@@ -491,8 +533,16 @@ async function init() {
       const open = rail.classList.toggle("open");
       $("rail-toggle").setAttribute("aria-expanded", String(open));
     });
+    attachPcRawDataSource(state.dataLoad.localSource, {
+      baseData: state.data,
+      onData: applyDataLoad,
+      onStatus: (localStatus) => {
+        state.dataLoad = { ...state.dataLoad, localStatus };
+        renderDataSource();
+      },
+    });
   } catch(err) {
-    document.querySelector("main").innerHTML=`<div class="error-box"><strong>Dashboard could not load.</strong>\n${esc(err.message)}\n\nIf this is a new GitHub repository, open the Actions tab and confirm the Deploy Visit Compliance Dashboard workflow completed successfully.</div>`;
+    document.querySelector("main").innerHTML=`<div class="error-box"><strong>Dashboard could not load.</strong>\n${esc(err.message)}\n\nUse Chrome or Edge, then choose the PC raw-data folder that contains the visit schedule and response workbooks.</div>`;
   }
 }
 init();
