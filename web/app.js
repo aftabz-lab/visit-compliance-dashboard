@@ -1,3 +1,5 @@
+import { getDataStatus, loadDashboardData } from "./data-loader.js";
+
 const columns = [
   ["status", "Status"],
   ["officer", "Officer"],
@@ -12,7 +14,7 @@ const columns = [
   ["completionPct", "Completion %"]
 ];
 const ALL_OFFICERS = "__ALL_OFFICERS__";
-const state = { data: null, outletSearch: "", selectedOutlet: null, status: "All statuses", officerKey: ALL_OFFICERS, search: "", sortKey: "status", sortDir: 1, activeDetailTab: "planned", activeKpi: null, drillSortKey: null, drillSortDir: 1 };
+const state = { data: null, dataLoad: null, outletSearch: "", selectedOutlet: null, status: "All statuses", officerKey: ALL_OFFICERS, search: "", sortKey: "status", sortDir: 1, activeDetailTab: "planned", activeKpi: null, drillSortKey: null, drillSortDir: 1 };
 const $ = id => document.getElementById(id);
 const numberFmt = new Intl.NumberFormat("en-US");
 function fmtDate(iso) { return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day:"2-digit", month:"short", year:"numeric", timeZone:"UTC" }); }
@@ -335,8 +337,9 @@ function renderDefinitions() {
   const superseded = Array.isArray(m.supersededFiles) && m.supersededFiles.length
     ? ` · Ignoring older upload${m.supersededFiles.length > 1 ? "s" : ""}: ${m.supersededFiles.join(", ")}`
     : "";
+  const dataStatus = state.dataLoad ? ` · ${getDataStatus(state.dataLoad).text}` : "";
   const surveyFooter = m.surveyReportUrl ? ` · <a href="${esc(m.surveyReportUrl)}" target="_blank" rel="noopener noreferrer">Survey reports</a>` : "";
-  $("source-footer").innerHTML=`Data source: ${esc(m.scheduleFile)} + ${esc(m.responseFile)} · Generated ${esc(new Date(m.generatedAt).toLocaleString())}${esc(unmapped)}${esc(superseded)}${surveyFooter}`;
+  $("source-footer").innerHTML=`Data source: ${esc(m.scheduleFile)} + ${esc(m.responseFile)} · Generated ${esc(new Date(m.generatedAt).toLocaleString())}${esc(unmapped)}${esc(superseded)}${esc(dataStatus)}${surveyFooter}`;
 }
 function render() {
   const rows=getFiltered();
@@ -444,9 +447,8 @@ function selectOutlet(code) {
 
 async function init() {
   try {
-    const res=await fetch("data/dashboard_data.json",{cache:"no-store"});
-    if(!res.ok) throw new Error(`dashboard_data.json returned ${res.status}`);
-    state.data=await res.json();
+    state.dataLoad=await loadDashboardData();
+    state.data=state.dataLoad.data;
     renderHeader(); renderDefinitions(); render();
     $("status-filter").addEventListener("change",e=>{state.status=e.target.value;updateOfficerOptions();render();});
     $("officer-filter").addEventListener("change",e=>selectOfficer(e.target.value, true));
