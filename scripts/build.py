@@ -26,6 +26,20 @@ SCHEDULE_SCHEMAS = [
 ]
 RESPONSE_HEADERS = ["Response ID", "Date", "Time", "Site Code", "Created By User ID"]
 
+# The Audit page intentionally publishes only the fields it needs to score and
+# group answers.  This keeps the static fallback small and excludes the rest of
+# the response export (for example coordinates and submitter information).
+AUDIT_FIELDS = [
+    "Response ID",
+    "Site Code",
+    "Question Category",
+    "Question Title",
+    "Question Max Score",
+    "Answer Score",
+    "Date",
+]
+AUDIT_REQUIRED_HEADERS = set(AUDIT_FIELDS) - {"Date"}
+
 
 def normalize_text(value: object) -> str:
     text = unicodedata.normalize("NFKC", str(value if value is not None else ""))
@@ -107,8 +121,12 @@ class XlsxWorkbook:
         if sheets_node is not None:
             for sheet in sheets_node:
                 target = rel_map[sheet.attrib[OFFICE_REL]]
+                # Excel writers use either "worksheets/sheet1.xml" or
+                # "/xl/worksheets/sheet1.xml" here.  Normalise both forms
+                # before opening the ZIP member.
+                target = target.lstrip("/")
                 if not target.startswith("xl/"):
-                    target = "xl/" + target.lstrip("/")
+                    target = "xl/" + target
                 sheets[sheet.attrib["name"]] = target
         workbook_pr = workbook.find(NS + "workbookPr")
         date_1904 = bool(workbook_pr is not None and workbook_pr.attrib.get("date1904") in {"1", "true", "True"})
@@ -249,6 +267,110 @@ def discover_inputs() -> tuple[Path, Path, list[str]]:
     for name in superseded:
         print(f"note: ignoring older workbook {name}")
     return schedule, responses, superseded
+
+
+def _audit_header_map(row: list[object]) -> dict[str, int] | None:
+    """Return the audit column positions when a sheet is Answer Details-like."""
+    headers = {normalize_text(value): index for index, value in enumerate(row) if normalize_text(value)}
+    if not AUDIT_REQUIRED_HEADERS.issubset(headers):
+        return None
+    return headers
+
+
+def _audit_value(value: object, field: str) -> object:
+    """Keep numeric scores numeric while normalising user-entered text."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return site_key(value) if field == "Site Code" else normalize_text(value)
+    return value
+
+
+def extract_audit_snapshot(path: Path) -> dict | None:
+    """Extract the compact, public Audit-page payload from one workbook.
+
+    The audit export is optional for the main visit dashboard, so a workbook
+    without an Answer Details sheet simply returns ``None``.
+    """
+    book = XlsxWorkbook(path)
+    try:
+        for sheet_name in book.sheets:
+            rows = book.iter_rows(sheet_name)
+            header = next(rows, None)
+            if not header:
+                continue
+            header_map = _audit_header_map(header)
+            if header_map is None:
+                continue
+
+            packed_rows: list[list[object]] = []
+            for row in rows:
+                packed = [
+                    _audit_value(row[header_map[field]] if header_map.get(field, -1) < len(row) else None, field)
+                    if field in header_map else ""
+                    for field in AUDIT_FIELDS
+                ]
+                if any(value not in (None, "") for value in packed):
+                    packed_rows.append(packed)
+
+            if not packed_rows:
+                raise RuntimeError(f'"{sheet_name}" in {path.name} has no audit answer rows.')
+
+            return {
+                "metadata": {
+                    "sourceFile": path.name,
+                    "sourceSheet": sheet_name,
+                    "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "answerCount": len(packed_rows),
+                },
+                "fields": AUDIT_FIELDS,
+                "rows": packed_rows,
+            }
+    finally:
+        book.close()
+    return None
+
+
+def discover_audit_snapshot(paths: list[Path]) -> dict | None:
+    """Use the newest audit workbook when several raw workbooks are present."""
+    for path in sorted(paths, key=_recency_key, reverse=True):
+        try:
+            snapshot = extract_audit_snapshot(path)
+        except (zipfile.BadZipFile, KeyError, ET.ParseError, RuntimeError) as exc:
+            print(f"note: could not use {path.name} for the Audit snapshot: {exc}")
+            continue
+        if snapshot is not None:
+            print(f"Audit snapshot: {path.name} ({snapshot['metadata']['answerCount']:,} answers)")
+            return snapshot
+    return None
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+
+
+def ensure_last_good_copy(primary: Path, fallback: Path) -> None:
+    """Create a permanent fallback only when a valid primary snapshot exists."""
+    if primary.exists() and primary.stat().st_size and not fallback.exists():
+        shutil.copyfile(primary, fallback)
+
+
+def saved_audit_assets() -> dict[str, bytes]:
+    """Hold audit snapshots while a fresh visit-dashboard build recreates site/."""
+    assets: dict[str, bytes] = {}
+    for filename in ("audit_data.json", "audit_data_last_good.json"):
+        path = SITE_DIR / "data" / filename
+        if path.exists() and path.stat().st_size:
+            assets[filename] = path.read_bytes()
+    return assets
+
+
+def restore_audit_assets(assets: dict[str, bytes]) -> None:
+    target_dir = SITE_DIR / "data"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for filename, content in assets.items():
+        (target_dir / filename).write_bytes(content)
 
 
 def parse_schedule(path: Path, planned_values: list[str]) -> tuple[list[dict], dict[str, dict]]:
@@ -593,16 +715,21 @@ def attach_last_visits(outlet_directory: dict, responses: list[dict], officer_di
 def main() -> None:
     cfg = read_json(CONFIG_PATH, {})
     aliases = read_json(ALIAS_PATH, [])
+    # Git does not retain empty directories. Recreate data/ so deleting every
+    # raw workbook (or even the folder itself) still enters the safe
+    # last-successful-snapshot path below.
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Raw Excel files are the trigger for a fresh calculation.
-    # If they are absent, preserve the last successfully generated
-    # dashboard_data.json already tracked in site/data/.
+    # Raw Excel files are the trigger for a fresh calculation.  Audit answer
+    # details are optional for the main visit dashboard but, when present, are
+    # published as a compact permanent snapshot for audit.html.
     raw_workbooks = sorted(
         p for p in DATA_DIR.iterdir()
         if p.is_file()
         and not p.name.startswith("~$")
         and p.suffix.lower() in {".xlsx", ".xlsm"}
     )
+    audit_snapshot = discover_audit_snapshot(raw_workbooks)
 
     if len(raw_workbooks) < 2:
         existing_data = SITE_DIR / "data" / "dashboard_data.json"
@@ -614,15 +741,28 @@ def main() -> None:
                 "build with the raw Excel files present first."
             )
 
-        # Refresh static files but deliberately preserve the existing
-        # last-successful generated data file.
+        # Refresh static files but deliberately preserve the existing generated
+        # snapshots.  This is the path used after the raw files are deleted.
         shutil.copytree(WEB_DIR, SITE_DIR, dirs_exist_ok=True)
-        (SITE_DIR / "data").mkdir(parents=True, exist_ok=True)
+        site_data = SITE_DIR / "data"
+        site_data.mkdir(parents=True, exist_ok=True)
+        ensure_last_good_copy(
+            site_data / "dashboard_data.json",
+            site_data / "dashboard_data_last_good.json",
+        )
+        if audit_snapshot is not None:
+            write_json(site_data / "audit_data.json", audit_snapshot)
+            write_json(site_data / "audit_data_last_good.json", audit_snapshot)
+        else:
+            ensure_last_good_copy(
+                site_data / "audit_data.json",
+                site_data / "audit_data_last_good.json",
+            )
         (SITE_DIR / ".nojekyll").write_text("", encoding="utf-8")
 
         print(
             "No raw Excel files found. Keeping the last successfully "
-            "generated dashboard_data.json."
+            "generated dashboard and Audit snapshots."
         )
         return
 
@@ -683,10 +823,24 @@ def main() -> None:
         },
     }
 
+    # A normal rebuild recreates site/. Keep the existing Audit snapshot in
+    # memory first when the uploaded files do not include Answer Details.
+    previous_audit_assets = saved_audit_assets()
     shutil.rmtree(SITE_DIR, ignore_errors=True)
     shutil.copytree(WEB_DIR, SITE_DIR)
-    (SITE_DIR / "data").mkdir(parents=True, exist_ok=True)
-    (SITE_DIR / "data" / "dashboard_data.json").write_text(json.dumps(output, separators=(",", ":")), encoding="utf-8")
+    site_data = SITE_DIR / "data"
+    site_data.mkdir(parents=True, exist_ok=True)
+    write_json(site_data / "dashboard_data.json", output)
+    write_json(site_data / "dashboard_data_last_good.json", output)
+    if audit_snapshot is not None:
+        write_json(site_data / "audit_data.json", audit_snapshot)
+        write_json(site_data / "audit_data_last_good.json", audit_snapshot)
+    else:
+        restore_audit_assets(previous_audit_assets)
+        ensure_last_good_copy(
+            site_data / "audit_data.json",
+            site_data / "audit_data_last_good.json",
+        )
     (SITE_DIR / ".nojekyll").write_text("", encoding="utf-8")
 
     summary = {
