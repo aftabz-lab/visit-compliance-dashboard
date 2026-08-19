@@ -79,7 +79,7 @@
   </div>
   <div class="topbar-actions">
     <a class="btn link-btn" href="./index.html">Visit compliance</a>
-    <a class="btn secondary" href="./publish.html">Share snapshot</a>
+    <a class="btn secondary" href="./publish.html">Cloud sync</a>
   </div>
 </header>
 
@@ -184,7 +184,61 @@ const PUBLISHED_AUDIT_SOURCES = [
   { url: "data/audit_data.json", source: "published" },
   { url: "data/audit_data_last_good.json", source: "published-backup" },
 ];
-const SHARED_SNAPSHOT_URL = "data/shared_snapshot.json";
+const SHARED_SNAPSHOT_URL = "data/shared_snapshot.json"; // legacy v11 fallback only
+const cloudSyncPromise = import("./supabase-sync.js?v=visit-compliance-v12-supabase").catch(error => {
+  console.warn("Supabase sync module unavailable:", error);
+  return null;
+});
+
+async function cloudApi() { return await cloudSyncPromise; }
+
+function packAuditForCloud(rows) {
+  const dicts = { responseIds: [], siteCodes: [], categories: [], questions: [], dates: [] };
+  const maps = Object.fromEntries(Object.keys(dicts).map(k => [k, new Map()]));
+  function idx(key, value) {
+    const text = String(value ?? "");
+    const map = maps[key];
+    if (map.has(text)) return map.get(text);
+    const n = dicts[key].length;
+    dicts[key].push(text); map.set(text, n); return n;
+  }
+  return {
+    version: 2, format: "dict-v1", fields: FIELDS, dictionaries: dicts,
+    rows: rows.map(r => [
+      idx("responseIds", r[0]), idx("siteCodes", r[1]), idx("categories", r[2]),
+      idx("questions", r[3]), r[4], r[5], idx("dates", r[6]),
+    ]),
+  };
+}
+
+async function autoPublishAuditSnapshot(packed, file, savedAt) {
+  const cloud = await cloudApi();
+  if (!cloud?.publishIfSignedIn || !packed?.length) return;
+  const payload = {
+    ...packAuditForCloud(packed),
+    metadata: {
+      sourceFile: file || "PC Audit snapshot",
+      generatedAt: new Date(savedAt || Date.now()).toISOString(),
+      answerCount: packed.length,
+    },
+  };
+  void cloud.publishIfSignedIn("audit", payload);
+}
+
+async function autoPublishAvailabilitySnapshot(cache) {
+  const cloud = await cloudApi();
+  if (!cloud?.publishIfSignedIn || !cache?.entries?.length) return;
+  void cloud.publishIfSignedIn("availability", {
+    version: Number(cache.version || 0),
+    metadata: {
+      criteriaFile: cache.file || "",
+      stockFile: cache.stockFile || "",
+      generatedAt: new Date(cache.savedAt || Date.now()).toISOString(),
+      matched: Number(cache.matched || 0),
+    },
+    entries: cache.entries,
+  });
+}
 
 function unpackSharedAudit(audit) {
   if (!audit || !Array.isArray(audit.rows) || !audit.rows.length) return null;
@@ -205,51 +259,80 @@ function unpackSharedAudit(audit) {
   ]);
 }
 
+async function applyCrossPcSnapshot(payload, sharedAt = 0) {
+  if (payload?.visitDashboard?.outlets) state.sharedDashboard = payload.visitDashboard;
+
+  const auditPacked = unpackSharedAudit(payload?.audit);
+  const auditAt = Date.parse(payload?.audit?.metadata?.generatedAt || "") || sharedAt;
+  const currentIsLocal = state.source === "local" || state.source === "cache";
+  if (auditPacked?.length && (!state.rows.length || !currentIsLocal || auditAt >= Number(state.savedAt || 0))) {
+    state.rows = fatten(auditPacked);
+    state.file = payload.audit?.metadata?.sourceFile || "Shared cloud snapshot";
+    state.sig = `shared:${payload?.generatedAt || auditAt || ""}`;
+    state.source = "shared";
+    state.savedAt = auditAt || Date.now();
+    state.stale = true;
+    await idbPut("cache", "last", { file: state.file, sig: state.sig, savedAt: state.savedAt, packed: auditPacked });
+  }
+
+  const availability = payload?.availability;
+  const availabilityAt = Date.parse(availability?.metadata?.generatedAt || "") || sharedAt;
+  const sharedEntries = availability?.entries;
+  const currentAvailLocal = state.availSource === "local" || state.availSource === "cache" || state.availSource === "retained";
+  if (Array.isArray(sharedEntries) && sharedEntries.length && (!state.avail.size || !currentAvailLocal || availabilityAt >= Number(state.availSavedAt || 0))) {
+    state.avail = new Map(sharedEntries);
+    state.availFile = availability?.metadata?.criteriaFile || "";
+    state.stockFile = availability?.metadata?.stockFile || "";
+    state.availSavedAt = availabilityAt || Date.now();
+    state.availSource = "shared";
+    state.availMatched = Number(availability?.metadata?.matched || 0);
+    await idbPut("cache", "avail", {
+      version: Number(availability?.version || AVAIL_CACHE_VERSION),
+      file: state.availFile, stockFile: state.stockFile,
+      criteriaSig: "shared", stockSig: "shared",
+      savedAt: state.availSavedAt, matched: state.availMatched, entries: sharedEntries,
+    });
+  }
+
+  if (state.rows.length) { showLoaded(); render(); }
+  return Boolean(auditPacked?.length || sharedEntries?.length || payload?.visitDashboard);
+}
+
 async function loadSharedPublishedSnapshot() {
+  // v12: Supabase is the primary cross-PC source. Each dashboard component is
+  // stored independently, so a fresh stock snapshot can publish without waiting
+  // for a new audit workbook and vice versa.
+  try {
+    const cloud = await cloudApi();
+    if (cloud?.readCloudSnapshot) {
+      const [visitRow, auditRow, availabilityRow] = await Promise.all([
+        cloud.readCloudSnapshot("visit").catch(() => null),
+        cloud.readCloudSnapshot("audit").catch(() => null),
+        cloud.readCloudSnapshot("availability").catch(() => null),
+      ]);
+      const payload = {
+        version: 2,
+        generatedAt: [visitRow?.updated_at, auditRow?.updated_at, availabilityRow?.updated_at].filter(Boolean).sort().at(-1) || null,
+        visitDashboard: visitRow?.payload?.data || visitRow?.payload?.visitDashboard || null,
+        audit: auditRow?.payload || null,
+        availability: availabilityRow?.payload || null,
+      };
+      const sharedAt = Math.max(0, ...[visitRow?.updated_at, auditRow?.updated_at, availabilityRow?.updated_at].map(v => Date.parse(v || "") || 0));
+      if (await applyCrossPcSnapshot(payload, sharedAt)) return true;
+    }
+  } catch (error) {
+    console.warn("Supabase cloud snapshots unavailable:", error);
+  }
+
+  // Migration fallback: keep reading the old v11 JSON if it still exists.
   try {
     const response = await fetch(`${SHARED_SNAPSHOT_URL}?_=${Date.now()}`, { cache: "no-store" });
     if (!response.ok) return false;
     const payload = await response.json();
     const sharedAt = Date.parse(payload?.generatedAt || "") || 0;
-
-    if (payload?.visitDashboard?.outlets) state.sharedDashboard = payload.visitDashboard;
-
-    const auditPacked = unpackSharedAudit(payload?.audit);
-    const auditAt = Date.parse(payload?.audit?.metadata?.generatedAt || "") || sharedAt;
-    const currentIsLocal = state.source === "local" || state.source === "cache";
-    if (auditPacked?.length && (!state.rows.length || !currentIsLocal || auditAt >= Number(state.savedAt || 0))) {
-      state.rows = fatten(auditPacked);
-      state.file = payload.audit?.metadata?.sourceFile || "Shared PC snapshot";
-      state.sig = `shared:${payload?.generatedAt || ""}`;
-      state.source = "shared";
-      state.savedAt = auditAt || Date.now();
-      state.stale = true;
-      await idbPut("cache", "last", { file: state.file, sig: state.sig, savedAt: state.savedAt, packed: auditPacked });
-    }
-
-    const availability = payload?.availability;
-    const availabilityAt = Date.parse(availability?.metadata?.generatedAt || "") || sharedAt;
-    const sharedEntries = availability?.entries;
-    const currentAvailLocal = state.availSource === "local" || state.availSource === "cache" || state.availSource === "retained";
-    if (Array.isArray(sharedEntries) && sharedEntries.length && (!state.avail.size || !currentAvailLocal || availabilityAt >= Number(state.availSavedAt || 0))) {
-      state.avail = new Map(sharedEntries);
-      state.availFile = availability?.metadata?.criteriaFile || "";
-      state.stockFile = availability?.metadata?.stockFile || "";
-      state.availSavedAt = availabilityAt || Date.now();
-      state.availSource = "shared";
-      state.availMatched = Number(availability?.metadata?.matched || 0);
-      await idbPut("cache", "avail", {
-        version: Number(availability?.version || AVAIL_CACHE_VERSION),
-        file: state.availFile, stockFile: state.stockFile,
-        criteriaSig: "shared", stockSig: "shared",
-        savedAt: state.availSavedAt, matched: state.availMatched, entries: sharedEntries,
-      });
-    }
-
-    if (state.rows.length) { showLoaded(); render(); }
-    return Boolean(auditPacked?.length || sharedEntries?.length);
+    return await applyCrossPcSnapshot(payload, sharedAt);
   } catch (error) {
-    console.warn("Shared snapshot unavailable:", error);
+    console.warn("Legacy cloud snapshot unavailable:", error);
     return false;
   }
 }
@@ -343,13 +426,18 @@ async function readWorkbook(file, { cache = true } = {}) {
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { defval: "" });
   if (!rows.length || !("Question Category" in rows[0])) throw new Error(`"${sheet}" is not the Answer Details sheet.`);
   state.rows = rows; state.file = file.name; state.sig = signature(file); state.source = "local"; state.stale = false;
-  if (cache) await idbPut("cache", "last", { file: file.name, sig: state.sig, savedAt: Date.now(), packed: slim(rows) });
+  state.savedAt = Date.now();
+  const packed = slim(rows);
+  if (cache) await idbPut("cache", "last", { file: file.name, sig: state.sig, savedAt: state.savedAt, packed });
+  // v12: after one source-PC login, every successful fresh Audit snapshot is
+  // pushed to Supabase automatically. Local display never waits for the cloud.
+  void autoPublishAuditSnapshot(packed, file.name, state.savedAt);
   showLoaded();
   render();
 }
 
 function sourceDisplay() {
-  if (state.source === "shared") return { label: "shared snapshot", live: false };
+  if (state.source === "shared") return { label: "cloud snapshot", live: false };
   if (state.source === "published") return { label: "published snapshot", live: false };
   if (state.source === "published-backup") return { label: "published backup", live: false };
   if (state.source === "cache" || state.stale) return { label: "saved copy", live: false };
@@ -360,7 +448,7 @@ function availabilityStatusHtml() {
   if (!state.avail.size) return "";
   const shared = state.availSource === "shared";
   const retained = state.availSource === "retained" || state.availSource === "cache";
-  const label = shared ? "published availability" : retained ? "availability saved copy" : "availability snapshot";
+  const label = shared ? "cloud availability" : retained ? "availability saved copy" : "availability snapshot";
   const when = state.availSavedAt
     ? ` · ${new Date(state.availSavedAt).toLocaleString()}` : "";
   const sourceFile = state.stockFile ? `<br><b>${esc(state.stockFile)}</b>` : "";
@@ -438,7 +526,7 @@ async function syncFolder({ silent = true } = {}) {
           state.availSavedAt = Date.now();
           state.availSource = "local";
           state.availMatched = matched;
-          await idbPut("cache", "avail", {
+          const availabilityCache = {
             version: AVAIL_CACHE_VERSION,
             file: state.availFile,
             stockFile: stockFile.name,
@@ -447,7 +535,11 @@ async function syncFolder({ silent = true } = {}) {
             savedAt: state.availSavedAt,
             matched,
             entries: [...result.entries()],
-          });
+          };
+          await idbPut("cache", "avail", availabilityCache);
+          // v12: a newly calculated stock availability snapshot is independently
+          // published to Supabase as soon as it is successfully saved locally.
+          void autoPublishAvailabilitySnapshot(availabilityCache);
         } catch (error) {
           console.warn("Availability snapshot failed; retaining last successful copy.", error);
           if (state.avail.size) state.availSource = "retained";
@@ -542,7 +634,7 @@ function startWatching() {
 // visit-compliance dataset published alongside this page, joined on site code.
 async function loadDirectory() {
   try {
-    /* Prefer the shared snapshot directory when it exists, because it was
+    /* Prefer the cloud snapshot directory when it exists, because it was
        generated from the same PC snapshot as the Audit data. */
     let dashboardData = state.sharedDashboard || null;
 

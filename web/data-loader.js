@@ -11,6 +11,8 @@
  * response values are never used in place of the selected PC response file.
  */
 
+import { publishIfSignedIn, readCloudSnapshot } from "./supabase-sync.js?v=visit-compliance-v12-supabase";
+
 const RESPONSE_SHEET = "Response Summary";
 const RESPONSE_HEADERS = ["Response ID", "Date", "Time", "Site Code", "Created By User ID"];
 const SCHEDULE_SCHEMAS = [
@@ -25,8 +27,8 @@ const OFFICER_ALIASES = [
 
 const PC_DB = "visit-compliance-pc-raw-data";
 const PC_DB_VERSION = 1;
-const PC_READER_VERSION = "pc-response-dashboard-plan-v11-shared-snapshot";
-const SHARED_SNAPSHOT_URL = "./data/shared_snapshot.json";
+const PC_READER_VERSION = "pc-response-dashboard-plan-v12-supabase-auto-share";
+const LEGACY_SHARED_SNAPSHOT_URL = "./data/shared_snapshot.json";
 
 const DEFAULT_DEFINITIONS = Object.freeze({
   fullMonth: "Total Planned Visits (Full Month) counts every scheduled assignment in the current visit plan (local Zonal/RHO workbook when present, otherwise the dashboard visit plan).",
@@ -1431,6 +1433,15 @@ class PcRawDataSource {
       folderStateSignature: this.currentFolderSignature,
       savedAt: this.savedAt,
     });
+
+    // v12: if this source PC has been signed in once on Cloud Sync, every new
+    // successful local snapshot is published automatically to Supabase.  This
+    // never blocks the local dashboard if the network/cloud is unavailable.
+    void publishIfSignedIn("visit", {
+      version: 2,
+      generatedAt: this.savedAt,
+      data,
+    });
   }
 
   bindControls() {
@@ -1683,8 +1694,26 @@ class PcRawDataSource {
 }
 
 async function loadPublishedSharedDashboard() {
+  // v12 primary cross-PC source: Supabase. The old GitHub JSON is retained
+  // only as a migration fallback for deployments that have not published a
+  // cloud snapshot yet.
   try {
-    const response = await fetch(`${SHARED_SNAPSHOT_URL}?_=${Date.now()}`, { cache: "no-store" });
+    const row = await readCloudSnapshot("visit");
+    const payload = row?.payload || null;
+    const data = payload?.data || payload?.visitDashboard || null;
+    if (validDashboardData(data) && data?.officers?.length && data?.metadata?.snapshotDate) {
+      return {
+        data,
+        generatedAt: row?.updated_at || payload?.generatedAt || data?.metadata?.snapshotTakenAt || data?.metadata?.generatedAt || null,
+        sourceFile: data?.metadata?.responseFile || "Supabase shared snapshot",
+      };
+    }
+  } catch (error) {
+    console.warn("Supabase Visit snapshot unavailable:", error);
+  }
+
+  try {
+    const response = await fetch(`${LEGACY_SHARED_SNAPSHOT_URL}?_=${Date.now()}`, { cache: "no-store" });
     if (!response.ok) return null;
     const payload = await response.json();
     const data = payload?.visitDashboard;
@@ -1692,7 +1721,7 @@ async function loadPublishedSharedDashboard() {
     return {
       data,
       generatedAt: payload?.generatedAt || data?.metadata?.snapshotTakenAt || data?.metadata?.generatedAt || null,
-      sourceFile: data?.metadata?.responseFile || "Published shared snapshot",
+      sourceFile: data?.metadata?.responseFile || "Legacy published shared snapshot",
     };
   } catch {
     return null;
@@ -1750,7 +1779,7 @@ export async function loadDashboardData() {
       lastFetched: shared.generatedAt,
       localStatus: {
         kind: "published",
-        message: "Showing the published shared snapshot. This copy is available from any PC or network; choose the raw-data folder on an authorized source PC to refresh locally.",
+        message: "Showing the latest shared cloud snapshot. This copy is available from any PC or network; the authorized source PC refreshes it automatically after each successful snapshot.",
       },
       localSource,
     };
@@ -1780,6 +1809,6 @@ export function getDataStatus(result) {
   if (result?.source === "pc-folder-selection") return { type: "pc-folder-selection", text: "Showing data loaded from the selected PC raw-data folder." };
   if (result?.source === "pc-file") return { type: "pc-file", text: "Showing a live snapshot from the response workbook selected on this PC." };
   if (result?.source === "local-cache") return { type: "local-cache", text: "Showing the retained data from the last successful PC raw-data read." };
-  if (result?.source === "published-shared") return { type: "published-shared", text: "Showing the published shared snapshot. It is available to other PCs and networks without folder access." };
+  if (result?.source === "published-shared") return { type: "published-shared", text: "Showing the latest shared cloud snapshot from Supabase. It is available to other PCs and networks without folder access." };
   return { type: "awaiting-local", text: "Choose your PC raw-data folder to load the current Response Summary." };
 }

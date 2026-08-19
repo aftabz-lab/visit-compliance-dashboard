@@ -4,30 +4,35 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="color-scheme" content="dark" />
-<title>Share Dashboard Snapshot</title>
-<link rel="stylesheet" href="styles.css?v=visit-complete-dark-v11-shared" />
+<title>Dashboard Cloud Sync</title>
+<link rel="stylesheet" href="styles.css?v=visit-complete-dark-v12-supabase" />
 <style>
   body { background: var(--dark-1); }
-  .publish-wrap { max-width: 980px; margin: 0 auto; padding: 28px 24px 60px; display: grid; gap: 18px; }
+  .publish-wrap { max-width: 1000px; margin: 0 auto; padding: 28px 24px 60px; display: grid; gap: 18px; }
   .pub-panel { background: var(--dark-2); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
   .pub-panel h2 { margin: 0 0 12px; color: var(--white-text); font-size: 18px; }
-  .pub-panel p, .pub-panel li { color: var(--muted-text); line-height: 1.65; font-size: 13px; }
+  .pub-panel p, .pub-panel li, .small { color: var(--muted-text); line-height: 1.6; font-size: 13px; }
   .pub-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 12px; }
   .pub-card { background: var(--dark-3); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
   .pub-card .label { color: var(--muted-text); text-transform: uppercase; letter-spacing: .08em; font-size: 10px; font-weight: 800; }
-  .pub-card .value { color: var(--white-text); font-size: 20px; font-weight: 800; margin-top: 6px; }
+  .pub-card .value { color: var(--white-text); font-size: 19px; font-weight: 800; margin-top: 6px; overflow-wrap:anywhere; }
   .ok { color: #75d89b !important; }
   .warn-text { color: #e0a53f !important; }
+  .bad { color: #ff8585 !important; }
   code { color: #9bd9ff; background: var(--dark-4); padding: 2px 5px; border-radius: 5px; }
   .actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; }
+  .login-grid { display:grid; grid-template-columns:1fr 1fr auto; gap:10px; align-items:end; }
+  .login-grid label { color:var(--muted-text); font-size:11px; font-weight:700; }
+  .login-grid input { width:100%; box-sizing:border-box; margin-top:5px; }
   .notice { border-left: 3px solid #e0a53f; padding-left: 12px; }
+  @media (max-width:720px){ .login-grid{grid-template-columns:1fr;} }
 </style>
 </head>
 <body>
 <header class="topbar">
   <div class="topbar-identity">
-    <h1>Share Dashboard Snapshot</h1>
-    <p class="subtitle">Publish one calculated copy so both dashboards work from any PC or network</p>
+    <h1>Dashboard Cloud Sync</h1>
+    <p class="subtitle">Automatic Supabase publishing from the authorized source PC</p>
   </div>
   <div class="topbar-actions">
     <a class="btn link-btn" href="./index.html">Visit compliance</a>
@@ -37,34 +42,53 @@
 
 <main class="publish-wrap">
   <section class="pub-panel">
-    <h2>Snapshot available on this PC</h2>
-    <div class="pub-grid">
-      <div class="pub-card"><div class="label">Visit Compliance</div><div id="visit-status" class="value">Checking…</div><div id="visit-detail"></div></div>
-      <div class="pub-card"><div class="label">Audit Answers</div><div id="audit-status" class="value">Checking…</div><div id="audit-detail"></div></div>
-      <div class="pub-card"><div class="label">Stock Availability</div><div id="avail-status" class="value">Checking…</div><div id="avail-detail"></div></div>
+    <h2>1. Source PC publisher login</h2>
+    <p>Sign in once on the PC that has the raw-data folder. The browser keeps the Supabase session and refreshes it automatically. Your password is sent to Supabase Auth and is not saved by this page.</p>
+    <div id="login-form" class="login-grid">
+      <label>Email<input id="email" type="email" autocomplete="username" placeholder="Publisher email" /></label>
+      <label>Password<input id="password" type="password" autocomplete="current-password" placeholder="Publisher password" /></label>
+      <button id="signin" class="btn primary" type="button">Sign in</button>
     </div>
-    <div class="actions">
-      <button id="download" class="btn primary" type="button" disabled>Download shared_snapshot.json</button>
-      <button id="refresh" class="btn secondary" type="button">Recheck saved snapshots</button>
+    <div id="signed-in" hidden>
+      <div class="pub-card"><div class="label">Publisher</div><div id="publisher-email" class="value ok">Signed in</div><div class="small">Automatic publishing is enabled on this browser.</div></div>
+      <div class="actions"><button id="signout" class="btn secondary" type="button">Sign out this PC</button></div>
     </div>
+    <p id="auth-message" class="small"></p>
   </section>
 
   <section class="pub-panel">
-    <h2>How to make it visible on every PC</h2>
-    <ol>
-      <li>On the source PC, first let <b>Visit Compliance</b> and <b>Audit Quality</b> finish reading the PC raw-data folder and taking their snapshots.</li>
-      <li>On this page click <b>Download shared_snapshot.json</b>.</li>
-      <li>In the GitHub repository upload/replace that file at <code>web/data/shared_snapshot.json</code> and commit it. GitHub Pages will deploy it.</li>
-      <li>After deployment, any PC/network opening the normal dashboard URLs will automatically show this shared snapshot. No raw-data folder is required on those viewer PCs.</li>
-    </ol>
-    <p class="notice"><b>Important:</b> this publishes calculated dashboard data to the same public GitHub Pages site. The raw Excel and stock CSV files are not included, but the dashboard figures/details contained in the snapshot become viewable to people who can access the site.</p>
+    <h2>2. Saved source-PC snapshots</h2>
+    <div class="pub-grid">
+      <div class="pub-card"><div class="label">Visit Compliance</div><div id="visit-local" class="value">Checking…</div><div id="visit-detail" class="small"></div></div>
+      <div class="pub-card"><div class="label">Audit Answers</div><div id="audit-local" class="value">Checking…</div><div id="audit-detail" class="small"></div></div>
+      <div class="pub-card"><div class="label">Stock Availability</div><div id="avail-local" class="value">Checking…</div><div id="avail-detail" class="small"></div></div>
+    </div>
+    <div class="actions">
+      <button id="sync-now" class="btn primary" type="button">Sync saved snapshots now</button>
+      <button id="recheck" class="btn secondary" type="button">Recheck</button>
+    </div>
+    <p id="sync-message" class="small"></p>
+  </section>
+
+  <section class="pub-panel">
+    <h2>3. Shared cloud snapshot</h2>
+    <div class="pub-grid">
+      <div class="pub-card"><div class="label">Visit cloud copy</div><div id="visit-cloud" class="value">Checking…</div><div id="visit-cloud-detail" class="small"></div></div>
+      <div class="pub-card"><div class="label">Audit cloud copy</div><div id="audit-cloud" class="value">Checking…</div><div id="audit-cloud-detail" class="small"></div></div>
+      <div class="pub-card"><div class="label">Availability cloud copy</div><div id="avail-cloud" class="value">Checking…</div><div id="avail-cloud-detail" class="small"></div></div>
+    </div>
+    <p class="notice"><b>After the first sign-in:</b> you do not download or upload <code>shared_snapshot.json</code>. A new successful Visit, Audit, or Availability snapshot publishes automatically to Supabase. Other PCs read the latest cloud copy directly.</p>
   </section>
 </main>
 
-<script>
-const $ = (id) => document.getElementById(id);
+<script type="module">
+import {
+  getPublisherSession, signInPublisher, signOutPublisher,
+  publishCloudSnapshot, readCloudSnapshot, supabaseConfig
+} from "./supabase-sync.js?v=visit-compliance-v12-supabase";
+
+const $ = id => document.getElementById(id);
 const FIELDS = ["Response ID","Site Code","Question Category","Question Title","Question Max Score","Answer Score","Date"];
-let currentPayload = null;
 
 async function dbGet(dbName, storeName, key) {
   try {
@@ -75,115 +99,124 @@ async function dbGet(dbName, storeName, key) {
       request.onupgradeneeded = () => resolve(request.result);
     });
     if (!db.objectStoreNames.contains(storeName)) { db.close(); return null; }
-    const value = await new Promise((resolve) => {
+    const value = await new Promise(resolve => {
       const q = db.transaction(storeName).objectStore(storeName).get(key);
       q.onsuccess = () => resolve(q.result || null);
       q.onerror = () => resolve(null);
     });
-    db.close();
-    return value;
+    db.close(); return value;
   } catch { return null; }
 }
 
-function dictPack(rows) {
-  const dicts = {
-    responseIds: [], siteCodes: [], categories: [], questions: [], dates: []
-  };
-  const maps = Object.fromEntries(Object.keys(dicts).map(k => [k, new Map()]));
-  function idx(key, value) {
-    const text = String(value ?? "");
-    const map = maps[key];
-    if (map.has(text)) return map.get(text);
-    const n = dicts[key].length;
-    dicts[key].push(text); map.set(text, n); return n;
-  }
-  const packedRows = rows.map(r => [
-    idx("responseIds", r[0]),
-    idx("siteCodes", r[1]),
-    idx("categories", r[2]),
-    idx("questions", r[3]),
-    r[4], r[5],
-    idx("dates", r[6]),
-  ]);
-  return { format: "dict-v1", fields: FIELDS, dictionaries: dicts, rows: packedRows };
-}
-
-function visitValid(saved) {
-  const d = saved?.data;
-  return !!(d && d.metadata && d.metadata.localSource && d.metadata.snapshotDate && Array.isArray(d.officers) && d.officers.length);
-}
-function auditValid(saved) { return !!(saved?.packed?.length && saved.packed[0]?.length === FIELDS.length); }
-function availabilityValid(saved) { return !!(saved?.entries?.length); }
 function fmtWhen(value) {
   const d = value ? new Date(value) : null;
   return d && !Number.isNaN(d.getTime()) ? d.toLocaleString() : "time unavailable";
 }
 
-async function buildPayload() {
-  const visit = await dbGet("visit-compliance-pc-raw-data", "snapshots", "latest");
-  const audit = await dbGet("audit-dash", "cache", "last");
-  const avail = await dbGet("audit-dash", "cache", "avail");
-
-  const hasVisit = visitValid(visit);
-  const hasAudit = auditValid(audit);
-  const hasAvail = availabilityValid(avail);
-
-  $("visit-status").textContent = hasVisit ? "Ready" : "Not saved";
-  $("visit-status").className = "value " + (hasVisit ? "ok" : "warn-text");
-  $("visit-detail").textContent = hasVisit
-    ? `${Number(visit.data.metadata?.diagnostics?.acceptedResponses || 0).toLocaleString()} responses · ${fmtWhen(visit.savedAt)}`
-    : "Open Visit Compliance on this PC and complete one successful raw-folder read.";
-
-  $("audit-status").textContent = hasAudit ? "Ready" : "Not saved";
-  $("audit-status").className = "value " + (hasAudit ? "ok" : "warn-text");
-  $("audit-detail").textContent = hasAudit
-    ? `${audit.packed.length.toLocaleString()} answers · ${fmtWhen(audit.savedAt)}`
-    : "Open Audit Quality on this PC and complete one successful response-workbook read.";
-
-  $("avail-status").textContent = hasAvail ? "Ready" : "Not saved";
-  $("avail-status").className = "value " + (hasAvail ? "ok" : "warn-text");
-  $("avail-detail").textContent = hasAvail
-    ? `${avail.entries.length.toLocaleString()} outlets · ${avail.stockFile || "stock snapshot"} · ${fmtWhen(avail.savedAt)}`
-    : "Audit Quality must successfully read Product Criteria + stock_extraction_report once.";
-
-  const generatedAt = new Date().toISOString();
-  currentPayload = {
-    version: 1,
-    generatedAt,
-    visitDashboard: hasVisit ? visit.data : null,
-    audit: hasAudit ? {
-      ...dictPack(audit.packed),
-      metadata: {
-        sourceFile: audit.file || "PC Audit snapshot",
-        generatedAt: new Date(audit.savedAt || Date.now()).toISOString(),
-        answerCount: audit.packed.length,
-      }
-    } : null,
-    availability: hasAvail ? {
-      version: Number(avail.version || 0),
-      metadata: {
-        criteriaFile: avail.file || "",
-        stockFile: avail.stockFile || "",
-        generatedAt: new Date(avail.savedAt || Date.now()).toISOString(),
-        matched: Number(avail.matched || 0),
-      },
-      entries: avail.entries,
-    } : null,
+function dictPack(rows) {
+  const dicts = { responseIds: [], siteCodes: [], categories: [], questions: [], dates: [] };
+  const maps = Object.fromEntries(Object.keys(dicts).map(k => [k, new Map()]));
+  function idx(key, value) {
+    const text = String(value ?? ""); const map = maps[key];
+    if (map.has(text)) return map.get(text);
+    const n = dicts[key].length; dicts[key].push(text); map.set(text, n); return n;
+  }
+  return {
+    version: 2, format: "dict-v1", fields: FIELDS, dictionaries: dicts,
+    rows: rows.map(r => [idx("responseIds",r[0]),idx("siteCodes",r[1]),idx("categories",r[2]),idx("questions",r[3]),r[4],r[5],idx("dates",r[6])])
   };
-  $("download").disabled = !(hasVisit || hasAudit || hasAvail);
 }
 
-$("refresh").addEventListener("click", buildPayload);
-$("download").addEventListener("click", async () => {
-  await buildPayload();
-  if (!currentPayload) return;
-  const blob = new Blob([JSON.stringify(currentPayload)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = "shared_snapshot.json"; document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+function visitValid(saved) {
+  const d = saved?.data;
+  return !!(d?.metadata?.snapshotDate && Array.isArray(d.officers) && d.officers.length);
+}
+function auditValid(saved) { return !!(saved?.packed?.length && saved.packed[0]?.length === FIELDS.length); }
+function availabilityValid(saved) { return !!(saved?.entries?.length); }
+
+let local = { visit:null, audit:null, avail:null };
+
+async function readLocal() {
+  local.visit = await dbGet("visit-compliance-pc-raw-data", "snapshots", "latest");
+  local.audit = await dbGet("audit-dash", "cache", "last");
+  local.avail = await dbGet("audit-dash", "cache", "avail");
+
+  const hasVisit = visitValid(local.visit), hasAudit = auditValid(local.audit), hasAvail = availabilityValid(local.avail);
+  $("visit-local").textContent = hasVisit ? "Ready" : "Not saved"; $("visit-local").className = `value ${hasVisit ? "ok" : "warn-text"}`;
+  $("visit-detail").textContent = hasVisit ? `${Number(local.visit.data.metadata?.diagnostics?.acceptedResponses || 0).toLocaleString()} responses · ${fmtWhen(local.visit.savedAt)}` : "Open Visit Compliance and complete one successful PC-folder read.";
+  $("audit-local").textContent = hasAudit ? "Ready" : "Not saved"; $("audit-local").className = `value ${hasAudit ? "ok" : "warn-text"}`;
+  $("audit-detail").textContent = hasAudit ? `${local.audit.packed.length.toLocaleString()} answers · ${fmtWhen(local.audit.savedAt)}` : "Open Audit Quality and complete one successful audit read.";
+  $("avail-local").textContent = hasAvail ? "Ready" : "Not saved"; $("avail-local").className = `value ${hasAvail ? "ok" : "warn-text"}`;
+  $("avail-detail").textContent = hasAvail ? `${local.avail.entries.length.toLocaleString()} outlets · ${local.avail.stockFile || "stock snapshot"} · ${fmtWhen(local.avail.savedAt)}` : "Audit Quality must successfully read Product Criteria + stock_extraction_report.";
+}
+
+function renderAuth() {
+  const session = getPublisherSession();
+  $("login-form").hidden = !!session;
+  $("signed-in").hidden = !session;
+  $("publisher-email").textContent = session?.user?.email || "Publisher signed in";
+  $("auth-message").textContent = session ? `Connected to ${supabaseConfig.projectRef}. Automatic cloud publishing is enabled.` : "Not signed in. Local snapshots still work, but automatic shared publishing is paused.";
+}
+
+async function cloudStatus() {
+  const defs = [
+    ["visit","visit-cloud","visit-cloud-detail"],
+    ["audit","audit-cloud","audit-cloud-detail"],
+    ["availability","avail-cloud","avail-cloud-detail"],
+  ];
+  for (const [key, valueId, detailId] of defs) {
+    try {
+      const row = await readCloudSnapshot(key);
+      $(valueId).textContent = row ? "Available" : "Not published";
+      $(valueId).className = `value ${row ? "ok" : "warn-text"}`;
+      $(detailId).textContent = row ? `Updated ${fmtWhen(row.updated_at)}` : "No shared cloud snapshot yet.";
+    } catch (error) {
+      $(valueId).textContent = "Connection error"; $(valueId).className = "value bad";
+      $(detailId).textContent = error.message;
+    }
+  }
+}
+
+async function syncNow() {
+  const session = getPublisherSession();
+  if (!session) { $("sync-message").textContent = "Sign in as the source-PC publisher first."; return; }
+  await readLocal();
+  const jobs = [];
+  if (visitValid(local.visit)) {
+    jobs.push(publishCloudSnapshot("visit", { version:2, generatedAt:new Date(local.visit.savedAt || Date.now()).toISOString(), data:local.visit.data }).then(()=>"Visit ✓"));
+  }
+  if (auditValid(local.audit)) {
+    jobs.push(publishCloudSnapshot("audit", { ...dictPack(local.audit.packed), metadata:{ sourceFile:local.audit.file || "PC Audit snapshot", generatedAt:new Date(local.audit.savedAt || Date.now()).toISOString(), answerCount:local.audit.packed.length } }).then(()=>"Audit ✓"));
+  }
+  if (availabilityValid(local.avail)) {
+    jobs.push(publishCloudSnapshot("availability", { version:Number(local.avail.version || 0), metadata:{ criteriaFile:local.avail.file || "", stockFile:local.avail.stockFile || "", generatedAt:new Date(local.avail.savedAt || Date.now()).toISOString(), matched:Number(local.avail.matched || 0) }, entries:local.avail.entries }).then(()=>"Availability ✓"));
+  }
+  if (!jobs.length) { $("sync-message").textContent = "No local source-PC snapshots are ready yet."; return; }
+  $("sync-message").textContent = "Publishing saved snapshots…";
+  try {
+    const result = await Promise.all(jobs);
+    $("sync-message").textContent = `Cloud sync completed: ${result.join(" · ")}`;
+    await cloudStatus();
+  } catch (error) {
+    $("sync-message").textContent = error.message || "Cloud sync failed.";
+  }
+}
+
+$("signin").addEventListener("click", async () => {
+  const email = $("email").value.trim(), password = $("password").value;
+  if (!email || !password) { $("auth-message").textContent = "Enter the publisher email and password."; return; }
+  $("auth-message").textContent = "Signing in…";
+  try {
+    await signInPublisher(email, password); $("password").value = ""; renderAuth(); await syncNow();
+  } catch (error) { $("auth-message").textContent = error.message || "Sign-in failed."; }
 });
-buildPayload();
+$("signout").addEventListener("click", () => { signOutPublisher(); renderAuth(); $("sync-message").textContent = "Automatic cloud publishing is paused on this PC."; });
+$("sync-now").addEventListener("click", syncNow);
+$("recheck").addEventListener("click", async () => { await readLocal(); await cloudStatus(); });
+
+renderAuth();
+await readLocal();
+await cloudStatus();
 </script>
 </body>
 </html>

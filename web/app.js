@@ -1,4 +1,4 @@
-import { attachPcRawDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=pc-response-dashboard-plan-v11-shared-snapshot";
+import { attachPcRawDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=pc-response-dashboard-plan-v12-supabase-auto-share";
 
 const columns = [
   ["status", "Status"],
