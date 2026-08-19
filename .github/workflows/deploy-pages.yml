@@ -4,7 +4,7 @@ on:
   push:
     branches: ["main"]
     paths-ignore:
-      - "site/data/dashboard_data.json"
+      - "site/data/**"
   workflow_dispatch:
 
 permissions:
@@ -38,20 +38,37 @@ jobs:
           test -f site/data/dashboard_data.json
           python - <<'PY'
           import json
-          with open("site/data/dashboard_data.json", encoding="utf-8") as f:
-              data = json.load(f)
-          if not isinstance(data, dict) or not data:
-              raise SystemExit("site/data/dashboard_data.json is empty or invalid")
-          print("Valid dashboard data")
-          print("Generated at:", data.get("metadata", {}).get("generatedAt", "unknown"))
+          from pathlib import Path
+
+          data_dir = Path("site/data")
+          for name in ("dashboard_data.json", "dashboard_data_last_good.json"):
+              with (data_dir / name).open(encoding="utf-8") as f:
+                  data = json.load(f)
+              if not isinstance(data, dict) or not data:
+                  raise SystemExit(f"site/data/{name} is empty or invalid")
+              print(f"Valid {name}: {data.get('metadata', {}).get('generatedAt', 'unknown')}")
+
+          for name in ("audit_data.json", "audit_data_last_good.json"):
+              path = data_dir / name
+              if not path.exists():
+                  print(f"No {name} yet; Audit page will use its retained browser copy until an Answer Details export is uploaded once.")
+                  continue
+              with path.open(encoding="utf-8") as f:
+                  audit = json.load(f)
+              if not isinstance(audit, dict) or not audit.get("rows") or not audit.get("fields"):
+                  raise SystemExit(f"site/data/{name} is empty or invalid")
+              print(f"Valid {name}: {len(audit['rows']):,} answers")
           PY
 
-      - name: Persist last successful dashboard data in repository
+      - name: Persist last successful dashboard snapshots in repository
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add -f site/data/dashboard_data.json
+          # Persist both current and last-good snapshots.  These are the only
+          # generated files that the deployed pages need after raw Excel files
+          # are deleted from data/.
+          git add -f site/data
 
           if git diff --cached --quiet; then
             echo "No dashboard data change to persist."
