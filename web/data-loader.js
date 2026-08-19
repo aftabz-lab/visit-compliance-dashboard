@@ -185,6 +185,11 @@ async function openWorkbook(file, options = {}) {
     cellDates: false,
     cellStyles: false,
     cellHTML: false,
+    // Formatting, formatted display text and formulas are not used by this
+    // dashboard.  Skipping them makes PC-folder refreshes much faster.
+    cellText: false,
+    cellFormula: false,
+    cellNF: false,
     ...options,
   });
 }
@@ -214,7 +219,13 @@ function asGrid(book, sheetName) {
 
 async function isResponseWorkbook(file) {
   try {
-    const book = await openWorkbook(file, { sheetRows: 3 });
+    const book = await openWorkbook(file, {
+      // Do not parse answer/detail tabs.  Response Summary is the only sheet
+      // allowed to supply Visit Compliance response data.
+      sheets: RESPONSE_SHEET,
+      sheetRows: 3,
+      dense: true,
+    });
     const sheetName = exactSheetName(book, RESPONSE_SHEET);
     if (!sheetName) return false;
     const rows = asGrid(book, sheetName);
@@ -226,7 +237,14 @@ async function isResponseWorkbook(file) {
 }
 
 async function readResponseWorkbook(file) {
-  const book = await openWorkbook(file);
+  const book = await openWorkbook(file, {
+    // The source response workbook can contain tens of thousands of answer
+    // rows on other tabs.  Parsing those tabs was the reason a refresh could
+    // remain on "Reading" for many minutes.  SheetJS therefore receives an
+    // explicit one-sheet request here.
+    sheets: RESPONSE_SHEET,
+    dense: true,
+  });
   const sheetName = exactSheetName(book, RESPONSE_SHEET);
   if (!sheetName) throw new Error('The selected workbook does not contain the "Response Summary" sheet.');
   const rows = asGrid(book, sheetName);
@@ -274,7 +292,11 @@ async function readResponseWorkbook(file) {
 
 async function isScheduleWorkbook(file) {
   try {
-    const book = await openWorkbook(file, { sheetRows: 4 });
+    const book = await openWorkbook(file, {
+      sheets: SCHEDULE_SCHEMAS.map((schema) => schema.sheet),
+      sheetRows: 4,
+      dense: true,
+    });
     return SCHEDULE_SCHEMAS.some((schema) => {
       const sheetName = exactSheetName(book, schema.sheet);
       if (!sheetName) return false;
@@ -288,7 +310,11 @@ async function isScheduleWorkbook(file) {
 }
 
 async function readScheduleWorkbook(file) {
-  const book = await openWorkbook(file);
+  const book = await openWorkbook(file, {
+    // Ignore any unrelated support sheets in the visit-plan workbook.
+    sheets: SCHEDULE_SCHEMAS.map((schema) => schema.sheet),
+    dense: true,
+  });
   const assignments = [];
   const outlets = {};
   const seen = new Set();
@@ -626,6 +652,13 @@ function fileSignature(file) {
   return file.name + "|" + file.lastModified + "|" + file.size;
 }
 
+function folderSignature(files) {
+  return files
+    .map((file) => fileSignature(file))
+    .sort()
+    .join("||");
+}
+
 async function folderWorkbookFiles(handle) {
   const files = [];
   for await (const [name, entry] of handle.entries()) {
@@ -636,34 +669,57 @@ async function folderWorkbookFiles(handle) {
   return files;
 }
 
+function responseFilePriority(file) {
+  const name = nameKey(file?.name);
+  const isSchedule = /visit\s*schedule|visit\s*plan|compiled\s*visit|\bschedule\b/.test(name);
+  if (isSchedule) return 9;
+  if (/store\s*operations.*compliance.*audit.*response/.test(name)) return 0;
+  if (/\bresponse\b.*\baudit\b|\baudit\b.*\bresponse\b/.test(name)) return 1;
+  if (/\bresponse\b/.test(name)) return 2;
+  if (/\baudit\b/.test(name)) return 3;
+  return 5;
+}
+
+function scheduleFilePriority(file) {
+  const name = nameKey(file?.name);
+  if (/master.*compiled.*visit|compiled.*visit|visit.*schedule/.test(name)) return 0;
+  if (/\bschedule\b|\bvisit\s*plan\b|\bplan\b/.test(name)) return 1;
+  return 5;
+}
+
+function orderFilesByPriority(files, priority) {
+  return [...files].sort((a, b) =>
+    priority(a) - priority(b)
+    || b.lastModified - a.lastModified
+    || a.name.localeCompare(b.name)
+  );
+}
+
 async function findResponseFile(files) {
-  const matches = [];
-  for (const file of files) {
-    if (!await isResponseWorkbook(file)) continue;
+  // In normal use the response file name contains "response" or "audit".
+  // Check it first, then fall back to other workbooks only when needed.  The
+  // actual confirmation is still the exact Response Summary sheet + headers.
+  for (const file of orderFilesByPriority(files, responseFilePriority)) {
     try {
       const parsed = await readResponseWorkbook(file);
-      const newestDate = parsed.responses.reduce(
-        (latest, row) => row.responseDate > latest ? row.responseDate : latest,
-        "0000-00-00",
-      );
-      matches.push({ file, newestDate, rowCount: parsed.responses.length });
+      return { file, parsed };
     } catch {
-      // A workbook that cannot be fully read is not a usable refresh source.
+      // The exact Response Summary sheet is absent or not usable. Try the
+      // next workbook without reading its unrelated sheets.
     }
   }
-  matches.sort((a, b) =>
-    b.newestDate.localeCompare(a.newestDate)
-    || b.rowCount - a.rowCount
-    || b.file.lastModified - a.file.lastModified
-    || a.file.name.localeCompare(b.file.name)
-  );
-  return matches[0]?.file || null;
+  return null;
 }
 
 async function findScheduleFile(files, responseFile) {
-  const named = files.filter((file) => /visit.*schedule|compiled.*visit|plan/i.test(file.name));
-  const ordered = [...named, responseFile, ...files.filter((file) => !named.includes(file) && file !== responseFile)];
-  for (const file of [...new Set(ordered.filter(Boolean))]) if (await isScheduleWorkbook(file)) return file;
+  const ordered = orderFilesByPriority(files.filter((file) => file !== responseFile), scheduleFilePriority);
+  for (const file of ordered) {
+    try {
+      return { file, schedule: await readScheduleWorkbook(file) };
+    } catch {
+      // This workbook is not the required Zonal/RHO visit schedule.
+    }
+  }
   return null;
 }
 
@@ -672,12 +728,14 @@ class PcRawDataSource {
     this.dirHandle = null;
     this.currentData = null;
     this.currentSignature = "";
+    this.currentFolderSignature = "";
     this.savedAt = null;
     this.baseData = null;
     this.onData = null;
     this.onStatus = null;
     this.watchTimer = null;
     this.boundVisibility = false;
+    this.refreshPromise = null;
   }
 
   result(data, source, usingLastData, status) {
@@ -697,6 +755,7 @@ class PcRawDataSource {
     if (saved?.data && validDashboardData(saved.data) && saved.data.metadata?.localSource) {
       this.currentData = saved.data;
       this.currentSignature = saved.signature || "";
+      this.currentFolderSignature = saved.folderSignature || "";
       this.savedAt = saved.savedAt || saved.data.metadata?.snapshotTakenAt || null;
       return this.result(saved.data, "local-cache", true, {
         kind: "saved",
@@ -725,11 +784,17 @@ class PcRawDataSource {
     if (this.onData) this.onData(this.result(data, source, usingLastData, status));
   }
 
-  async saveLatest(data, signature) {
+  async saveLatest(data, signature, folderStateSignature = "") {
     this.currentData = data;
     this.currentSignature = signature;
+    this.currentFolderSignature = folderStateSignature;
     this.savedAt = data.metadata?.snapshotTakenAt || new Date().toISOString();
-    await pcDbPut("snapshots", "latest", { data, signature, savedAt: this.savedAt });
+    await pcDbPut("snapshots", "latest", {
+      data,
+      signature,
+      folderSignature: folderStateSignature,
+      savedAt: this.savedAt,
+    });
   }
 
   bindControls() {
@@ -756,6 +821,7 @@ class PcRawDataSource {
       const handle = await window.showDirectoryPicker({ id: "visit-compliance-raw-data", mode: "read" });
       this.dirHandle = handle;
       this.currentSignature = "";
+      this.currentFolderSignature = "";
       await pcDbPut("handles", "folder", handle);
       await this.refreshFolder({ silent: false });
       this.startWatching();
@@ -770,6 +836,7 @@ class PcRawDataSource {
       const permission = await this.dirHandle.requestPermission({ mode: "read" });
       if (permission === "granted") {
         this.currentSignature = "";
+        this.currentFolderSignature = "";
         await this.refreshFolder({ silent: false });
         this.startWatching();
       }
@@ -793,7 +860,20 @@ class PcRawDataSource {
     return true;
   }
 
-  async refreshFolder({ silent = true } = {}) {
+  async refreshFolder(options = {}) {
+    // The folder watcher runs every five seconds.  Never start another Excel
+    // parse while the previous refresh is still running.
+    if (this.refreshPromise) return this.refreshPromise;
+    const run = this.refreshFolderNow(options);
+    this.refreshPromise = run;
+    try {
+      return await run;
+    } finally {
+      if (this.refreshPromise === run) this.refreshPromise = null;
+    }
+  }
+
+  async refreshFolderNow({ silent = true } = {}) {
     if (!this.dirHandle) {
       if (!this.currentData) this.setStatus({ kind: "idle", message: "Select your PC raw-data folder to load the latest response workbook." });
       return;
@@ -808,20 +888,39 @@ class PcRawDataSource {
     document.getElementById("grant-folder").hidden = true;
     try {
       const files = await folderWorkbookFiles(this.dirHandle);
-      const responseFile = await findResponseFile(files);
-      if (!responseFile) {
+      const currentFolderSignature = folderSignature(files);
+
+      // After the first snapshot, checking file names, sizes and modified
+      // times is enough.  Do not reopen the large response workbook on every
+      // watcher tick when the PC folder has not changed.
+      if (this.currentData && currentFolderSignature === this.currentFolderSignature) {
+        this.setStatus({ kind: "live", message: "Watching the selected PC folder. Only the Response Summary sheet is read." });
+        return;
+      }
+
+      const responseSource = await findResponseFile(files);
+      if (!responseSource) {
         const message = files.length ? 'No Excel file in this folder contains the exact "Response Summary" sheet.' : "The selected PC raw-data folder is empty.";
         if (!this.fallback(message) && !silent) this.setStatus({ kind: "empty", message });
         return;
       }
-      const scheduleFile = await findScheduleFile(files, responseFile);
-      const signature = fileSignature(responseFile) + "|" + (scheduleFile ? fileSignature(scheduleFile) : "retained-plan");
+      const scheduleSource = await findScheduleFile(files, responseSource.file);
+      const signature = fileSignature(responseSource.file) + "|" + (scheduleSource ? fileSignature(scheduleSource.file) : "retained-plan");
       if (signature === this.currentSignature && this.currentData) {
+        this.currentFolderSignature = currentFolderSignature;
         this.setStatus({ kind: "live", message: "Watching the selected PC folder. Only the Response Summary sheet is read." });
         return;
       }
-      this.setStatus({ kind: "reading", message: "Reading " + responseFile.name + " from your PC folder…" });
-      await this.applyResponseFile(responseFile, "pc-folder", scheduleFile, signature);
+      this.setStatus({ kind: "reading", message: "Reading " + responseSource.file.name + " from your PC folder…" });
+      await this.applyResponseFile(
+        responseSource.file,
+        "pc-folder",
+        scheduleSource?.file || null,
+        signature,
+        responseSource.parsed,
+        scheduleSource?.schedule || null,
+        currentFolderSignature,
+      );
     } catch (error) {
       const message = error?.message || "Could not read the PC raw-data folder.";
       if (!this.fallback(message) && !silent) this.setStatus({ kind: "error", message });
@@ -840,13 +939,12 @@ class PcRawDataSource {
     }
   }
 
-  async applyResponseFile(responseFile, source, scheduleFile, signature) {
-    if (!await isResponseWorkbook(responseFile)) throw new Error('The selected file is not a response workbook with the exact "Response Summary" sheet and required columns.');
-    const parsedResponse = await readResponseWorkbook(responseFile);
+  async applyResponseFile(responseFile, source, scheduleFile, signature, parsedResponse = null, parsedSchedule = null, folderStateSignature = "") {
+    const responseData = parsedResponse || await readResponseWorkbook(responseFile);
     let schedule;
     if (scheduleFile) {
       this.setStatus({ kind: "reading", message: "Reading the visit plan and " + responseFile.name + " from your PC folder…" });
-      schedule = await readScheduleWorkbook(scheduleFile);
+      schedule = parsedSchedule || await readScheduleWorkbook(scheduleFile);
       schedule.isRaw = true;
     } else {
       if (!this.currentData?.metadata?.localSource) {
@@ -856,8 +954,8 @@ class PcRawDataSource {
       schedule.isRaw = false;
     }
     const baseline = this.currentData || this.baseData;
-    const data = calculateLocalDashboard(baseline, schedule, parsedResponse, responseFile, source);
-    await this.saveLatest(data, signature);
+    const data = calculateLocalDashboard(baseline, schedule, responseData, responseFile, source);
+    await this.saveLatest(data, signature, folderStateSignature);
     this.sendData(data, source, false, {
       kind: "live",
       message: source === "pc-folder"
