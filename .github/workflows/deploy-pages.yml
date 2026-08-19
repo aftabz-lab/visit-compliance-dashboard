@@ -32,6 +32,30 @@ jobs:
       - name: Build dashboard or preserve last successful data
         run: python scripts/build.py
 
+      # This makes the workflow safe even during the one-time transition from
+      # the older build.py, which only creates dashboard_data.json. Once the
+      # newer build.py is uploaded, it creates the same files itself.
+      - name: Bootstrap last-good snapshots
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          data_dir = Path("site/data")
+          pairs = (
+              ("dashboard_data.json", "dashboard_data_last_good.json"),
+              ("audit_data.json", "audit_data_last_good.json"),
+          )
+          for current_name, backup_name in pairs:
+              current = data_dir / current_name
+              backup = data_dir / backup_name
+              if current.exists() and current.stat().st_size and not backup.exists():
+                  shutil.copyfile(current, backup)
+                  print(f"Created {backup_name} from {current_name}")
+              elif current.exists():
+                  print(f"Keeping existing {backup_name}")
+          PY
+
       - name: Verify dashboard data
         run: |
           test -f site/index.html
