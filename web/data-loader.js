@@ -1,13 +1,14 @@
 /*
  * Visit Compliance Dashboard data loader
  *
- * STRICT PC RAW-DATA MODE
+ * PC RESPONSE + DASHBOARD VISIT-PLAN MODE
  *
- * The dashboard reads the current workbooks only from the PC folder selected
- * by the user. Repository Excel/JSON files and previously calculated dashboard
- * snapshots are not used as a data source. The browser may remember only the
- * folder handle so it can reopen the same local folder after permission is
- * granted.
+ * The response source is always the Store_Operations_Compliance_Audit_responses
+ * workbook inside the PC folder selected by the user, and only its
+ * "Response Summary" sheet is read. A valid Zonal/RHO visit-plan workbook in
+ * that same folder is used when present. Otherwise the dashboard reuses the
+ * visit-plan assignments already published with the dashboard build. Published
+ * response values are never used in place of the selected PC response file.
  */
 
 const RESPONSE_SHEET = "Response Summary";
@@ -24,10 +25,10 @@ const OFFICER_ALIASES = [
 
 const PC_DB = "visit-compliance-pc-raw-data";
 const PC_DB_VERSION = 1;
-const PC_READER_VERSION = "pc-raw-folder-v7";
+const PC_READER_VERSION = "pc-response-dashboard-plan-v8";
 
 const DEFAULT_DEFINITIONS = Object.freeze({
-  fullMonth: "Total Planned Visits (Full Month) counts every scheduled assignment in the selected PC visit-plan workbook.",
+  fullMonth: "Total Planned Visits (Full Month) counts every scheduled assignment in the current visit plan (local Zonal/RHO workbook when present, otherwise the dashboard visit plan).",
   tillDate: "Total Planned Visits (Till Date) counts scheduled assignments on or before the response snapshot date.",
   accepted: "Accepted Responses counts unique Response Summary rows with Response ID, Date, Site Code and Created By User ID.",
   plannedDate: "Planned-Date Responses match the same officer, outlet code and planned date.",
@@ -46,7 +47,7 @@ function emptyDashboardData() {
       subtitle: "Choose your PC raw-data folder to load the dashboard",
       snapshotDate: null,
       reportMonth: "the selected reporting month",
-      scheduleFile: "No PC schedule workbook selected",
+      scheduleFile: "Dashboard visit plan",
       responseFile: "No PC response workbook selected",
       responseSheet: RESPONSE_SHEET,
       generatedAt: now,
@@ -1213,7 +1214,7 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
       snapshotDate,
       reportMonth,
       scheduleFile: schedule.fileName,
-      scheduleSource: sourceMode === "pc-folder" && schedule.isRaw ? "PC raw-data folder" : "retained local schedule snapshot",
+      scheduleSource: schedule.isRaw ? "selected PC raw-data folder" : "dashboard visit-plan snapshot",
       responseFile: responseFile.name,
       responseSheet: RESPONSE_SHEET,
       supersededFiles: [],
@@ -1309,14 +1310,22 @@ async function findResponseFile(files) {
 }
 
 async function findScheduleFile(files, responseFile) {
-  const candidates = files.filter((file) => file !== responseFile && scheduleFilePriority(file) < 99);
-  const ordered = orderFilesByPriority(candidates, scheduleFilePriority);
-  for (const file of ordered) {
+  // Prefer filenames that clearly look like a visit plan, but also probe the
+  // remaining Excel workbooks for the required Zonal/RHO sheets.  This avoids
+  // rejecting a perfectly valid plan just because the user renamed the file.
+  const all = files.filter((file) => file !== responseFile);
+  const preferred = orderFilesByPriority(
+    all.filter((file) => scheduleFilePriority(file) < 99),
+    scheduleFilePriority,
+  );
+  const remaining = all
+    .filter((file) => scheduleFilePriority(file) >= 99)
+    .sort((a, b) => b.lastModified - a.lastModified || a.name.localeCompare(b.name));
+  for (const file of [...preferred, ...remaining]) {
     try {
       return { file, schedule: await readScheduleWorkbook(file) };
     } catch {
-      // Try the next local visit-plan candidate only. Unrelated workbooks are
-      // intentionally never scanned.
+      // Not a usable Zonal/RHO visit-plan workbook. Try the next workbook.
     }
   }
   return null;
@@ -1330,6 +1339,7 @@ class PcRawDataSource {
     this.currentFolderSignature = "";
     this.savedAt = null;
     this.baseData = null;
+    this.scheduleBaseData = null;
     this.onData = null;
     this.onStatus = null;
     this.watchTimer = null;
@@ -1362,7 +1372,9 @@ class PcRawDataSource {
   }
 
   attach({ baseData, onData, onStatus }) {
-    this.baseData = baseData;
+    // The visible page starts empty until the PC response workbook is read.
+    // Keep a separate published baseline only for reconstructing the visit plan.
+    this.baseData = this.scheduleBaseData || baseData;
     this.onData = onData;
     this.onStatus = onStatus;
     this.bindControls();
@@ -1512,7 +1524,7 @@ class PcRawDataSource {
       // and back every five seconds, which looked like the dashboard was
       // blinking even though nothing had changed.
       if (this.currentData && currentFolderSignature === this.currentFolderSignature) {
-        if (!silent) this.setStatus({ kind: "live", message: "Live from the selected PC raw-data folder. Response Summary only; repository data is ignored." });
+        if (!silent) this.setStatus({ kind: "live", message: "Response live from the selected PC raw-data folder. Only Response Summary is read." });
         return;
       }
 
@@ -1520,13 +1532,13 @@ class PcRawDataSource {
       await browserYield();
       if (!files.length) throw new Error("The selected PC raw-data folder is empty.");
       const responseSource = await findResponseFile(files);
-      this.setStatus({ kind: "reading", message: "Response Summary loaded (" + responseSource.parsed.responses.length.toLocaleString() + " responses). Reading the Zonal/RHO visit plan…" });
+      this.setStatus({ kind: "reading", message: "Response Summary loaded (" + responseSource.parsed.responses.length.toLocaleString() + " responses). Checking for a local Zonal/RHO visit plan…" });
       await browserYield();
       const scheduleSource = await findScheduleFile(files, responseSource.file);
       const signature = fileSignature(responseSource.file) + "|" + (scheduleSource ? fileSignature(scheduleSource.file) : "retained-plan");
       if (signature === this.currentSignature && this.currentData) {
         this.currentFolderSignature = currentFolderSignature;
-        this.setStatus({ kind: "live", message: "Live from the selected PC raw-data folder. Response Summary only; repository data is ignored." });
+        this.setStatus({ kind: "live", message: "Response live from the selected PC raw-data folder. Only Response Summary is read." });
         return;
       }
       this.setStatus({ kind: "reading", message: "Reading Response Summary directly from " + responseSource.file.name + " (answer tabs are skipped)…" });
@@ -1586,11 +1598,17 @@ class PcRawDataSource {
     const responseData = parsedResponse || await readResponseWorkbook(responseFile);
     let schedule;
     if (scheduleFile) {
-      this.setStatus({ kind: "reading", message: "Reading the visit plan after Response Summary was loaded…" });
+      this.setStatus({ kind: "reading", message: "Reading the local Zonal/RHO visit plan after Response Summary was loaded…" });
       schedule = parsedSchedule || await readScheduleWorkbook(scheduleFile);
       schedule.isRaw = true;
     } else {
-      throw new Error("No Visit Schedule workbook was found in the selected PC raw-data folder. Keep the current Visit Schedule workbook in the same folder as the Store_Operations_Compliance_Audit_responses workbook.");
+      // The selected PC folder is required for the response workbook only.
+      // When no plan workbook is present there, reconstruct the current plan
+      // from the dashboard's published schedule snapshot.  No published
+      // response rows are reused; all response KPIs still come from the PC file.
+      this.setStatus({ kind: "reading", message: "No local Visit Schedule workbook found. Using the dashboard visit plan; response data remains live from your selected PC folder…" });
+      schedule = retainedSchedule(this.scheduleBaseData || this.baseData);
+      schedule.isRaw = false;
     }
     const baseline = this.currentData || this.baseData;
     this.setStatus({ kind: "reading", message: "Calculating dashboard from the loaded Response Summary and visit plan…" });
@@ -1602,7 +1620,7 @@ class PcRawDataSource {
     this.sendData(data, source, false, {
       kind: "live",
       message: source === "pc-folder"
-        ? "Live from your selected PC raw-data folder. Only the Response Summary sheet is read."
+        ? "Response live from your selected PC raw-data folder. Only the Response Summary sheet is read."
         : source === "pc-folder-selection"
           ? "Loaded from the selected PC raw-data folder. Use Change folder again whenever the raw files are replaced."
           : "Live from the response workbook selected on your PC. The snapshot is saved in this browser.",
@@ -1630,8 +1648,34 @@ class PcRawDataSource {
   }
 }
 
+async function loadPublishedScheduleBaseline() {
+  // Read the deployed dashboard snapshot only to recover planned assignments.
+  // It is never displayed as response data and never substitutes for the PC
+  // Response Summary workbook.
+  const urls = [
+    "./data/dashboard_data.json?plan=" + encodeURIComponent(PC_READER_VERSION),
+    "./data/dashboard_data_last_good.json?plan=" + encodeURIComponent(PC_READER_VERSION),
+  ];
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) continue;
+      const data = await response.json();
+      // Validate that the snapshot really contains reusable planned visits.
+      retainedSchedule(data);
+      return data;
+    } catch {
+      // Try the last-good published plan next.
+    }
+  }
+  return null;
+}
+
 export async function loadDashboardData() {
   const localSource = new PcRawDataSource();
+  // Load only the published visit-plan skeleton in the background. The page
+  // deliberately remains at zero until a PC Response Summary is selected.
+  localSource.scheduleBaseData = await loadPublishedScheduleBaseline();
   const local = await localSource.initialize();
   if (local) return local;
   return {
@@ -1641,7 +1685,9 @@ export async function loadDashboardData() {
     lastFetched: null,
     localStatus: {
       kind: "idle",
-      message: "Choose your PC raw-data folder. The dashboard will read the local Store_Operations_Compliance_Audit_responses workbook (Response Summary only) and the local Visit Schedule workbook. Repository data is ignored.",
+      message: localSource.scheduleBaseData
+        ? "Choose your PC raw-data folder. The dashboard will read Store_Operations_Compliance_Audit_responses…xlsx from that folder and only its Response Summary sheet. A Visit Schedule workbook is not required in the selected folder."
+        : "Choose your PC raw-data folder. Response Summary will be read from Store_Operations_Compliance_Audit_responses…xlsx. The dashboard visit plan is not available yet, so include a Zonal/RHO visit-plan workbook in the folder for this load.",
     },
     localSource,
   };
@@ -1655,5 +1701,5 @@ export function getDataStatus(result) {
   if (result?.source === "pc-folder") return { type: "pc-folder", text: "Showing a live snapshot from the selected PC raw-data folder." };
   if (result?.source === "pc-folder-selection") return { type: "pc-folder-selection", text: "Showing data loaded from the selected PC raw-data folder." };
   if (result?.source === "pc-file") return { type: "pc-file", text: "Showing a live snapshot from the response workbook selected on this PC." };
-  return { type: "awaiting-local", text: "Choose your PC raw-data folder to load the current local workbooks." };
+  return { type: "awaiting-local", text: "Choose your PC raw-data folder to load the current Response Summary." };
 }
