@@ -236,7 +236,7 @@ async function isResponseWorkbook(file) {
   }
 }
 
-async function readResponseWorkbook(file) {
+async function readResponseWorkbookWithSheetJs(file) {
   const book = await openWorkbook(file, {
     // The source response workbook can contain tens of thousands of answer
     // rows on other tabs.  Parsing those tabs was the reason a refresh could
@@ -288,6 +288,295 @@ async function readResponseWorkbook(file) {
     responses: accepted,
     diagnostics: { duplicateResponseIdsIgnored: duplicateIds, rejectedResponseRows: rejectedRows },
   };
+}
+
+/*
+ * Fast .xlsx response reader
+ *
+ * SheetJS is retained for schedules and legacy .xls/.xlsm files.  A current
+ * response export, however, can contain tens of thousands of rows and many
+ * large answer tabs.  Even when SheetJS is asked for one tab, opening that
+ * workbook can keep the browser on "Reading" for several minutes.
+ *
+ * This reader opens the ZIP directory directly from the selected PC file,
+ * fetches only the four parts needed for Response Summary, and extracts just
+ * the five dashboard columns.  It never reads the answer/detail tabs.
+ */
+const ZIP_EOCD_SIGNATURE = 0x06054b50;
+const ZIP_CENTRAL_SIGNATURE = 0x02014b50;
+const ZIP_LOCAL_SIGNATURE = 0x04034b50;
+const ZIP_METHOD_STORED = 0;
+const ZIP_METHOD_DEFLATE = 8;
+const ZIP_TAIL_BYTES = 1024 * 1024;
+
+function zipDataView(bytes) {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+}
+
+function zipDecode(bytes) {
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
+function zipNormalizePath(path) {
+  return String(path || "").replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function zipEndOfCentralDirectory(bytes) {
+  const view = zipDataView(bytes);
+  for (let index = bytes.length - 22; index >= 0; index -= 1) {
+    if (view.getUint32(index, true) === ZIP_EOCD_SIGNATURE) return index;
+  }
+  throw new Error("The selected .xlsx file is not a valid Excel ZIP workbook.");
+}
+
+function zipXmlDecode(value) {
+  return String(value || "")
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&#x([0-9a-f]+);/gi, (_, value) => String.fromCodePoint(parseInt(value, 16)))
+    .replace(/&#(\d+);/g, (_, value) => String.fromCodePoint(Number(value)))
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&");
+}
+
+function zipXmlAttribute(tag, attribute) {
+  const escaped = String(attribute).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = String(tag).match(new RegExp("(?:^|\\s)" + escaped + '="([^"]*)"', "i"));
+  return match ? zipXmlDecode(match[1]) : "";
+}
+
+function zipTextContent(fragment) {
+  const pieces = [];
+  const textPattern = /<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/gi;
+  let match;
+  while ((match = textPattern.exec(fragment))) pieces.push(match[1]);
+  return zipXmlDecode(pieces.length ? pieces.join("") : String(fragment).replace(/<[^>]+>/g, ""));
+}
+
+class LocalXlsxZip {
+  constructor(file, entries) {
+    this.file = file;
+    this.entries = entries;
+  }
+
+  has(path) {
+    return this.entries.has(zipNormalizePath(path));
+  }
+
+  async bytes(path) {
+    const entry = this.entries.get(zipNormalizePath(path));
+    if (!entry) throw new Error("The selected workbook is missing " + path + ".");
+    if (entry.encrypted) throw new Error("Password-protected Excel files cannot be read by the dashboard.");
+    const headerBytes = new Uint8Array(await this.file.slice(entry.localOffset, entry.localOffset + 30).arrayBuffer());
+    const header = zipDataView(headerBytes);
+    if (headerBytes.byteLength < 30 || header.getUint32(0, true) !== ZIP_LOCAL_SIGNATURE) {
+      throw new Error("The selected workbook has an invalid ZIP entry.");
+    }
+    const nameLength = header.getUint16(26, true);
+    const extraLength = header.getUint16(28, true);
+    const dataStart = entry.localOffset + 30 + nameLength + extraLength;
+    const compressed = new Uint8Array(await this.file.slice(dataStart, dataStart + entry.compressedSize).arrayBuffer());
+    if (entry.method === ZIP_METHOD_STORED) return compressed;
+    if (entry.method !== ZIP_METHOD_DEFLATE || typeof DecompressionStream !== "function") {
+      throw new Error("This .xlsx compression method is not supported by the fast PC reader.");
+    }
+    const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  async text(path) {
+    return zipDecode(await this.bytes(path));
+  }
+}
+
+async function openLocalXlsxZip(file) {
+  if (!/\.xlsx$/i.test(file?.name || "") || typeof DecompressionStream !== "function" || !file?.slice) return null;
+  const tailLength = Math.min(Number(file.size) || 0, ZIP_TAIL_BYTES);
+  if (!tailLength) throw new Error("The selected response workbook is empty.");
+  const tailStart = Math.max(0, file.size - tailLength);
+  const tail = new Uint8Array(await file.slice(tailStart).arrayBuffer());
+  const eocdOffset = zipEndOfCentralDirectory(tail);
+  const eocd = zipDataView(tail);
+  const disk = eocd.getUint16(eocdOffset + 4, true);
+  const centralDisk = eocd.getUint16(eocdOffset + 6, true);
+  const centralSize = eocd.getUint32(eocdOffset + 12, true);
+  const centralOffset = eocd.getUint32(eocdOffset + 16, true);
+  if (disk !== 0 || centralDisk !== 0 || centralOffset === 0xffffffff || centralSize === 0xffffffff) {
+    throw new Error("This ZIP64 or multi-disk Excel file cannot be read by the dashboard.");
+  }
+  const central = new Uint8Array(await file.slice(centralOffset, centralOffset + centralSize).arrayBuffer());
+  const view = zipDataView(central);
+  const entries = new Map();
+  let offset = 0;
+  while (offset + 46 <= central.byteLength && view.getUint32(offset, true) === ZIP_CENTRAL_SIGNATURE) {
+    const flags = view.getUint16(offset + 8, true);
+    const method = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localOffset = view.getUint32(offset + 42, true);
+    const nameStart = offset + 46;
+    const nameEnd = nameStart + nameLength;
+    if (nameEnd > central.byteLength) throw new Error("The Excel ZIP directory is invalid.");
+    const name = zipNormalizePath(zipDecode(central.subarray(nameStart, nameEnd)));
+    entries.set(name, {
+      method,
+      encrypted: Boolean(flags & 0x0001),
+      compressedSize,
+      localOffset,
+    });
+    offset = nameEnd + extraLength + commentLength;
+  }
+  if (!entries.has("xl/workbook.xml") || !entries.has("xl/_rels/workbook.xml.rels")) {
+    throw new Error("The selected file is not a valid .xlsx workbook.");
+  }
+  return new LocalXlsxZip(file, entries);
+}
+
+function responseWorksheetReference(workbookXml, relationshipsXml) {
+  const sheets = [];
+  const sheetPattern = /<sheet\b([^>]*)\/?>(?:<\/sheet>)?/gi;
+  let sheetMatch;
+  while ((sheetMatch = sheetPattern.exec(workbookXml))) {
+    const attributes = sheetMatch[1];
+    sheets.push({
+      name: zipXmlAttribute(attributes, "name"),
+      relationshipId: zipXmlAttribute(attributes, "r:id"),
+    });
+  }
+  const responseSheet = sheets.find((sheet) => nameKey(sheet.name) === nameKey(RESPONSE_SHEET));
+  if (!responseSheet) throw new Error('The selected workbook does not contain the "Response Summary" sheet.');
+  const relationshipPattern = /<Relationship\b([^>]*)\/?>(?:<\/Relationship>)?/gi;
+  let relationshipMatch;
+  while ((relationshipMatch = relationshipPattern.exec(relationshipsXml))) {
+    const attributes = relationshipMatch[1];
+    if (zipXmlAttribute(attributes, "Id") !== responseSheet.relationshipId) continue;
+    const target = zipXmlAttribute(attributes, "Target");
+    if (!target) break;
+    return target.startsWith("/") ? zipNormalizePath(target) : zipNormalizePath("xl/" + target.replace(/^\.\//, ""));
+  }
+  throw new Error('The "Response Summary" worksheet could not be opened.');
+}
+
+function sharedStringValues(sharedStringsXml) {
+  const values = [];
+  const itemPattern = /<si(?:\s[^>]*)?>([\s\S]*?)<\/si>/gi;
+  let match;
+  while ((match = itemPattern.exec(sharedStringsXml))) values.push(zipTextContent(match[1]));
+  return values;
+}
+
+function cellColumn(attributes) {
+  const reference = zipXmlAttribute(attributes, "r");
+  const letters = reference.match(/^([A-Z]+)\d+$/i)?.[1];
+  if (!letters) return -1;
+  return [...letters.toUpperCase()].reduce((total, letter) => total * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+}
+
+function cellValue(attributes, contents, sharedStrings) {
+  const type = zipXmlAttribute(attributes, "t");
+  if (type === "inlineStr") return zipTextContent(contents.match(/<is(?:\s[^>]*)?>([\s\S]*?)<\/is>/i)?.[1] || "");
+  const raw = contents.match(/<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/i)?.[1];
+  if (raw == null) return "";
+  const value = zipXmlDecode(raw);
+  if (type === "s") return sharedStrings[Number(value)] ?? "";
+  if ((!type || type === "n") && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value)) return Number(value);
+  return value;
+}
+
+function worksheetCells(rowContents, sharedStrings, wantedColumns = null) {
+  const cells = new Map();
+  const cellPattern = /<c\b([^>]*)>([\s\S]*?)<\/c>|<c\b([^>]*)\/>/gi;
+  let match;
+  while ((match = cellPattern.exec(rowContents))) {
+    const attributes = match[1] || match[3] || "";
+    const column = cellColumn(attributes);
+    if (column >= 0 && (!wantedColumns || wantedColumns.has(column))) {
+      cells.set(column, cellValue(attributes, match[2] || "", sharedStrings));
+    }
+  }
+  return cells;
+}
+
+function parseFastResponseSummary(sheetXml, sharedStrings) {
+  const rowPattern = /<row\b[^>]*>([\s\S]*?)<\/row>/gi;
+  let headerMap = null;
+  let wantedColumns = null;
+  const accepted = [];
+  const seenIds = new Set();
+  let duplicateIds = 0;
+  let rejectedRows = 0;
+  let rowMatch;
+  while ((rowMatch = rowPattern.exec(sheetXml))) {
+    if (!headerMap) {
+      const header = worksheetCells(rowMatch[1], sharedStrings);
+      headerMap = new Map();
+      header.forEach((value, column) => {
+        const label = cleanText(value);
+        if (label) headerMap.set(label, column);
+      });
+      for (const column of RESPONSE_HEADERS) {
+        if (!headerMap.has(column)) throw new Error('"Response Summary" is missing the "' + column + '" column.');
+      }
+      wantedColumns = new Set([
+        headerMap.get("Response ID"),
+        headerMap.get("Date"),
+        headerMap.get("Site Code"),
+        headerMap.get("Created By User ID"),
+      ]);
+      continue;
+    }
+    const row = worksheetCells(rowMatch[1], sharedStrings, wantedColumns);
+    const responseId = cleanText(row.get(headerMap.get("Response ID")));
+    const responseDate = parseDateOnly(row.get(headerMap.get("Date")));
+    const siteCode = siteKey(row.get(headerMap.get("Site Code")));
+    const officer = cleanText(row.get(headerMap.get("Created By User ID")));
+    if (!responseId && !responseDate && !siteCode && !officer) continue;
+    if (!responseId || !responseDate || !siteCode || !officer) {
+      rejectedRows += 1;
+      continue;
+    }
+    if (seenIds.has(responseId)) {
+      duplicateIds += 1;
+      continue;
+    }
+    seenIds.add(responseId);
+    accepted.push({
+      responseId,
+      responseDate,
+      siteCode,
+      officer,
+      officerNameKey: nameKey(officer),
+      officerLooseKey: looseNameKey(officer),
+    });
+  }
+  if (!headerMap) throw new Error('"Response Summary" is empty.');
+  if (!accepted.length) throw new Error('"Response Summary" has no accepted response rows.');
+  return {
+    responses: accepted,
+    diagnostics: { duplicateResponseIdsIgnored: duplicateIds, rejectedResponseRows: rejectedRows },
+  };
+}
+
+async function readResponseWorkbookFast(file) {
+  const zip = await openLocalXlsxZip(file);
+  if (!zip) return null;
+  const workbookXml = await zip.text("xl/workbook.xml");
+  const relationshipsXml = await zip.text("xl/_rels/workbook.xml.rels");
+  const worksheetPath = responseWorksheetReference(workbookXml, relationshipsXml);
+  const [sheetXml, sharedStringsXml] = await Promise.all([
+    zip.text(worksheetPath),
+    zip.has("xl/sharedStrings.xml") ? zip.text("xl/sharedStrings.xml") : Promise.resolve(""),
+  ]);
+  return parseFastResponseSummary(sheetXml, sharedStringValues(sharedStringsXml));
+}
+
+async function readResponseWorkbook(file) {
+  const fast = await readResponseWorkbookFast(file);
+  return fast || readResponseWorkbookWithSheetJs(file);
 }
 
 async function isScheduleWorkbook(file) {
@@ -911,7 +1200,7 @@ class PcRawDataSource {
         this.setStatus({ kind: "live", message: "Watching the selected PC folder. Only the Response Summary sheet is read." });
         return;
       }
-      this.setStatus({ kind: "reading", message: "Reading " + responseSource.file.name + " from your PC folder…" });
+      this.setStatus({ kind: "reading", message: "Reading Response Summary directly from " + responseSource.file.name + " (answer tabs are skipped)…" });
       await this.applyResponseFile(
         responseSource.file,
         "pc-folder",
@@ -943,7 +1232,7 @@ class PcRawDataSource {
     const responseData = parsedResponse || await readResponseWorkbook(responseFile);
     let schedule;
     if (scheduleFile) {
-      this.setStatus({ kind: "reading", message: "Reading the visit plan and " + responseFile.name + " from your PC folder…" });
+      this.setStatus({ kind: "reading", message: "Reading the visit plan after Response Summary was loaded…" });
       schedule = parsedSchedule || await readScheduleWorkbook(scheduleFile);
       schedule.isRaw = true;
     } else {
