@@ -132,7 +132,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", dir: new Map(), baseDir: new Map(), zoneFile: "", avail: new Map(), availFile: "", stockFile: "", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
+const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), zoneFile: "", avail: new Map(), availFile: "", stockFile: "", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
 
 // Green through amber to red — the same reading at a glance for any manager.
 function tone(v) {
@@ -175,6 +175,50 @@ async function idbDel(store, key) {
 const FIELDS = ["Response ID","Site Code","Question Category","Question Title","Question Max Score","Answer Score","Date"];
 const slim = (rows) => rows.map(r => FIELDS.map(f => r[f]));
 const fatten = (packed) => packed.map(a => Object.fromEntries(FIELDS.map((f, i) => [f, a[i]])));
+
+// These files are generated and committed automatically by scripts/build.py.
+// They make the Audit page work on every browser/device after the raw export has
+// been removed from data/.
+const PUBLISHED_AUDIT_SOURCES = [
+  { url: "data/audit_data.json", source: "published" },
+  { url: "data/audit_data_last_good.json", source: "published-backup" },
+];
+
+function validPublishedAudit(payload) {
+  return payload && Array.isArray(payload.fields)
+    && payload.fields.length === FIELDS.length
+    && payload.fields.every((field, i) => field === FIELDS[i])
+    && Array.isArray(payload.rows)
+    && payload.rows.length > 0
+    && Array.isArray(payload.rows[0]);
+}
+
+async function loadPublishedAudit() {
+  for (const candidate of PUBLISHED_AUDIT_SOURCES) {
+    try {
+      const response = await fetch(`${candidate.url}?_=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      if (!validPublishedAudit(payload)) throw new Error("empty or invalid audit snapshot");
+
+      state.rows = fatten(payload.rows);
+      state.file = payload.metadata?.sourceFile || "Published audit snapshot";
+      state.sig = `published:${candidate.url}:${payload.metadata?.generatedAt || ""}`;
+      state.source = candidate.source;
+      state.savedAt = Date.parse(payload.metadata?.generatedAt || "") || Date.now();
+      state.stale = true;
+      await idbPut("cache", "last", {
+        file: state.file, sig: state.sig, savedAt: state.savedAt, packed: payload.rows,
+      });
+      showLoaded();
+      render();
+      return true;
+    } catch (error) {
+      console.warn(`Audit snapshot unavailable: ${candidate.url}`, error);
+    }
+  }
+  return false;
+}
 
 function setState(html) { $("src-state").innerHTML = html; }
 
@@ -228,15 +272,25 @@ async function readWorkbook(file, { cache = true } = {}) {
   const sheet = wb.SheetNames.find(n => n.trim().toLowerCase() === "answer details") || wb.SheetNames[wb.SheetNames.length - 1];
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { defval: "" });
   if (!rows.length || !("Question Category" in rows[0])) throw new Error(`"${sheet}" is not the Answer Details sheet.`);
-  state.rows = rows; state.file = file.name; state.sig = signature(file); state.stale = false;
+  state.rows = rows; state.file = file.name; state.sig = signature(file); state.source = "local"; state.stale = false;
   if (cache) await idbPut("cache", "last", { file: file.name, sig: state.sig, savedAt: Date.now(), packed: slim(rows) });
   showLoaded();
   render();
 }
 
-function showLoaded() {
-  const when = state.stale && state.savedAt ? `<br><span style="color:#e0a53f">saved copy from ${new Date(state.savedAt).toLocaleString()}</span>` : "";
-  setState(`<span class="pill ${state.stale ? "idle" : "live"}">${state.stale ? "saved copy" : "live"}</span><br><b>${esc(state.file)}</b><br>${state.rows.length.toLocaleString()} answers${when}`);
+function sourceDisplay() {
+  if (state.source === "published") return { label: "published snapshot", live: false };
+  if (state.source === "published-backup") return { label: "published backup", live: false };
+  if (state.source === "cache" || state.stale) return { label: "saved copy", live: false };
+  return { label: "live", live: true };
+}
+
+function showLoaded(note = "") {
+  const source = sourceDisplay();
+  const when = !source.live && state.savedAt
+    ? `<br><span style="color:#e0a53f">snapshot from ${new Date(state.savedAt).toLocaleString()}</span>` : "";
+  const extra = note ? `<br><span style="color:#e0a53f">${esc(note)}</span>` : "";
+  setState(`<span class="pill ${source.live ? "live" : "idle"}">${source.label}</span><br><b>${esc(state.file)}</b><br>${state.rows.length.toLocaleString()} answers${when}${extra}`);
 }
 
 // Re-checks the chosen folder and follows whatever is there now: a new file, a
@@ -258,11 +312,17 @@ async function syncFolder({ silent = true } = {}) {
     for (const file of ordered) { if (await isAuditWorkbook(file)) { chosen = file; break; } }
 
     if (!chosen) {
-      if (state.rows.length || !silent) {
-        state.rows = []; state.sig = ""; state.file = "";
-        await idbDel("cache", "last");
-        setState(`<span class="pill idle">no match</span><br>${candidates.length ? `No workbook in that folder has an <b>Answer Details</b> sheet (checked ${candidates.length}).` : "No Excel file in the chosen folder."}`);
+      const reason = candidates.length
+        ? `No current workbook in this folder has an Answer Details sheet (checked ${candidates.length}).`
+        : "The raw data folder is empty.";
+      if (state.rows.length) {
+        // Removing/replacing raw files must never erase the last displayed audit
+        // result.  The next valid file will still replace it automatically.
+        state.stale = true;
+        showLoaded(`Showing the retained data. ${reason}`);
         render();
+      } else if (!silent) {
+        setState(`<span class="pill idle">no match</span><br>${esc(reason)}`);
       }
       return;
     }
@@ -1208,12 +1268,15 @@ $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; st
   const cached = await idbGet("cache", "last");
   if (cached?.packed?.length) {
     state.rows = fatten(cached.packed); state.file = cached.file;
-    state.sig = cached.sig; state.savedAt = cached.savedAt; state.stale = true;
+    state.sig = cached.sig; state.source = "cache"; state.savedAt = cached.savedAt; state.stale = true;
     showLoaded(); render();
   } else {
     setState(`<span class="pill idle">no folder</span><br>Choose the folder holding the survey export. It is remembered from then on.`);
   }
-  // 2. Reconnect to the remembered folder and follow any change to it.
+  // 2. Use the server-side snapshot when one has been published.  This is what
+  // lets the link open with data in a new browser after the raw folder is empty.
+  await loadPublishedAudit();
+  // 3. Reconnect to the remembered folder and follow any change to it.
   loadDirectory();
   const availCache = await idbGet("cache", "avail");
   // An entry from an older build has no "actual" count; drop it and re-read the
