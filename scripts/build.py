@@ -24,6 +24,7 @@ SCHEDULE_SCHEMAS = [
     {"sheet": "Zonal", "status": "Zonal", "officer_header": "Zonal HR Name"},
     {"sheet": "RHO", "status": "RHO", "officer_header": "Regional Head HR Name"},
 ]
+RESPONSE_SHEET = "Response Summary"
 RESPONSE_HEADERS = ["Response ID", "Date", "Time", "Site Code", "Created By User ID"]
 
 # The Audit page intentionally publishes only the fields it needs to score and
@@ -178,21 +179,32 @@ def static_header_set(row: list[object]) -> set[str]:
     return {normalize_text(v) for v in row if normalize_text(v)}
 
 
-def workbook_role(book: XlsxWorkbook) -> str:
-    schedule_ok = True
+def is_schedule_workbook(book: XlsxWorkbook) -> bool:
     for schema in SCHEDULE_SCHEMAS:
         if schema["sheet"] not in book.sheets:
-            schedule_ok = False
-            break
+            return False
         headers = static_header_set(book.first_row(schema["sheet"]))
         required = {"SL", "CODE", "Outlet Name", schema["officer_header"]}
         if not required.issubset(headers):
-            schedule_ok = False
-            break
-    response_ok = False
-    if "Response Summary" in book.sheets:
-        headers = static_header_set(book.first_row("Response Summary"))
-        response_ok = set(RESPONSE_HEADERS).issubset(headers)
+            return False
+    return True
+
+
+def is_response_workbook(book: XlsxWorkbook) -> bool:
+    """Identify the response export without relying on its file name.
+
+    Only the worksheet named ``Response Summary`` is inspected.  Other sheets
+    in the workbook are deliberately ignored for Visit Compliance calculations.
+    """
+    if RESPONSE_SHEET not in book.sheets:
+        return False
+    headers = static_header_set(book.first_row(RESPONSE_SHEET))
+    return set(RESPONSE_HEADERS).issubset(headers)
+
+
+def workbook_role(book: XlsxWorkbook) -> str:
+    schedule_ok = is_schedule_workbook(book)
+    response_ok = is_response_workbook(book)
     if schedule_ok and response_ok:
         return "both"
     if schedule_ok:
@@ -203,6 +215,10 @@ def workbook_role(book: XlsxWorkbook) -> str:
 
 
 DATE_IN_NAME = re.compile(r"(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})")
+
+
+class IncompleteInputError(RuntimeError):
+    """Raised when no complete, current schedule/response pair is available."""
 
 
 def _recency_key(path: Path):
@@ -224,7 +240,7 @@ def _recency_key(path: Path):
 
 def _pick_latest(paths: list[Path], role: str) -> tuple[Path, list[Path]]:
     if not paths:
-        raise RuntimeError(
+        raise IncompleteInputError(
             f"No {role} workbook found in data/. Check that the file still has its "
             f"expected sheets and column headers."
         )
@@ -237,8 +253,11 @@ def discover_inputs() -> tuple[Path, Path, list[str]]:
         p for p in DATA_DIR.iterdir()
         if p.is_file() and not p.name.startswith("~$") and p.suffix.lower() in {".xlsx", ".xlsm"}
     )
-    if len(files) < 2:
-        raise RuntimeError(f"Put the schedule workbook and response workbook in data/. Found only {len(files)} Excel file(s).")
+    if not files:
+        raise IncompleteInputError(
+            "A fresh build needs a schedule workbook and a response workbook. "
+            "No Excel files were found."
+        )
     classified: list[tuple[Path, str]] = []
     for path in files:
         try:
@@ -248,22 +267,25 @@ def discover_inputs() -> tuple[Path, Path, list[str]]:
             finally:
                 book.close()
         except (zipfile.BadZipFile, KeyError, ET.ParseError) as exc:
-            raise RuntimeError(f"Cannot read {path.name} as a supported .xlsx/.xlsm workbook: {exc}") from exc
+            # An unrelated or incomplete Excel upload must never erase the
+            # published dashboard.  Ignore it and retain the last good output.
+            print(f"note: ignoring unreadable Excel file {path.name}: {exc}")
+            classified.append((path, "unknown"))
+            continue
         classified.append((path, role))
 
     schedule_candidates = [p for p, role in classified if role in {"schedule", "both"}]
     response_candidates = [p for p, role in classified if role in {"responses", "both"}]
 
     schedule, older_schedules = _pick_latest(schedule_candidates, "schedule")
-    responses, older_responses = _pick_latest(response_candidates, "response")
+    responses, older_responses = _pick_latest(
+        response_candidates,
+        f"response (must contain the exact '{RESPONSE_SHEET}' sheet)",
+    )
 
-    if schedule == responses:
-        detail = "\n".join(f"  {p.name}: {role}" for p, role in classified)
-        raise RuntimeError(
-            "The same workbook was identified as both the schedule and the response file.\n" + detail
-        )
-
-    superseded = [p.name for p in older_schedules + older_responses]
+    # A combined workbook is valid: schedule rows come only from Zonal/RHO,
+    # while response rows come only from the exact Response Summary sheet.
+    superseded = list(dict.fromkeys(p.name for p in older_schedules + older_responses))
     for name in superseded:
         print(f"note: ignoring older workbook {name}")
     return schedule, responses, superseded
@@ -373,6 +395,43 @@ def restore_audit_assets(assets: dict[str, bytes]) -> None:
         (target_dir / filename).write_bytes(content)
 
 
+def preserve_published_snapshots(audit_snapshot: dict | None, reason: str) -> None:
+    """Refresh web assets without ever replacing a last successful snapshot.
+
+    This is intentionally used not only when the raw folder is empty, but also
+    when one of the two required inputs has been deleted or an unrelated Excel
+    workbook has been uploaded.  A partial raw upload must not blank the live
+    dashboard.
+    """
+    existing_data = SITE_DIR / "data" / "dashboard_data.json"
+    if not existing_data.exists() or not existing_data.stat().st_size:
+        raise RuntimeError(
+            f"{reason} There is no previous site/data/dashboard_data.json yet. "
+            "Run one successful build with the schedule workbook and a response workbook "
+            f"containing the '{RESPONSE_SHEET}' sheet first."
+        )
+
+    # Refresh the application files (including the snapshot-status box) while
+    # deliberately retaining site/data from the prior successful calculation.
+    shutil.copytree(WEB_DIR, SITE_DIR, dirs_exist_ok=True)
+    site_data = SITE_DIR / "data"
+    site_data.mkdir(parents=True, exist_ok=True)
+    ensure_last_good_copy(
+        site_data / "dashboard_data.json",
+        site_data / "dashboard_data_last_good.json",
+    )
+    if audit_snapshot is not None:
+        write_json(site_data / "audit_data.json", audit_snapshot)
+        write_json(site_data / "audit_data_last_good.json", audit_snapshot)
+    else:
+        ensure_last_good_copy(
+            site_data / "audit_data.json",
+            site_data / "audit_data_last_good.json",
+        )
+    (SITE_DIR / ".nojekyll").write_text("", encoding="utf-8")
+    print(f"{reason} Keeping the last successfully generated dashboard and Audit snapshots.")
+
+
 def parse_schedule(path: Path, planned_values: list[str]) -> tuple[list[dict], dict[str, dict]]:
     planned_set = {name_key(v) for v in planned_values}
     book = XlsxWorkbook(path)
@@ -453,14 +512,17 @@ def parse_responses(path: Path, acceptance: dict) -> tuple[list[dict], dict]:
     duplicate_ids = 0
     rejected = 0
     try:
-        rows = book.iter_rows("Response Summary")
+        # Never scan any other sheet from the response workbook.  The export
+        # filename may change every month; the exact Response Summary tab is
+        # the stable and only accepted Visit Compliance source.
+        rows = book.iter_rows(RESPONSE_SHEET)
         header = next(rows, None)
         if not header:
-            raise RuntimeError("Response Summary is empty.")
+            raise RuntimeError(f"{RESPONSE_SHEET} is empty.")
         header_map = {normalize_text(v): i for i, v in enumerate(header) if normalize_text(v)}
         for required in RESPONSE_HEADERS:
             if required not in header_map:
-                raise RuntimeError(f"Response Summary is missing header: {required}")
+                raise RuntimeError(f"{RESPONSE_SHEET} is missing header: {required}")
         for row in rows:
             def get(header_name: str):
                 i = header_map[header_name]
@@ -731,43 +793,16 @@ def main() -> None:
     )
     audit_snapshot = discover_audit_snapshot(raw_workbooks)
 
-    if len(raw_workbooks) < 2:
-        existing_data = SITE_DIR / "data" / "dashboard_data.json"
-
-        if not existing_data.exists():
-            raise RuntimeError(
-                "No raw Excel files were found and there is no previous "
-                "site/data/dashboard_data.json yet. Run one successful "
-                "build with the raw Excel files present first."
-            )
-
-        # Refresh static files but deliberately preserve the existing generated
-        # snapshots.  This is the path used after the raw files are deleted.
-        shutil.copytree(WEB_DIR, SITE_DIR, dirs_exist_ok=True)
-        site_data = SITE_DIR / "data"
-        site_data.mkdir(parents=True, exist_ok=True)
-        ensure_last_good_copy(
-            site_data / "dashboard_data.json",
-            site_data / "dashboard_data_last_good.json",
-        )
-        if audit_snapshot is not None:
-            write_json(site_data / "audit_data.json", audit_snapshot)
-            write_json(site_data / "audit_data_last_good.json", audit_snapshot)
-        else:
-            ensure_last_good_copy(
-                site_data / "audit_data.json",
-                site_data / "audit_data_last_good.json",
-            )
-        (SITE_DIR / ".nojekyll").write_text("", encoding="utf-8")
-
-        print(
-            "No raw Excel files found. Keeping the last successfully "
-            "generated dashboard and Audit snapshots."
-        )
+    # Fresh calculation is permitted only when both sources are available:
+    # a valid schedule workbook and a workbook with the exact Response Summary
+    # sheet.  Any incomplete raw-folder state keeps the last good snapshot.
+    try:
+        schedule_path, response_path, superseded_files = discover_inputs()
+    except IncompleteInputError as exc:
+        preserve_published_snapshots(audit_snapshot, str(exc))
         return
 
-    # Fresh raw workbooks exist: perform the normal calculation.
-    schedule_path, response_path, superseded_files = discover_inputs()
+    # Fresh raw inputs exist: perform the normal calculation.
     assignments, outlet_directory = parse_schedule(schedule_path, cfg.get("plannedValues", ["yes"]))
     parsed_responses, response_diagnostics = parse_responses(response_path, cfg.get("responseAcceptance", {}))
     resolved_responses, officer_dimension, resolution_counts = resolve_responses(parsed_responses, assignments, aliases)
@@ -783,6 +818,7 @@ def main() -> None:
     first_plan_date = min(a["plannedDate"] for a in assignments)
     report_month = datetime.strptime(first_plan_date, "%Y-%m-%d").strftime("%B %Y")
     unmapped_names = sorted({r["officer"] for r in responses if r["resolutionMethod"] == "unmapped"}, key=str.casefold)
+    snapshot_taken_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     output = {
         "metadata": {
@@ -795,8 +831,12 @@ def main() -> None:
             "reportMonth": report_month,
             "scheduleFile": schedule_path.name,
             "responseFile": response_path.name,
+            "responseSheet": RESPONSE_SHEET,
             "supersededFiles": superseded_files,
-            "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            # Preserve this exact instant with the saved JSON.  The dashboard
+            # displays it in the Data Source panel as the last snapshot taken.
+            "generatedAt": snapshot_taken_at,
+            "snapshotTakenAt": snapshot_taken_at,
             "includeUnmappedInVisibleOfficerKpi": bool(cfg.get("includeUnmappedInVisibleOfficerKpi", False)),
             "diagnostics": {
                 "fullMonthAssignments": len(assignments),
