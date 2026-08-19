@@ -248,7 +248,54 @@ def _pick_latest(paths: list[Path], role: str) -> tuple[Path, list[Path]]:
     return ordered[0], ordered[1:]
 
 
-def discover_inputs() -> tuple[Path, Path, list[str]]:
+def response_sheet_freshness(path: Path) -> tuple[str, int]:
+    """Return the latest actual response date and populated row count.
+
+    Response export filenames are not reliable: users commonly upload a new
+    workbook with a generic name alongside an older file whose filename has a
+    date.  Select the source from the exact ``Response Summary`` contents so
+    the latest data wins regardless of the filename.
+    """
+    book = XlsxWorkbook(path)
+    try:
+        rows = book.iter_rows(RESPONSE_SHEET)
+        header = next(rows, None)
+        if not header:
+            return "", 0
+        header_map = {normalize_text(value): index for index, value in enumerate(header) if normalize_text(value)}
+        date_index = header_map.get("Date")
+        latest_response_date = ""
+        populated_rows = 0
+        for row in rows:
+            if not any(normalize_text(value) for value in row):
+                continue
+            populated_rows += 1
+            raw_date = row[date_index] if date_index is not None and date_index < len(row) else None
+            response_date = parse_date_only(raw_date, date_1904=book.date_1904)
+            if response_date and response_date > latest_response_date:
+                latest_response_date = response_date
+        return latest_response_date, populated_rows
+    finally:
+        book.close()
+
+
+def _response_freshness_key(path: Path):
+    latest_response_date, populated_rows = response_sheet_freshness(path)
+    # The file name is deliberately only the final tie-breaker.  Actual latest
+    # response date and response volume define which source is the freshest.
+    return latest_response_date, populated_rows, path.stat().st_mtime, path.name
+
+
+def _pick_freshest_response(paths: list[Path]) -> tuple[Path, list[Path]]:
+    if not paths:
+        raise IncompleteInputError(
+            f"No response workbook found in data/. Check that the file still has the exact '{RESPONSE_SHEET}' sheet and required headers."
+        )
+    ordered = sorted(paths, key=_response_freshness_key, reverse=True)
+    return ordered[0], ordered[1:]
+
+
+def discover_inputs() -> tuple[Path | None, Path, list[str]]:
     files = sorted(
         p for p in DATA_DIR.iterdir()
         if p.is_file() and not p.name.startswith("~$") and p.suffix.lower() in {".xlsx", ".xlsm"}
@@ -277,11 +324,13 @@ def discover_inputs() -> tuple[Path, Path, list[str]]:
     schedule_candidates = [p for p, role in classified if role in {"schedule", "both"}]
     response_candidates = [p for p, role in classified if role in {"responses", "both"}]
 
-    schedule, older_schedules = _pick_latest(schedule_candidates, "schedule")
-    responses, older_responses = _pick_latest(
-        response_candidates,
-        f"response (must contain the exact '{RESPONSE_SHEET}' sheet)",
-    )
+    responses, older_responses = _pick_freshest_response(response_candidates)
+    schedule: Path | None = None
+    older_schedules: list[Path] = []
+    if schedule_candidates:
+        schedule, older_schedules = _pick_latest(schedule_candidates, "schedule")
+    else:
+        print("note: no raw schedule workbook found; a valid retained schedule snapshot will be used when available")
 
     # A combined workbook is valid: schedule rows come only from Zonal/RHO,
     # while response rows come only from the exact Response Summary sheet.
@@ -430,6 +479,96 @@ def preserve_published_snapshots(audit_snapshot: dict | None, reason: str) -> No
         )
     (SITE_DIR / ".nojekyll").write_text("", encoding="utf-8")
     print(f"{reason} Keeping the last successfully generated dashboard and Audit snapshots.")
+
+
+def load_retained_schedule() -> tuple[list[dict], dict[str, dict], str]:
+    """Reuse the last saved plan when only a fresh response file is uploaded.
+
+    The published dashboard already stores every officer/outlet/date assignment
+    in its detail payload.  This lets a new ``Response Summary`` workbook
+    refresh the dashboard even after the raw schedule workbook has been
+    removed, while still preserving the prior snapshot when no response file is
+    available at all.
+    """
+    snapshot_path = SITE_DIR / "data" / "dashboard_data.json"
+    if not snapshot_path.exists() or not snapshot_path.stat().st_size:
+        raise IncompleteInputError(
+            "No raw schedule workbook was found and there is no saved schedule snapshot yet. "
+            "Upload the schedule workbook once together with a response workbook."
+        )
+    try:
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise IncompleteInputError(f"Could not read the saved schedule snapshot: {exc}") from exc
+
+    officer_by_key = {
+        normalize_text(row.get("officerKey")): row
+        for row in snapshot.get("officers", [])
+        if isinstance(row, dict) and normalize_text(row.get("officerKey"))
+    }
+    details = snapshot.get("details")
+    if not officer_by_key or not isinstance(details, dict):
+        raise IncompleteInputError("The saved dashboard does not contain a reusable schedule snapshot.")
+
+    outlet_dir: dict[str, dict] = {}
+    for raw_site_code, raw_entry in snapshot.get("outlets", {}).items():
+        entry = raw_entry if isinstance(raw_entry, dict) else {}
+        site_code = site_key(entry.get("siteCode") or raw_site_code)
+        if not site_code:
+            continue
+        outlet_dir[site_code] = {
+            "siteCode": site_code,
+            "outletName": normalize_text(entry.get("outletName")),
+            "rhoName": normalize_text(entry.get("rhoName")),
+            "zonalName": normalize_text(entry.get("zonalName")),
+        }
+
+    assignments: list[dict] = []
+    seen: set[str] = set()
+    for officer_key, detail in details.items():
+        officer_record = officer_by_key.get(normalize_text(officer_key))
+        if not officer_record or not isinstance(detail, dict):
+            continue
+        status = normalize_text(officer_record.get("status"))
+        officer = normalize_text(officer_record.get("officer"))
+        if not status or not officer:
+            continue
+        for planned in detail.get("planned", []):
+            if not isinstance(planned, dict):
+                continue
+            site_code = site_key(planned.get("siteCode"))
+            planned_date = parse_date_only(planned.get("plannedDate"))
+            outlet_name = normalize_text(planned.get("outletName"))
+            if not site_code or not planned_date:
+                continue
+            assignment_key = f"{status.casefold()}::{name_key(officer)}|{site_code}|{planned_date}"
+            if assignment_key in seen:
+                continue
+            seen.add(assignment_key)
+            assignments.append({
+                "status": status,
+                "officer": officer,
+                "officerNameKey": name_key(officer),
+                "officerLooseKey": loose_name_key(officer),
+                "siteCode": site_code,
+                "outletName": outlet_name,
+                "plannedDate": planned_date,
+            })
+            entry = outlet_dir.setdefault(
+                site_code,
+                {"siteCode": site_code, "outletName": "", "rhoName": "", "zonalName": ""},
+            )
+            if outlet_name and not entry["outletName"]:
+                entry["outletName"] = outlet_name
+            if status == "RHO" and officer and not entry["rhoName"]:
+                entry["rhoName"] = officer
+            if status == "Zonal" and officer and not entry["zonalName"]:
+                entry["zonalName"] = officer
+
+    if not assignments:
+        raise IncompleteInputError("The saved dashboard contains no reusable planned visits.")
+    schedule_file = normalize_text(snapshot.get("metadata", {}).get("scheduleFile")) or "Retained dashboard schedule"
+    return assignments, outlet_dir, schedule_file
 
 
 def parse_schedule(path: Path, planned_values: list[str]) -> tuple[list[dict], dict[str, dict]]:
@@ -793,29 +932,45 @@ def main() -> None:
     )
     audit_snapshot = discover_audit_snapshot(raw_workbooks)
 
-    # Fresh calculation is permitted only when both sources are available:
-    # a valid schedule workbook and a workbook with the exact Response Summary
-    # sheet.  Any incomplete raw-folder state keeps the last good snapshot.
+    # A valid Response Summary workbook always starts a refresh.  When the raw
+    # schedule workbook is still present it is used directly; otherwise the
+    # saved schedule snapshot is reused for the same report month.
     try:
         schedule_path, response_path, superseded_files = discover_inputs()
     except IncompleteInputError as exc:
         preserve_published_snapshots(audit_snapshot, str(exc))
         return
 
-    # Fresh raw inputs exist: perform the normal calculation.
-    assignments, outlet_directory = parse_schedule(schedule_path, cfg.get("plannedValues", ["yes"]))
+    if schedule_path is not None:
+        assignments, outlet_directory = parse_schedule(schedule_path, cfg.get("plannedValues", ["yes"]))
+        schedule_file = schedule_path.name
+        schedule_source = "raw workbook"
+    else:
+        try:
+            assignments, outlet_directory, schedule_file = load_retained_schedule()
+        except IncompleteInputError as exc:
+            preserve_published_snapshots(audit_snapshot, str(exc))
+            return
+        schedule_source = "retained dashboard snapshot"
+
     parsed_responses, response_diagnostics = parse_responses(response_path, cfg.get("responseAcceptance", {}))
     resolved_responses, officer_dimension, resolution_counts = resolve_responses(parsed_responses, assignments, aliases)
     if not resolved_responses:
         raise RuntimeError("No accepted response rows were found.")
     max_response_date = max(r["responseDate"] for r in resolved_responses)
+    first_plan_date = min(a["plannedDate"] for a in assignments)
+    if schedule_path is None and max_response_date[:7] != first_plan_date[:7]:
+        preserve_published_snapshots(
+            audit_snapshot,
+            "The new response workbook is for a different month than the retained schedule snapshot.",
+        )
+        return
     snapshot_date = cfg.get("snapshotDateOverride") or max_response_date
     snapshot_date = parse_date_only(snapshot_date)
     if not snapshot_date:
         raise RuntimeError("Could not determine a valid response snapshot date.")
     officers, details, responses, due, completed_keys = calculate(assignments, resolved_responses, officer_dimension, snapshot_date)
     outlet_directory = attach_last_visits(outlet_directory, responses, officer_dimension)
-    first_plan_date = min(a["plannedDate"] for a in assignments)
     report_month = datetime.strptime(first_plan_date, "%Y-%m-%d").strftime("%B %Y")
     unmapped_names = sorted({r["officer"] for r in responses if r["resolutionMethod"] == "unmapped"}, key=str.casefold)
     snapshot_taken_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -829,7 +984,8 @@ def main() -> None:
             "surveyReportHint": cfg.get("surveyReportHint", ""),
             "snapshotDate": snapshot_date,
             "reportMonth": report_month,
-            "scheduleFile": schedule_path.name,
+            "scheduleFile": schedule_file,
+            "scheduleSource": schedule_source,
             "responseFile": response_path.name,
             "responseSheet": RESPONSE_SHEET,
             "supersededFiles": superseded_files,
