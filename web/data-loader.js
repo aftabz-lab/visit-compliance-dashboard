@@ -22,6 +22,7 @@ const OFFICER_ALIASES = [
 
 const PC_DB = "visit-compliance-pc-raw-data";
 const PC_DB_VERSION = 1;
+const PC_READER_VERSION = "pc-fast-v5";
 
 const DEFAULT_DEFINITIONS = Object.freeze({
   fullMonth: "Total Planned Visits (Full Month) counts every scheduled assignment in the selected PC visit-plan workbook.",
@@ -135,14 +136,22 @@ function isoDate(year, month, day) {
   return String(y) + "-" + pad2(m) + "-" + pad2(d);
 }
 
-function parseDateOnly(value) {
+function excelSerialToIso(value, date1904 = false) {
+  const serial = Number(value);
+  if (!Number.isFinite(serial)) return null;
+  const epoch = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 30);
+  const probe = new Date(epoch + serial * 86400000);
+  if (Number.isNaN(probe.getTime())) return null;
+  return isoDate(probe.getUTCFullYear(), probe.getUTCMonth() + 1, probe.getUTCDate());
+}
+
+function parseDateOnly(value, date1904 = false) {
   if (value == null || value === "") return null;
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return isoDate(value.getFullYear(), value.getMonth() + 1, value.getDate());
   }
-  if (typeof value === "number" && Number.isFinite(value) && globalThis.XLSX?.SSF?.parse_date_code) {
-    const parsed = globalThis.XLSX.SSF.parse_date_code(value);
-    if (parsed) return isoDate(parsed.y, parsed.m, parsed.d);
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return excelSerialToIso(value, date1904);
   }
   const text = cleanText(value);
   if (!text) return null;
@@ -318,7 +327,14 @@ function zipDecode(bytes) {
 }
 
 function zipNormalizePath(path) {
-  return String(path || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  const parts = String(path || "").replace(/\\/g, "/").split("/");
+  const clean = [];
+  for (const part of parts) {
+    if (!part || part === ".") continue;
+    if (part === "..") clean.pop();
+    else clean.push(part);
+  }
+  return clean.join("/");
 }
 
 function zipEndOfCentralDirectory(bytes) {
@@ -365,7 +381,7 @@ class LocalXlsxZip {
     return this.entries.has(zipNormalizePath(path));
   }
 
-  async bytes(path) {
+  async stream(path) {
     const entry = this.entries.get(zipNormalizePath(path));
     if (!entry) throw new Error("The selected workbook is missing " + path + ".");
     if (entry.encrypted) throw new Error("Password-protected Excel files cannot be read by the dashboard.");
@@ -377,13 +393,16 @@ class LocalXlsxZip {
     const nameLength = header.getUint16(26, true);
     const extraLength = header.getUint16(28, true);
     const dataStart = entry.localOffset + 30 + nameLength + extraLength;
-    const compressed = new Uint8Array(await this.file.slice(dataStart, dataStart + entry.compressedSize).arrayBuffer());
-    if (entry.method === ZIP_METHOD_STORED) return compressed;
+    const rawStream = this.file.slice(dataStart, dataStart + entry.compressedSize).stream();
+    if (entry.method === ZIP_METHOD_STORED) return rawStream;
     if (entry.method !== ZIP_METHOD_DEFLATE || typeof DecompressionStream !== "function") {
       throw new Error("This .xlsx compression method is not supported by the fast PC reader.");
     }
-    const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-    return new Uint8Array(await new Response(stream).arrayBuffer());
+    return rawStream.pipeThrough(new DecompressionStream("deflate-raw"));
+  }
+
+  async bytes(path) {
+    return new Uint8Array(await new Response(await this.stream(path)).arrayBuffer());
   }
 
   async text(path) {
@@ -436,29 +455,159 @@ async function openLocalXlsxZip(file) {
   return new LocalXlsxZip(file, entries);
 }
 
-function responseWorksheetReference(workbookXml, relationshipsXml) {
-  const sheets = [];
-  const sheetPattern = /<sheet\b([^>]*)\/?>(?:<\/sheet>)?/gi;
-  let sheetMatch;
-  while ((sheetMatch = sheetPattern.exec(workbookXml))) {
-    const attributes = sheetMatch[1];
-    sheets.push({
-      name: zipXmlAttribute(attributes, "name"),
-      relationshipId: zipXmlAttribute(attributes, "r:id"),
-    });
-  }
-  const responseSheet = sheets.find((sheet) => nameKey(sheet.name) === nameKey(RESPONSE_SHEET));
-  if (!responseSheet) throw new Error('The selected workbook does not contain the "Response Summary" sheet.');
+function workbookSheetReferences(workbookXml, relationshipsXml) {
+  const relationships = new Map();
   const relationshipPattern = /<Relationship\b([^>]*)\/?>(?:<\/Relationship>)?/gi;
   let relationshipMatch;
   while ((relationshipMatch = relationshipPattern.exec(relationshipsXml))) {
     const attributes = relationshipMatch[1];
-    if (zipXmlAttribute(attributes, "Id") !== responseSheet.relationshipId) continue;
+    const id = zipXmlAttribute(attributes, "Id");
     const target = zipXmlAttribute(attributes, "Target");
-    if (!target) break;
-    return target.startsWith("/") ? zipNormalizePath(target) : zipNormalizePath("xl/" + target.replace(/^\.\//, ""));
+    if (id && target) relationships.set(id, target);
   }
-  throw new Error('The "Response Summary" worksheet could not be opened.');
+  const sheets = new Map();
+  const sheetPattern = /<sheet\b([^>]*)\/?>(?:<\/sheet>)?/gi;
+  let sheetMatch;
+  while ((sheetMatch = sheetPattern.exec(workbookXml))) {
+    const attributes = sheetMatch[1];
+    const name = zipXmlAttribute(attributes, "name");
+    const relationshipId = zipXmlAttribute(attributes, "r:id");
+    const target = relationships.get(relationshipId);
+    if (!name || !target) continue;
+    const path = target.startsWith("/") ? zipNormalizePath(target) : zipNormalizePath("xl/" + target.replace(/^\.\//, ""));
+    sheets.set(nameKey(name), { name, path });
+  }
+  return sheets;
+}
+
+function workbookUses1904Dates(workbookXml) {
+  const tag = workbookXml.match(/<workbookPr\b([^>]*)\/?>(?:<\/workbookPr>)?/i)?.[1] || "";
+  const value = zipXmlAttribute(tag, "date1904");
+  return /^(?:1|true)$/i.test(value);
+}
+
+function sharedStringToken(value) {
+  return value && typeof value === "object" && Number.isInteger(value.sharedIndex) ? value.sharedIndex : null;
+}
+
+function tokenValue(attributes, contents) {
+  const type = zipXmlAttribute(attributes, "t");
+  if (type === "inlineStr") return zipTextContent(contents.match(/<is(?:\s[^>]*)?>([\s\S]*?)<\/is>/i)?.[1] || "");
+  const raw = contents.match(/<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/i)?.[1];
+  if (raw == null) return "";
+  const value = zipXmlDecode(raw);
+  if (type === "s") return { sharedIndex: Number(value) };
+  if ((!type || type === "n") && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value)) return Number(value);
+  return value;
+}
+
+function worksheetCellTokens(rowContents, wantedColumns = null) {
+  const cells = new Map();
+  const cellPattern = /<c\b([^>]*)>([\s\S]*?)<\/c>|<c\b([^>]*)\/>/gi;
+  let match;
+  while ((match = cellPattern.exec(rowContents))) {
+    const attributes = match[1] || match[3] || "";
+    const column = cellColumn(attributes);
+    if (column >= 0 && (!wantedColumns || wantedColumns.has(column))) {
+      cells.set(column, tokenValue(attributes, match[2] || ""));
+    }
+  }
+  return cells;
+}
+
+function collectSharedIndices(cells, target) {
+  cells.forEach((value) => {
+    const index = sharedStringToken(value);
+    if (index != null && index >= 0) target.add(index);
+  });
+}
+
+function resolveToken(value, sharedStrings) {
+  const index = sharedStringToken(value);
+  return index == null ? value : (sharedStrings.get(index) ?? "");
+}
+
+async function readSharedStringsForIndices(zip, indices) {
+  const wanted = new Set([...indices].filter((value) => Number.isInteger(value) && value >= 0));
+  const resolved = new Map();
+  if (!wanted.size) return resolved;
+  if (!zip.has("xl/sharedStrings.xml")) throw new Error("The Excel workbook references shared strings but has no sharedStrings.xml file.");
+
+  const reader = (await zip.stream("xl/sharedStrings.xml")).getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let itemIndex = 0;
+  let done = false;
+  try {
+    while (!done && resolved.size < wanted.size) {
+      const chunk = await reader.read();
+      done = chunk.done;
+      if (chunk.value) buffer += decoder.decode(chunk.value, { stream: !done });
+      if (done) buffer += decoder.decode();
+
+      while (true) {
+        const start = buffer.indexOf("<si");
+        if (start < 0) {
+          if (buffer.length > 32) buffer = buffer.slice(-32);
+          break;
+        }
+        const openEnd = buffer.indexOf(">", start);
+        if (openEnd < 0) {
+          if (start > 0) buffer = buffer.slice(start);
+          break;
+        }
+        const close = buffer.indexOf("</si>", openEnd + 1);
+        if (close < 0) {
+          if (start > 0) buffer = buffer.slice(start);
+          break;
+        }
+        if (wanted.has(itemIndex)) {
+          resolved.set(itemIndex, zipTextContent(buffer.slice(openEnd + 1, close)));
+        }
+        itemIndex += 1;
+        buffer = buffer.slice(close + 5);
+        if (resolved.size >= wanted.size) break;
+      }
+    }
+  } finally {
+    if (resolved.size >= wanted.size) {
+      try { await reader.cancel(); } catch { /* no-op */ }
+    }
+  }
+  for (const index of wanted) {
+    if (!resolved.has(index)) resolved.set(index, "");
+  }
+  return resolved;
+}
+
+function firstRowContents(sheetXml) {
+  const match = sheetXml.match(/<row\b[^>]*>([\s\S]*?)<\/row>/i);
+  return match ? match[1] : null;
+}
+
+async function resolvedHeaderMap(zip, sheetXml) {
+  const contents = firstRowContents(sheetXml);
+  if (contents == null) return new Map();
+  const tokens = worksheetCellTokens(contents);
+  const indices = new Set();
+  collectSharedIndices(tokens, indices);
+  const shared = await readSharedStringsForIndices(zip, indices);
+  const map = new Map();
+  tokens.forEach((value, column) => {
+    const label = cleanText(resolveToken(value, shared));
+    if (label) map.set(label, column);
+  });
+  return map;
+}
+
+function browserYield() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function responseWorksheetReference(workbookXml, relationshipsXml) {
+  const responseSheet = workbookSheetReferences(workbookXml, relationshipsXml).get(nameKey(RESPONSE_SHEET));
+  if (!responseSheet) throw new Error('The selected workbook does not contain the "Response Summary" sheet.');
+  return responseSheet.path;
 }
 
 function sharedStringValues(sharedStringsXml) {
@@ -501,39 +650,45 @@ function worksheetCells(rowContents, sharedStrings, wantedColumns = null) {
   return cells;
 }
 
-function parseFastResponseSummary(sheetXml, sharedStrings) {
+async function parseFastResponseSummary(zip, sheetXml) {
+  const headerMap = await resolvedHeaderMap(zip, sheetXml);
+  if (!headerMap.size) throw new Error('"Response Summary" is empty.');
+  for (const column of RESPONSE_HEADERS) {
+    if (!headerMap.has(column)) throw new Error('"Response Summary" is missing the "' + column + '" column.');
+  }
+
+  const wantedColumns = new Set([
+    headerMap.get("Response ID"),
+    headerMap.get("Date"),
+    headerMap.get("Site Code"),
+    headerMap.get("Created By User ID"),
+  ]);
   const rowPattern = /<row\b[^>]*>([\s\S]*?)<\/row>/gi;
-  let headerMap = null;
-  let wantedColumns = null;
+  const tokenRows = [];
+  const sharedNeeded = new Set();
+  let rowMatch;
+  let rowNumber = 0;
+  while ((rowMatch = rowPattern.exec(sheetXml))) {
+    rowNumber += 1;
+    if (rowNumber === 1) continue;
+    const row = worksheetCellTokens(rowMatch[1], wantedColumns);
+    collectSharedIndices(row, sharedNeeded);
+    tokenRows.push(row);
+    if (rowNumber % 5000 === 0) await browserYield();
+  }
+  const shared = await readSharedStringsForIndices(zip, sharedNeeded);
+
   const accepted = [];
   const seenIds = new Set();
   let duplicateIds = 0;
   let rejectedRows = 0;
-  let rowMatch;
-  while ((rowMatch = rowPattern.exec(sheetXml))) {
-    if (!headerMap) {
-      const header = worksheetCells(rowMatch[1], sharedStrings);
-      headerMap = new Map();
-      header.forEach((value, column) => {
-        const label = cleanText(value);
-        if (label) headerMap.set(label, column);
-      });
-      for (const column of RESPONSE_HEADERS) {
-        if (!headerMap.has(column)) throw new Error('"Response Summary" is missing the "' + column + '" column.');
-      }
-      wantedColumns = new Set([
-        headerMap.get("Response ID"),
-        headerMap.get("Date"),
-        headerMap.get("Site Code"),
-        headerMap.get("Created By User ID"),
-      ]);
-      continue;
-    }
-    const row = worksheetCells(rowMatch[1], sharedStrings, wantedColumns);
-    const responseId = cleanText(row.get(headerMap.get("Response ID")));
-    const responseDate = parseDateOnly(row.get(headerMap.get("Date")));
-    const siteCode = siteKey(row.get(headerMap.get("Site Code")));
-    const officer = cleanText(row.get(headerMap.get("Created By User ID")));
+  for (let index = 0; index < tokenRows.length; index += 1) {
+    const row = tokenRows[index];
+    const get = (header) => resolveToken(row.get(headerMap.get(header)), shared);
+    const responseId = cleanText(get("Response ID"));
+    const responseDate = parseDateOnly(get("Date"));
+    const siteCode = siteKey(get("Site Code"));
+    const officer = cleanText(get("Created By User ID"));
     if (!responseId && !responseDate && !siteCode && !officer) continue;
     if (!responseId || !responseDate || !siteCode || !officer) {
       rejectedRows += 1;
@@ -552,8 +707,8 @@ function parseFastResponseSummary(sheetXml, sharedStrings) {
       officerNameKey: nameKey(officer),
       officerLooseKey: looseNameKey(officer),
     });
+    if (index && index % 10000 === 0) await browserYield();
   }
-  if (!headerMap) throw new Error('"Response Summary" is empty.');
   if (!accepted.length) throw new Error('"Response Summary" has no accepted response rows.');
   return {
     responses: accepted,
@@ -564,19 +719,117 @@ function parseFastResponseSummary(sheetXml, sharedStrings) {
 async function readResponseWorkbookFast(file) {
   const zip = await openLocalXlsxZip(file);
   if (!zip) return null;
-  const workbookXml = await zip.text("xl/workbook.xml");
-  const relationshipsXml = await zip.text("xl/_rels/workbook.xml.rels");
-  const worksheetPath = responseWorksheetReference(workbookXml, relationshipsXml);
-  const [sheetXml, sharedStringsXml] = await Promise.all([
-    zip.text(worksheetPath),
-    zip.has("xl/sharedStrings.xml") ? zip.text("xl/sharedStrings.xml") : Promise.resolve(""),
+  const [workbookXml, relationshipsXml] = await Promise.all([
+    zip.text("xl/workbook.xml"),
+    zip.text("xl/_rels/workbook.xml.rels"),
   ]);
-  return parseFastResponseSummary(sheetXml, sharedStringValues(sharedStringsXml));
+  const worksheetPath = responseWorksheetReference(workbookXml, relationshipsXml);
+  const sheetXml = await zip.text(worksheetPath);
+  return parseFastResponseSummary(zip, sheetXml);
 }
 
 async function readResponseWorkbook(file) {
   const fast = await readResponseWorkbookFast(file);
   return fast || readResponseWorkbookWithSheetJs(file);
+}
+
+async function readScheduleWorkbookFast(file) {
+  const zip = await openLocalXlsxZip(file);
+  if (!zip) return null;
+  const [workbookXml, relationshipsXml] = await Promise.all([
+    zip.text("xl/workbook.xml"),
+    zip.text("xl/_rels/workbook.xml.rels"),
+  ]);
+  const sheetRefs = workbookSheetReferences(workbookXml, relationshipsXml);
+  const date1904 = workbookUses1904Dates(workbookXml);
+  const assignments = [];
+  const outlets = {};
+  const seen = new Set();
+  let usableSheets = 0;
+
+  for (const schema of SCHEDULE_SCHEMAS) {
+    const ref = sheetRefs.get(nameKey(schema.sheet));
+    if (!ref) continue;
+    const sheetXml = await zip.text(ref.path);
+    const headerMap = await resolvedHeaderMap(zip, sheetXml);
+    if (!headerMap.size) throw new Error("Schedule sheet " + schema.sheet + " is empty.");
+    for (const label of ["SL", "CODE", "Outlet Name", schema.officerHeader]) {
+      if (!headerMap.has(label)) throw new Error("Schedule sheet " + schema.sheet + ' is missing "' + label + '".');
+    }
+
+    const headerContents = firstRowContents(sheetXml) || "";
+    const headerTokens = worksheetCellTokens(headerContents);
+    const headerSharedNeeded = new Set();
+    collectSharedIndices(headerTokens, headerSharedNeeded);
+    const headerShared = await readSharedStringsForIndices(zip, headerSharedNeeded);
+    const dateColumns = [];
+    headerTokens.forEach((value, column) => {
+      const label = cleanText(resolveToken(value, headerShared));
+      if (!label || ["SL", "CODE", "Outlet Name", schema.officerHeader].includes(label)) return;
+      const parsed = parseDateOnly(resolveToken(value, headerShared), date1904);
+      if (parsed) dateColumns.push([column, parsed]);
+    });
+    if (!dateColumns.length) throw new Error("No visit-date columns were found in " + schema.sheet + ".");
+
+    const wantedColumns = new Set([
+      headerMap.get("CODE"),
+      headerMap.get("Outlet Name"),
+      headerMap.get(schema.officerHeader),
+      ...dateColumns.map(([column]) => column),
+    ]);
+    const rowPattern = /<row\b[^>]*>([\s\S]*?)<\/row>/gi;
+    const tokenRows = [];
+    const sharedNeeded = new Set();
+    let rowMatch;
+    let rowNumber = 0;
+    while ((rowMatch = rowPattern.exec(sheetXml))) {
+      rowNumber += 1;
+      if (rowNumber === 1) continue;
+      const row = worksheetCellTokens(rowMatch[1], wantedColumns);
+      collectSharedIndices(row, sharedNeeded);
+      tokenRows.push(row);
+      if (rowNumber % 3000 === 0) await browserYield();
+    }
+    const shared = await readSharedStringsForIndices(zip, sharedNeeded);
+
+    tokenRows.forEach((row, rowIndex) => {
+      const get = (label) => resolveToken(row.get(headerMap.get(label)), shared);
+      const siteCode = siteKey(get("CODE"));
+      const outletName = cleanText(get("Outlet Name"));
+      const officer = cleanText(get(schema.officerHeader));
+      if (!siteCode && !officer) return;
+      if (siteCode) {
+        const outlet = outlets[siteCode] || { siteCode, outletName: "", rhoName: "", zonalName: "" };
+        if (outletName && !outlet.outletName) outlet.outletName = outletName;
+        if (schema.status === "RHO" && officer) outlet.rhoName = officer;
+        if (schema.status === "Zonal" && officer) outlet.zonalName = officer;
+        outlets[siteCode] = outlet;
+      }
+      dateColumns.forEach(([column, plannedDate]) => {
+        if (nameKey(resolveToken(row.get(column), shared)) !== "yes") return;
+        if (!siteCode || !officer) throw new Error("A planned row is missing CODE or officer in " + schema.sheet + " row " + (rowIndex + 2) + ".");
+        const officerKey = schema.status.toLocaleLowerCase() + "::" + nameKey(officer);
+        const key = officerKey + "|" + siteCode + "|" + plannedDate;
+        if (seen.has(key)) throw new Error("Duplicate planned assignment in " + schema.sheet + ".");
+        seen.add(key);
+        assignments.push({
+          status: schema.status,
+          officer,
+          officerKey,
+          officerNameKey: nameKey(officer),
+          officerLooseKey: looseNameKey(officer),
+          siteCode,
+          outletName,
+          plannedDate,
+        });
+      });
+    });
+    usableSheets += 1;
+    await browserYield();
+  }
+  if (!usableSheets) throw new Error("The workbook does not contain the Zonal or RHO visit-plan sheets.");
+  if (!assignments.length) throw new Error("No planned visits were found in the local schedule workbook.");
+  return { assignments, outlets, fileName: file.name };
 }
 
 async function isScheduleWorkbook(file) {
@@ -598,7 +851,7 @@ async function isScheduleWorkbook(file) {
   }
 }
 
-async function readScheduleWorkbook(file) {
+async function readScheduleWorkbookWithSheetJs(file) {
   const book = await openWorkbook(file, {
     // Ignore any unrelated support sheets in the visit-plan workbook.
     sheets: SCHEDULE_SCHEMAS.map((schema) => schema.sheet),
@@ -662,6 +915,11 @@ async function readScheduleWorkbook(file) {
   }
   if (!assignments.length) throw new Error("No planned visits were found in the local schedule workbook.");
   return { assignments, outlets, fileName: file.name };
+}
+
+async function readScheduleWorkbook(file) {
+  const fast = await readScheduleWorkbookFast(file);
+  return fast || readScheduleWorkbookWithSheetJs(file);
 }
 
 function clone(value) {
@@ -792,6 +1050,16 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
   });
   const completedKeys = new Set(due.filter((assignment) => responseCounts.get(planKey(assignment))).map(planKey));
   const visitedPairs = new Set(responses.map((response) => response.officerKey + "|" + response.siteCode));
+  const assignmentsByOfficer = new Map();
+  const dueByOfficer = new Map();
+  const responsesByOfficer = new Map();
+  const pushGrouped = (map, key, value) => {
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(value);
+  };
+  schedule.assignments.forEach((assignment) => pushGrouped(assignmentsByOfficer, assignment.officerKey, assignment));
+  due.forEach((assignment) => pushGrouped(dueByOfficer, assignment.officerKey, assignment));
+  responses.forEach((response) => pushGrouped(responsesByOfficer, response.officerKey, response));
 
   const metrics = new Map();
   resolved.officers.forEach((officer, officerKey) => {
@@ -839,9 +1107,9 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
   });
   const details = {};
   metrics.forEach((metric, officerKey) => {
-    const full = schedule.assignments.filter((assignment) => assignment.officerKey === officerKey);
-    const dueOfficer = due.filter((assignment) => assignment.officerKey === officerKey);
-    const officerResponses = responses.filter((response) => response.officerKey === officerKey);
+    const full = assignmentsByOfficer.get(officerKey) || [];
+    const dueOfficer = dueByOfficer.get(officerKey) || [];
+    const officerResponses = responsesByOfficer.get(officerKey) || [];
     const planned = full.map((assignment) => ({ plannedDate: assignment.plannedDate, siteCode: assignment.siteCode, outletName: assignment.outletName }));
     const remaining = dueOfficer.filter((assignment) => !completedKeys.has(planKey(assignment))).map((assignment) => ({ plannedDate: assignment.plannedDate, siteCode: assignment.siteCode, outletName: assignment.outletName }));
     const completed = dueOfficer.filter((assignment) => completedKeys.has(planKey(assignment))).map((assignment) => ({ plannedDate: assignment.plannedDate, siteCode: assignment.siteCode, outletName: assignment.outletName }));
@@ -920,6 +1188,7 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
       snapshotTakenAt: now,
       includeUnmappedInVisibleOfficerKpi: Boolean(baseMeta.includeUnmappedInVisibleOfficerKpi),
       localSource: true,
+      localReaderVersion: PC_READER_VERSION,
       diagnostics: {
         fullMonthAssignments: schedule.assignments.length,
         tillDateAssignments: due.length,
@@ -1043,8 +1312,12 @@ class PcRawDataSource {
     const saved = await pcDbGet("snapshots", "latest");
     if (saved?.data && validDashboardData(saved.data) && saved.data.metadata?.localSource) {
       this.currentData = saved.data;
-      this.currentSignature = saved.signature || "";
-      this.currentFolderSignature = saved.folderSignature || "";
+      const sameReader = saved.readerVersion === PC_READER_VERSION;
+      // Force exactly one fresh folder read after a loader upgrade.  The old
+      // snapshot can still be displayed immediately, but an old folder
+      // signature must not cause the new parser to skip its first refresh.
+      this.currentSignature = sameReader ? (saved.signature || "") : "";
+      this.currentFolderSignature = sameReader ? (saved.folderSignature || "") : "";
       this.savedAt = saved.savedAt || saved.data.metadata?.snapshotTakenAt || null;
       return this.result(saved.data, "local-cache", true, {
         kind: "saved",
@@ -1082,6 +1355,7 @@ class PcRawDataSource {
       data,
       signature,
       folderSignature: folderStateSignature,
+      readerVersion: PC_READER_VERSION,
       savedAt: this.savedAt,
     });
   }
@@ -1176,6 +1450,8 @@ class PcRawDataSource {
     }
     document.getElementById("grant-folder").hidden = true;
     try {
+      this.setStatus({ kind: "reading", message: "Scanning the selected PC raw-data folder…" });
+      await browserYield();
       const files = await folderWorkbookFiles(this.dirHandle);
       const currentFolderSignature = folderSignature(files);
 
@@ -1187,12 +1463,16 @@ class PcRawDataSource {
         return;
       }
 
+      this.setStatus({ kind: "reading", message: "Finding and reading the Response Summary sheet…" });
+      await browserYield();
       const responseSource = await findResponseFile(files);
       if (!responseSource) {
         const message = files.length ? 'No Excel file in this folder contains the exact "Response Summary" sheet.' : "The selected PC raw-data folder is empty.";
-        if (!this.fallback(message) && !silent) this.setStatus({ kind: "empty", message });
+        if (!this.fallback(message)) this.setStatus({ kind: "empty", message });
         return;
       }
+      this.setStatus({ kind: "reading", message: "Response Summary loaded (" + responseSource.parsed.responses.length.toLocaleString() + " responses). Reading the Zonal/RHO visit plan…" });
+      await browserYield();
       const scheduleSource = await findScheduleFile(files, responseSource.file);
       const signature = fileSignature(responseSource.file) + "|" + (scheduleSource ? fileSignature(scheduleSource.file) : "retained-plan");
       if (signature === this.currentSignature && this.currentData) {
@@ -1212,7 +1492,11 @@ class PcRawDataSource {
       );
     } catch (error) {
       const message = error?.message || "Could not read the PC raw-data folder.";
-      if (!this.fallback(message) && !silent) this.setStatus({ kind: "error", message });
+      // "silent" suppresses routine watcher noise, not actual failures.  On
+      // the first remembered-folder refresh there may be no saved fallback;
+      // leaving the previous "Reading…" text in that case looks like an
+      // endless load even though the parse has already failed.
+      if (!this.fallback(message)) this.setStatus({ kind: "error", message });
     }
   }
 
@@ -1243,7 +1527,11 @@ class PcRawDataSource {
       schedule.isRaw = false;
     }
     const baseline = this.currentData || this.baseData;
+    this.setStatus({ kind: "reading", message: "Calculating dashboard from the loaded Response Summary and visit plan…" });
+    await browserYield();
     const data = calculateLocalDashboard(baseline, schedule, responseData, responseFile, source);
+    this.setStatus({ kind: "reading", message: "Dashboard calculated. Saving the local snapshot…" });
+    await browserYield();
     await this.saveLatest(data, signature, folderStateSignature);
     this.sendData(data, source, false, {
       kind: "live",
