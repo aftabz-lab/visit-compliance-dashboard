@@ -132,7 +132,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), zoneFile: "", avail: new Map(), availFile: "", stockFile: "", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
+const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
 
 // Green through amber to red — the same reading at a glance for any manager.
 function tone(v) {
@@ -285,12 +285,22 @@ function sourceDisplay() {
   return { label: "live", live: true };
 }
 
+function availabilityStatusHtml() {
+  if (!state.avail.size) return "";
+  const retained = state.availSource === "retained" || state.availSource === "cache";
+  const label = retained ? "availability saved copy" : "availability snapshot";
+  const when = state.availSavedAt
+    ? ` · ${new Date(state.availSavedAt).toLocaleString()}` : "";
+  const sourceFile = state.stockFile ? `<br><b>${esc(state.stockFile)}</b>` : "";
+  return `<br><span style="color:${retained ? "#e0a53f" : "#75d89b"}">${label}${when}</span>${sourceFile}`;
+}
+
 function showLoaded(note = "") {
   const source = sourceDisplay();
   const when = !source.live && state.savedAt
     ? `<br><span style="color:#e0a53f">snapshot from ${new Date(state.savedAt).toLocaleString()}</span>` : "";
   const extra = note ? `<br><span style="color:#e0a53f">${esc(note)}</span>` : "";
-  setState(`<span class="pill ${source.live ? "live" : "idle"}">${source.label}</span><br><b>${esc(state.file)}</b><br>${state.rows.length.toLocaleString()} answers${when}${extra}`);
+  setState(`<span class="pill ${source.live ? "live" : "idle"}">${source.label}</span><br><b>${esc(state.file)}</b><br>${state.rows.length.toLocaleString()} answers${when}${availabilityStatusHtml()}${extra}`);
 }
 
 // Re-checks the chosen folder and follows whatever is there now: a new file, a
@@ -311,9 +321,78 @@ async function syncFolder({ silent = true } = {}) {
     let chosen = null;
     for (const file of ordered) { if (await isAuditWorkbook(file)) { chosen = file; break; } }
 
+    // Availability is also sourced from the selected PC raw-data folder.
+    // Keep the last successful calculation as a small browser snapshot so
+    // removing stock_extraction_report*.csv does not blank the availability count.
+    // A newer/replaced stock or criteria file automatically refreshes the snapshot.
+    const all = await candidateFiles(state.dirHandle);
+    const bookFiles = all.filter(file => /\.xlsx$|\.xlsm$/i.test(file.name));
+    const criteriaNamed = bookFiles.filter(file => /product.*crit|avaiablity|availability/i.test(file.name));
+    let criteriaFile = null;
+    for (const file of [...criteriaNamed, ...bookFiles.filter(file => !criteriaNamed.includes(file))]) {
+      // If the remembered criteria file is unchanged, avoid reparsing it just to identify it.
+      if (file.name === state.availFile && state.criteriaSig && signature(file) === state.criteriaSig) {
+        criteriaFile = file; break;
+      }
+      if (await isCriteriaWorkbook(file)) { criteriaFile = file; break; }
+    }
+
+    const csvFiles = all.filter(file => /\.csv$/i.test(file.name));
+    const stockNamed = csvFiles.filter(file => /stock[ _-]*extraction[ _-]*report/i.test(file.name));
+    let stockFile = null;
+    for (const file of [...stockNamed, ...csvFiles.filter(file => !stockNamed.includes(file))]) {
+      if (await isStockFile(file)) { stockFile = file; break; }
+    }
+
+    if (criteriaFile && stockFile) {
+      const nextCriteriaSig = signature(criteriaFile);
+      const nextStockSig = signature(stockFile);
+      const sameAvailabilitySnapshot = state.avail.size
+        && state.criteriaSig === nextCriteriaSig
+        && state.stockSig === nextStockSig;
+
+      if (!sameAvailabilitySnapshot) {
+        try {
+          const criteria = await readCriteria(criteriaFile);
+          state.availFile = criteriaFile.name;
+          setState(`<span class="pill idle">reading</span><br>Taking availability snapshot from <b>${esc(stockFile.name)}</b> (${(stockFile.size / 1048576).toFixed(0)} MB)…`);
+          const { result, matched } = await readStockAvailability(stockFile, criteria, (read) => {
+            setState(`<span class="pill idle">reading</span><br>Stock snapshot: ${(read / 1048576).toFixed(0)} MB scanned…`);
+          });
+          state.avail = result;
+          state.stockFile = stockFile.name;
+          state.criteriaSig = nextCriteriaSig;
+          state.stockSig = nextStockSig;
+          state.availSavedAt = Date.now();
+          state.availSource = "local";
+          state.availMatched = matched;
+          await idbPut("cache", "avail", {
+            version: AVAIL_CACHE_VERSION,
+            file: state.availFile,
+            stockFile: stockFile.name,
+            criteriaSig: state.criteriaSig,
+            stockSig: state.stockSig,
+            savedAt: state.availSavedAt,
+            matched,
+            entries: [...result.entries()],
+          });
+        } catch (error) {
+          console.warn("Availability snapshot failed; retaining last successful copy.", error);
+          if (state.avail.size) state.availSource = "retained";
+        }
+      } else {
+        state.availSource = "local";
+      }
+    } else if (state.avail.size) {
+      // Stock/criteria file was removed or the folder is temporarily empty.
+      // Keep the saved availability calculation until a new valid source appears.
+      state.availSource = "retained";
+    }
+
+
     if (!chosen) {
-      const reason = candidates.length
-        ? `No current workbook in this folder has an Answer Details sheet (checked ${candidates.length}).`
+      const reason = all.length
+        ? `No current workbook in this folder has an Answer Details sheet (checked ${candidates.length} workbook${candidates.length === 1 ? "" : "s"}).`
         : "The raw data folder is empty.";
       if (state.rows.length) {
         // Removing/replacing raw files must never erase the last displayed audit
@@ -340,35 +419,9 @@ async function syncFolder({ silent = true } = {}) {
       break;
     }
 
-    if (!state.avail.size) {
-      const all = await candidateFiles(state.dirHandle);
-      let criteria = null;
-      for (const file of all) {
-        if (!/\.xlsx$|\.xlsm$/i.test(file.name)) continue;
-        if (!(await isCriteriaWorkbook(file))) continue;
-        try { criteria = await readCriteria(file); state.availFile = file.name; } catch { /* skip */ }
-        break;
-      }
-      if (criteria) {
-        for (const file of all) {
-          if (!(await isStockFile(file))) continue;
-          try {
-            setState(`<span class="pill idle">reading</span><br>Matching stock in <b>${esc(file.name)}</b> (${(file.size / 1048576).toFixed(0)} MB)…`);
-            const { result, matched } = await readStockAvailability(file, criteria, (read) => {
-              setState(`<span class="pill idle">reading</span><br>Stock file: ${(read / 1048576).toFixed(0)} MB scanned…`);
-            });
-            state.avail = result;
-            state.stockFile = file.name;
-            state.availMatched = matched;
-            await idbPut("cache", "avail", { version: AVAIL_CACHE_VERSION, file: state.availFile, stockFile: file.name, matched, entries: [...result.entries()] });
-          } catch { /* availability is optional */ }
-          break;
-        }
-      }
-    }
 
     if (signature(chosen) !== state.sig) await readWorkbook(chosen);
-    else render();
+    else { showLoaded(); render(); }
   } catch (e) {
     if (!silent) setState(`<span class="pill idle">error</span><br>${esc(e.message)}`);
   }
@@ -625,7 +678,7 @@ function mergeDirectory(zoneMap) {
 // "Min Stock Should Be"; below that it is treated as zero stock for that outlet.
 // Bumped whenever the shape of a cached availability entry changes, so a copy
 // saved by an older build is discarded instead of being shown with blank columns.
-const AVAIL_CACHE_VERSION = 2;
+const AVAIL_CACHE_VERSION = 3;
 const AVAIL_CRITERIA = [["Core SKU", "Core Item"], ["KVI SKU", "KVI"], ["Promo SKU", "Core Promo"], ["HGPHS SKU", "HGPHS"]];
 
 async function isCriteriaWorkbook(file) {
@@ -1273,25 +1326,32 @@ $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; st
   } else {
     setState(`<span class="pill idle">no folder</span><br>Choose the folder holding the survey export. It is remembered from then on.`);
   }
-  // 2. Use the server-side snapshot when one has been published.  This is what
-  // lets the link open with data in a new browser after the raw folder is empty.
-  await loadPublishedAudit();
-  // 3. Reconnect to the remembered folder and follow any change to it.
-  loadDirectory();
+  // 2. Restore the last successful PC stock availability snapshot BEFORE
+  // reconnecting to the folder.  This prevents a refresh/empty folder from
+  // temporarily showing zero availability.
   const availCache = await idbGet("cache", "avail");
-  // An entry from an older build has no "actual" count; drop it and re-read the
-  // folder rather than rendering dashes.
   const availUsable = availCache?.version === AVAIL_CACHE_VERSION
     && availCache.entries?.length
     && availCache.entries.some(([, e]) => e && Object.values(e).some(v => v && v.actual !== undefined));
   if (availUsable) {
     state.avail = new Map(availCache.entries);
-    state.availFile = availCache.file;
+    state.availFile = availCache.file || "";
     state.stockFile = availCache.stockFile || "";
+    state.criteriaSig = availCache.criteriaSig || "";
+    state.stockSig = availCache.stockSig || "";
+    state.availSavedAt = availCache.savedAt || 0;
+    state.availSource = "cache";
     state.availMatched = availCache.matched || 0;
+    if (state.rows.length) { showLoaded(); render(); }
   } else if (availCache) {
-    await idbDel("cache", "avail");   // stale shape - force a fresh read
+    await idbDel("cache", "avail");
   }
+
+  // 3. Use the server-side audit snapshot when one has been published.  The
+  // availability snapshot remains the local PC-folder copy restored above.
+  await loadPublishedAudit();
+  // 4. Load outlet ownership and then reconnect to the remembered folder.
+  await loadDirectory();
   const zoneCache = await idbGet("cache", "zone");
   if (zoneCache?.entries?.length) {
     state.zoneFile = zoneCache.file;
