@@ -1,0 +1,1371 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Audit Quality Dashboard</title>
+<link rel="stylesheet" href="styles.css?v=visit-complete-dark-v9-sidebar" />
+<style>
+  body { background: var(--dark-1); }
+  .audit-layout { display: grid; grid-template-columns: 288px minmax(0,1fr); align-items: start; }
+  .audit-main { padding: 20px 26px 50px; display: grid; gap: 18px; min-width: 0; }
+
+  .source-box { display: grid; gap: 10px; }
+  .source-state { font-size: 11.5px; line-height: 1.55; color: var(--muted-text); }
+  .source-state b { color: var(--white-text); }
+  .pill { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; padding: 2px 9px; border-radius: 999px; }
+  .pill.live { background: rgba(28,122,80,.3); color: #8fe3b6; }
+  .pill.idle { background: rgba(120,140,155,.22); color: var(--muted-text); }
+
+  .score-hero {
+    display: grid; grid-template-columns: minmax(210px,260px) minmax(0,1fr); gap: 1px;
+    background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+  }
+  .hero-cell { background: var(--dark-2); padding: 20px 22px; }
+  .hero-score { display: grid; align-content: center; justify-items: center; text-align: center; }
+  .hero-score .big { font-size: 58px; font-weight: 800; line-height: 1; letter-spacing: -1px; }
+  .hero-score .cap { margin-top: 8px; font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted-text); }
+  .hero-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px,1fr)); gap: 16px; align-content: center; }
+  .fact .n { font-size: 24px; font-weight: 800; color: var(--white-text); }
+  .fact .l { font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-text); margin-top: 3px; }
+
+  .bar-row { display: grid; grid-template-columns: minmax(150px,210px) 1fr 56px; gap: 12px; align-items: center; padding: 9px 0; }
+  .bar-row + .bar-row { border-top: 1px solid var(--line); }
+  .bar-row .lbl { font-size: 12.5px; color: var(--white-text); font-weight: 600; }
+  .bar-track { display: block; height: 12px; border-radius: 999px; background: var(--dark-4); overflow: hidden; }
+  .bar-fill { display: block; height: 100%; min-width: 2px; border-radius: 999px; }
+  .bar-row .val { text-align: right; font-size: 12.5px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+  .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px,1fr)); gap: 18px; }
+  .empty-state { text-align: center; padding: 56px 24px; color: var(--muted-text); font-size: 13.5px; line-height: 1.7; }
+  .empty-state h2 { color: var(--white-text); font-size: 18px; margin: 0 0 10px; }
+  .warn { font-size: 11.5px; color: #ffc9a0; background: rgba(180,95,20,.16); border: 1px solid #8a5320; border-radius: 8px; padding: 9px 12px; line-height: 1.5; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  th.sortable:hover { color: var(--blue-2); }
+  th.sortable .arrow { opacity: .45; font-size: 9px; margin-left: 3px; }
+  th.sortable .rank { font-size: 8px; color: var(--blue-2); margin-left: 1px; }
+  .sort-chips { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 9px 18px; border-bottom: 1px solid var(--line); background: var(--dark-3); }
+  .sort-chips .sc-label { font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-text); }
+  .sort-chips .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--white-text);
+    background: var(--dark-4); border: 1px solid var(--line); border-radius: 999px; padding: 3px 5px 3px 11px; }
+  .sort-chips .chip button, .chip-clear { background: none; border: 0; color: var(--blue-2); cursor: pointer; font-family: inherit; font-size: 11px; padding: 0 4px; }
+  .sort-chips .chip button:hover, .chip-clear:hover { color: #fff; }
+  .chip-clear { font-weight: 700; text-decoration: underline; }
+  th.sortable.active .arrow { opacity: 1; color: var(--blue-2); }
+  tr.click-row { cursor: pointer; }
+  tr.click-row:hover td { background: rgba(45,143,194,.14); }
+  tr.click-row.on td { background: rgba(45,143,194,.24); }
+  .mini { display: inline-block; vertical-align: middle; width: 74px; height: 8px; border-radius: 999px; background: var(--dark-4); overflow: hidden; margin-right: 8px; }
+  .mini > i { display: block; height: 100%; border-radius: 999px; }
+  .drill {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 11px 15px;
+    border: 1px solid var(--blue); border-radius: 10px; background: rgba(45,143,194,.14); font-size: 13px; color: var(--white-text);
+  }
+  .drill button { background: none; border: 1px solid var(--line); color: var(--muted-text); border-radius: 7px; padding: 4px 11px; cursor: pointer; font-family: inherit; font-size: 11.5px; }
+  .drill button:hover { color: var(--white-text); border-color: var(--blue); }
+  .coverage { font-size: 11.5px; color: var(--muted-text); }
+  .coverage b { color: var(--white-text); }
+  .exports { display: flex; gap: 9px; flex-wrap: wrap; }
+  .exports .btn { height: 34px; font-size: 11.5px; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-identity">
+    <h1>Audit Quality Dashboard</h1>
+    <p class="subtitle" id="sub">Store Operations Compliance Audit — answer-level scoring</p>
+  </div>
+  <div class="topbar-actions">
+    <a class="btn link-btn" href="./index.html">Visit compliance</a>
+  </div>
+</header>
+
+<div class="audit-layout">
+  <aside class="rail">
+    <div class="rail-body">
+      <section class="rail-group source-box">
+        <h2 class="rail-heading">Data source</h2>
+        <div id="src-state" class="source-state"></div>
+        <button id="grant" class="btn primary" type="button" hidden>Allow folder access</button>
+        <button id="pick-folder" class="btn secondary" type="button">Change folder</button>
+        <input id="pick-file" type="file" accept=".xlsx,.xlsm" hidden />
+        <button id="pick-file-btn" class="btn secondary" type="button">Open a single file</button>
+      </section>
+
+      <section class="rail-group">
+        <h2 class="rail-heading">Filter</h2>
+        <label class="rail-field"><span>Category</span><select id="f-cat"></select></label>
+        <label class="rail-field"><span>Outlet code or name</span><input id="f-site" type="search" placeholder="e.g. F327 or Gulshan" autocomplete="off" /></label>
+        <label class="rail-field"><span>Show outlets</span><select id="f-rank">
+          <option value="worst">Weakest first</option>
+          <option value="best">Strongest first</option>
+        </select></label>
+        <button id="reset" class="btn secondary" type="button" style="width:100%">Reset filters</button>
+      </section>
+
+      <section class="rail-group">
+        <h2 class="rail-heading">Export what is on screen</h2>
+        <div class="exports">
+          <button id="dl-pdf" class="btn primary" type="button" style="width:100%">PDF summary</button>
+          <button id="dl-csv" class="btn secondary" type="button" style="width:100%">CSV of this view</button>
+        </div>
+      </section>
+
+      <section class="rail-group">
+        <h2 class="rail-heading">How the score works</h2>
+        <p class="definitions-text">Score is <b>points earned ÷ points available</b> across every answered question. Questions carrying no marks (free-text notes) are excluded so they cannot dilute the result.</p>
+      </section>
+    </div>
+  </aside>
+
+  <main class="audit-main">
+    <div id="warn-box"></div>
+    <div id="body"></div>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
+const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
+
+// Green through amber to red — the same reading at a glance for any manager.
+function tone(v) {
+  if (v >= 85) return "#3fb27f";
+  if (v >= 75) return "#8cc152";
+  if (v >= 65) return "#e0a53f";
+  return "#d9534f";
+}
+
+const IDB = "audit-dash", DB_VER = 2;
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(IDB, DB_VER);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      if (!d.objectStoreNames.contains("h")) d.createObjectStore("h");
+      if (!d.objectStoreNames.contains("cache")) d.createObjectStore("cache");
+    };
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function idbPut(store, key, value) {
+  try { const d = await idb(); d.transaction(store, "readwrite").objectStore(store).put(value, key); } catch {}
+}
+async function idbGet(store, key) {
+  try {
+    const d = await idb();
+    return await new Promise(res => {
+      const q = d.transaction(store).objectStore(store).get(key);
+      q.onsuccess = () => res(q.result); q.onerror = () => res(null);
+    });
+  } catch { return null; }
+}
+async function idbDel(store, key) {
+  try { const d = await idb(); d.transaction(store, "readwrite").objectStore(store).delete(key); } catch {}
+}
+
+// Only the seven fields the dashboard reads are cached, which keeps the saved
+// copy small enough to reload instantly and work with no folder access at all.
+const FIELDS = ["Response ID","Site Code","Question Category","Question Title","Question Max Score","Answer Score","Date"];
+const slim = (rows) => rows.map(r => FIELDS.map(f => r[f]));
+const fatten = (packed) => packed.map(a => Object.fromEntries(FIELDS.map((f, i) => [f, a[i]])));
+
+// These files are generated and committed automatically by scripts/build.py.
+// They make the Audit page work on every browser/device after the raw export has
+// been removed from data/.
+const PUBLISHED_AUDIT_SOURCES = [
+  { url: "data/audit_data.json", source: "published" },
+  { url: "data/audit_data_last_good.json", source: "published-backup" },
+];
+
+function validPublishedAudit(payload) {
+  return payload && Array.isArray(payload.fields)
+    && payload.fields.length === FIELDS.length
+    && payload.fields.every((field, i) => field === FIELDS[i])
+    && Array.isArray(payload.rows)
+    && payload.rows.length > 0
+    && Array.isArray(payload.rows[0]);
+}
+
+async function loadPublishedAudit() {
+  for (const candidate of PUBLISHED_AUDIT_SOURCES) {
+    try {
+      const response = await fetch(`${candidate.url}?_=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      if (!validPublishedAudit(payload)) throw new Error("empty or invalid audit snapshot");
+
+      state.rows = fatten(payload.rows);
+      state.file = payload.metadata?.sourceFile || "Published audit snapshot";
+      state.sig = `published:${candidate.url}:${payload.metadata?.generatedAt || ""}`;
+      state.source = candidate.source;
+      state.savedAt = Date.parse(payload.metadata?.generatedAt || "") || Date.now();
+      state.stale = true;
+      await idbPut("cache", "last", {
+        file: state.file, sig: state.sig, savedAt: state.savedAt, packed: payload.rows,
+      });
+      showLoaded();
+      render();
+      return true;
+    } catch (error) {
+      console.warn(`Audit snapshot unavailable: ${candidate.url}`, error);
+    }
+  }
+  return false;
+}
+
+function setState(html) { $("src-state").innerHTML = html; }
+
+// Every workbook in the folder, newest first. All of them are returned rather
+// than just the newest, because a shared data folder holds exports for other
+// dashboards too — taking the newest outright reads the wrong file.
+async function candidateFiles(handle) {
+  const found = [];
+  for await (const [name, entry] of handle.entries()) {
+    if (entry.kind !== "file" || name.startsWith("~$")) continue;
+    const file = await entry.getFile();
+    const m = name.match(/(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})/);
+    found.push({ file, stamp: m ? `${m[1]}${m[2]}${m[3]}` : "", modified: file.lastModified });
+  }
+  found.sort((a, b) => a.stamp === b.stamp ? b.modified - a.modified : b.stamp.localeCompare(a.stamp));
+  return found.map(c => c.file);
+}
+
+async function candidateWorkbooks(handle) {
+  const found = [];
+  for await (const [name, entry] of handle.entries()) {
+    if (entry.kind !== "file") continue;
+    if (!/\.xlsx?$|\.xlsm$/i.test(name) || name.startsWith("~$")) continue;
+    const file = await entry.getFile();
+    const m = name.match(/(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})/);
+    found.push({ file, stamp: m ? `${m[1]}${m[2]}${m[3]}` : "", modified: file.lastModified });
+  }
+  found.sort((a, b) => a.stamp === b.stamp ? b.modified - a.modified : b.stamp.localeCompare(a.stamp));
+  return found.map(c => c.file);
+}
+
+// Cheap check: read a handful of rows and look for the Answer Details sheet.
+async function isAuditWorkbook(file) {
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array", sheetRows: 4, cellStyles: false });
+    if (wb.SheetNames.some(n => n.trim().toLowerCase() === "answer details")) return true;
+    return wb.SheetNames.some(n => {
+      const head = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: "", blankrows: false })[0] || [];
+      const lower = head.map(h => String(h).trim().toLowerCase());
+      return lower.includes("question category") && lower.includes("answer score");
+    });
+  } catch { return false; }
+}
+
+const signature = (f) => `${f.name}|${f.lastModified}|${f.size}`;
+
+async function readWorkbook(file, { cache = true } = {}) {
+  setState(`<span class="pill idle">reading</span><br>Parsing <b>${esc(file.name)}</b> (${(file.size/1048576).toFixed(1)} MB)…`);
+  await new Promise(r => setTimeout(r, 30));
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false, cellStyles: false });
+  const sheet = wb.SheetNames.find(n => n.trim().toLowerCase() === "answer details") || wb.SheetNames[wb.SheetNames.length - 1];
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { defval: "" });
+  if (!rows.length || !("Question Category" in rows[0])) throw new Error(`"${sheet}" is not the Answer Details sheet.`);
+  state.rows = rows; state.file = file.name; state.sig = signature(file); state.source = "local"; state.stale = false;
+  if (cache) await idbPut("cache", "last", { file: file.name, sig: state.sig, savedAt: Date.now(), packed: slim(rows) });
+  showLoaded();
+  render();
+}
+
+function sourceDisplay() {
+  if (state.source === "published") return { label: "published snapshot", live: false };
+  if (state.source === "published-backup") return { label: "published backup", live: false };
+  if (state.source === "cache" || state.stale) return { label: "saved copy", live: false };
+  return { label: "live", live: true };
+}
+
+function availabilityStatusHtml() {
+  if (!state.avail.size) return "";
+  const retained = state.availSource === "retained" || state.availSource === "cache";
+  const label = retained ? "availability saved copy" : "availability snapshot";
+  const when = state.availSavedAt
+    ? ` · ${new Date(state.availSavedAt).toLocaleString()}` : "";
+  const sourceFile = state.stockFile ? `<br><b>${esc(state.stockFile)}</b>` : "";
+  return `<br><span style="color:${retained ? "#e0a53f" : "#75d89b"}">${label}${when}</span>${sourceFile}`;
+}
+
+function showLoaded(note = "") {
+  const source = sourceDisplay();
+  const when = !source.live && state.savedAt
+    ? `<br><span style="color:#e0a53f">snapshot from ${new Date(state.savedAt).toLocaleString()}</span>` : "";
+  const extra = note ? `<br><span style="color:#e0a53f">${esc(note)}</span>` : "";
+  setState(`<span class="pill ${source.live ? "live" : "idle"}">${source.label}</span><br><b>${esc(state.file)}</b><br>${state.rows.length.toLocaleString()} answers${when}${availabilityStatusHtml()}${extra}`);
+}
+
+// Re-checks the chosen folder and follows whatever is there now: a new file, a
+// replaced file, or none at all. Runs on open, on tab focus and on a timer, so
+// no manual reload button is needed.
+async function syncFolder({ silent = true } = {}) {
+  if (!state.dirHandle) return;
+  let permission = "denied";
+  try { permission = await state.dirHandle.queryPermission({ mode: "read" }); } catch {}
+  if (permission !== "granted") { needsGrant(); return; }
+  $("grant").hidden = true;
+  try {
+    const candidates = await candidateWorkbooks(state.dirHandle);
+    // Filenames that look like the audit export are tried first; a renamed one is
+    // still found because every workbook is checked for the right sheet.
+    const named = candidates.filter(f => /audit|response|survey|compliance/i.test(f.name));
+    const ordered = [...named, ...candidates.filter(f => !named.includes(f))];
+    let chosen = null;
+    for (const file of ordered) { if (await isAuditWorkbook(file)) { chosen = file; break; } }
+
+    // Availability is also sourced from the selected PC raw-data folder.
+    // Keep the last successful calculation as a small browser snapshot so
+    // removing stock_extraction_report*.csv does not blank the availability count.
+    // A newer/replaced stock or criteria file automatically refreshes the snapshot.
+    const all = await candidateFiles(state.dirHandle);
+    const bookFiles = all.filter(file => /\.xlsx$|\.xlsm$/i.test(file.name));
+    const criteriaNamed = bookFiles.filter(file => /product.*crit|avaiablity|availability/i.test(file.name));
+    let criteriaFile = null;
+    for (const file of [...criteriaNamed, ...bookFiles.filter(file => !criteriaNamed.includes(file))]) {
+      // If the remembered criteria file is unchanged, avoid reparsing it just to identify it.
+      if (file.name === state.availFile && state.criteriaSig && signature(file) === state.criteriaSig) {
+        criteriaFile = file; break;
+      }
+      if (await isCriteriaWorkbook(file)) { criteriaFile = file; break; }
+    }
+
+    const csvFiles = all.filter(file => /\.csv$/i.test(file.name));
+    const stockNamed = csvFiles.filter(file => /stock[ _-]*extraction[ _-]*report/i.test(file.name));
+    let stockFile = null;
+    for (const file of [...stockNamed, ...csvFiles.filter(file => !stockNamed.includes(file))]) {
+      if (await isStockFile(file)) { stockFile = file; break; }
+    }
+
+    if (criteriaFile && stockFile) {
+      const nextCriteriaSig = signature(criteriaFile);
+      const nextStockSig = signature(stockFile);
+      const sameAvailabilitySnapshot = state.avail.size
+        && state.criteriaSig === nextCriteriaSig
+        && state.stockSig === nextStockSig;
+
+      if (!sameAvailabilitySnapshot) {
+        try {
+          const criteria = await readCriteria(criteriaFile);
+          state.availFile = criteriaFile.name;
+          setState(`<span class="pill idle">reading</span><br>Taking availability snapshot from <b>${esc(stockFile.name)}</b> (${(stockFile.size / 1048576).toFixed(0)} MB)…`);
+          const { result, matched } = await readStockAvailability(stockFile, criteria, (read) => {
+            setState(`<span class="pill idle">reading</span><br>Stock snapshot: ${(read / 1048576).toFixed(0)} MB scanned…`);
+          });
+          state.avail = result;
+          state.stockFile = stockFile.name;
+          state.criteriaSig = nextCriteriaSig;
+          state.stockSig = nextStockSig;
+          state.availSavedAt = Date.now();
+          state.availSource = "local";
+          state.availMatched = matched;
+          await idbPut("cache", "avail", {
+            version: AVAIL_CACHE_VERSION,
+            file: state.availFile,
+            stockFile: stockFile.name,
+            criteriaSig: state.criteriaSig,
+            stockSig: state.stockSig,
+            savedAt: state.availSavedAt,
+            matched,
+            entries: [...result.entries()],
+          });
+        } catch (error) {
+          console.warn("Availability snapshot failed; retaining last successful copy.", error);
+          if (state.avail.size) state.availSource = "retained";
+        }
+      } else {
+        state.availSource = "local";
+      }
+    } else if (state.avail.size) {
+      // Stock/criteria file was removed or the folder is temporarily empty.
+      // Keep the saved availability calculation until a new valid source appears.
+      state.availSource = "retained";
+    }
+
+
+    if (!chosen) {
+      const reason = all.length
+        ? `No current workbook in this folder has an Answer Details sheet (checked ${candidates.length} workbook${candidates.length === 1 ? "" : "s"}).`
+        : "The raw data folder is empty.";
+      if (state.rows.length) {
+        // Removing/replacing raw files must never erase the last displayed audit
+        // result.  The next valid file will still replace it automatically.
+        state.stale = true;
+        showLoaded(`Showing the retained data. ${reason}`);
+        render();
+      } else if (!silent) {
+        setState(`<span class="pill idle">no match</span><br>${esc(reason)}`);
+      }
+      return;
+    }
+    // Same folder scan also yields the outlet-ownership workbook.
+    const zoneCandidates = candidates.filter(f => f !== chosen);
+    const zoneNamed = zoneCandidates.filter(f => /zone|distribution/i.test(f.name));
+    for (const file of [...zoneNamed, ...zoneCandidates.filter(f => !zoneNamed.includes(f))]) {
+      if (!(await isZoneWorkbook(file))) continue;
+      try {
+        const { map } = await readZoneDirectory(file);
+        state.zoneFile = file.name;
+        mergeDirectory(map);
+        await idbPut("cache", "zone", { file: file.name, entries: [...map.entries()] });
+      } catch { /* keep whatever directory we already have */ }
+      break;
+    }
+
+
+    if (signature(chosen) !== state.sig) await readWorkbook(chosen);
+    else { showLoaded(); render(); }
+  } catch (e) {
+    if (!silent) setState(`<span class="pill idle">error</span><br>${esc(e.message)}`);
+  }
+}
+
+function needsGrant() {
+  $("grant").hidden = false;
+  const extra = state.rows.length ? " Showing the saved copy meanwhile." : "";
+  setState(`<span class="pill idle">folder remembered</span><br>The browser needs one click to reopen it.${extra}`);
+}
+
+async function pickFolder() {
+  if (!window.showDirectoryPicker) {
+    $("warn-box").innerHTML = `<p class="warn">This browser cannot open a folder. Use Chrome or Edge, or press <b>Open a single file</b>.</p>`;
+    return;
+  }
+  try {
+    const handle = await window.showDirectoryPicker({ id: "audit-data", mode: "read" });
+    state.dirHandle = handle;
+    await idbPut("h", "folder", handle);
+    state.sig = "";
+    await syncFolder({ silent: false });
+  } catch (e) { if (e.name !== "AbortError") setState(`<span class="pill idle">error</span><br>${esc(e.message)}`); }
+}
+
+async function grantAccess() {
+  if (!state.dirHandle) return pickFolder();
+  try {
+    if ((await state.dirHandle.requestPermission({ mode: "read" })) === "granted") {
+      $("grant").hidden = true;
+      state.sig = "";
+      await syncFolder({ silent: false });
+      startWatching();
+    }
+  } catch (e) { setState(`<span class="pill idle">error</span><br>${esc(e.message)}`); }
+}
+
+let watchTimer = null;
+function startWatching() {
+  if (watchTimer) return;
+  watchTimer = setInterval(() => { if (!document.hidden) syncFolder(); }, 5000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) syncFolder(); });
+}
+
+// Outlet name, Zonal and RHO are not in the audit export - they come from the
+// visit-compliance dataset published alongside this page, joined on site code.
+async function loadDirectory() {
+  try {
+    /*
+     * Permanent fallback for the Audit page.
+     *
+     * 1. Use the current generated dashboard_data.json when available.
+     * 2. Save the last successful fetch locally.
+     * 3. If current data is unavailable, first use the saved browser copy.
+     * 4. If there is no browser copy (new browser/device), use the
+     *    repository-level dashboard_data_last_good.json.
+     *
+     * This does NOT depend on data-loader-audit.js.
+     */
+    const LAST_DATA_KEY =
+      "visit_compliance_audit_last_successful_data";
+
+    const LAST_FETCH_KEY =
+      "visit_compliance_audit_last_successful_fetch";
+
+    let dashboardData = null;
+
+    try {
+      const res = await fetch(
+        `data/dashboard_data.json?_=${Date.now()}`,
+        { cache: "no-store" }
+      );
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const freshData = await res.json();
+
+      if (
+        !freshData ||
+        typeof freshData !== "object" ||
+        Object.keys(freshData).length === 0
+      ) {
+        throw new Error("Current dashboard data is empty.");
+      }
+
+      dashboardData = freshData;
+
+      try {
+        localStorage.setItem(
+          LAST_DATA_KEY,
+          JSON.stringify(freshData)
+        );
+        localStorage.setItem(
+          LAST_FETCH_KEY,
+          new Date().toISOString()
+        );
+      } catch (storageError) {
+        console.warn("Audit local cache unavailable:", storageError);
+      }
+
+    } catch (currentError) {
+
+      console.warn(
+        "Audit current data unavailable. Trying last successful data.",
+        currentError
+      );
+
+      // First try this browser's last successful fetch.
+      try {
+        const cachedData =
+          localStorage.getItem(LAST_DATA_KEY);
+
+        if (cachedData) {
+          dashboardData = JSON.parse(cachedData);
+        }
+      } catch (cacheError) {
+        console.warn("Audit browser cache unavailable:", cacheError);
+      }
+
+      // If this is a new browser/device, use the permanent repository snapshot.
+      if (!dashboardData) {
+        try {
+          const fallbackResponse = await fetch(
+            `data/dashboard_data_last_good.json?_=${Date.now()}`,
+            { cache: "no-store" }
+          );
+
+          if (fallbackResponse.ok) {
+            const fallbackData =
+              await fallbackResponse.json();
+
+            if (
+              fallbackData &&
+              typeof fallbackData === "object" &&
+              Object.keys(fallbackData).length > 0
+            ) {
+              dashboardData = fallbackData;
+            }
+          }
+        } catch (fallbackError) {
+          console.warn(
+            "Audit permanent fallback unavailable:",
+            fallbackError
+          );
+        }
+      }
+
+      if (!dashboardData) {
+        console.warn(
+          "No current or last-good Audit data is available."
+        );
+        return;
+      }
+
+      console.info(
+        "Audit is showing last successfully fetched data."
+      );
+    }
+
+    const outlets = dashboardData.outlets || {};
+    state.baseDir = new Map(Object.entries(outlets).map(([code, o]) => [code, {
+      name: o.outletName || "", zonal: o.zonalName || "", rho: o.rhoName || "",
+      lastVisit: o.lastVisit || null,
+      lastVisitZonal: o.lastVisitZonal || null, lastVisitZonalBy: o.lastVisitZonalBy || "",
+      lastVisitRho: o.lastVisitRho || null, lastVisitRhoBy: o.lastVisitRhoBy || "",
+    }]));
+    if (!state.dir.size) state.dir = new Map(state.baseDir);
+    else mergeDirectory(new Map(state.dir));
+    if (state.rows.length) render();
+  } catch { /* directory is optional - codes still work on their own */ }
+}
+const EMPTY_META = { name: "", zonal: "", rho: "", lastVisit: null, lastVisitZonal: null, lastVisitRho: null, lastVisitZonalBy: "", lastVisitRhoBy: "" };
+// Codes are typed by hand, so "f245" has to find F245.
+const meta = (code) => {
+  const key = String(code ?? "").trim();
+  return state.dir.get(key) || state.dir.get(key.toUpperCase()) || state.dir.get(key.toLowerCase()) || EMPTY_META;
+};
+const fmtVisit = (iso) => {
+  if (!iso) return "Not visited";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? String(iso)
+    : d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+};
+
+// Zonal and Regional (RHO) are taken from the Zone Distribution workbook sitting
+// in the same folder — it is the authority for outlet ownership and is more
+// complete than the published visit-compliance copy. Only the identity columns
+// are read; nothing else from that workbook is used here.
+const ZONE_COLUMNS = {
+  code: "code",
+  name: "outlet name",
+  zonal: "zonal hr name",
+  rho: "regional head hr name",
+};
+
+async function isZoneWorkbook(file) {
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array", sheetRows: 4, cellStyles: false });
+    return wb.SheetNames.some((n) => {
+      const head = (XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: "", blankrows: false })[0] || [])
+        .map((h) => String(h).trim().toLowerCase());
+      return head.includes(ZONE_COLUMNS.code) && head.includes(ZONE_COLUMNS.zonal) && head.includes(ZONE_COLUMNS.rho);
+    });
+  } catch { return false; }
+}
+
+async function readZoneDirectory(file) {
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellStyles: false });
+  for (const sheetName of wb.SheetNames) {
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "", blankrows: false });
+    if (!grid.length) continue;
+    const head = grid[0].map((h) => String(h).trim().toLowerCase());
+    const at = {
+      code: head.indexOf(ZONE_COLUMNS.code),
+      name: head.indexOf(ZONE_COLUMNS.name),
+      zonal: head.indexOf(ZONE_COLUMNS.zonal),
+      rho: head.indexOf(ZONE_COLUMNS.rho),
+    };
+    if (at.code < 0 || at.zonal < 0 || at.rho < 0) continue;
+    const map = new Map();
+    for (const line of grid.slice(1)) {
+      const code = String(line[at.code] ?? "").trim();
+      if (!code) continue;
+      map.set(code, {
+        name: String(at.name >= 0 ? line[at.name] ?? "" : "").trim(),
+        zonal: String(line[at.zonal] ?? "").trim(),
+        rho: String(line[at.rho] ?? "").trim(),
+      });
+    }
+    if (map.size) return { map, sheetName, file: file.name };
+  }
+  throw new Error("No sheet with CODE / Zonal HR Name / Regional Head HR Name.");
+}
+
+// Published copy is the base; the folder's zone workbook overrides it wherever it
+// has a value, so a fresher local file always wins.
+function mergeDirectory(zoneMap) {
+  const merged = new Map(state.baseDir);
+  zoneMap.forEach((v, code) => {
+    const current = merged.get(code) || { name: "", zonal: "", rho: "" };
+    merged.set(code, { ...current, name: v.name || current.name, zonal: v.zonal || current.zonal, rho: v.rho || current.rho });
+  });
+  state.dir = merged;
+}
+
+// ── SKU availability ────────────────────────────────────────────────────
+// Two files, both taken from the same folder:
+//   Product_Critaria_Wise_Avaiablity_Report.xlsx → sheet "Compiled ALL", and only
+//     these columns: Item Code, Core Item, Core Promo, KVI, HGPHS, Min Stock Should Be.
+//   stock_extraction_report*.csv → the stock on hand, one column per outlet.
+// An item counts as available at an outlet only when its stock reaches
+// "Min Stock Should Be"; below that it is treated as zero stock for that outlet.
+// Bumped whenever the shape of a cached availability entry changes, so a copy
+// saved by an older build is discarded instead of being shown with blank columns.
+const AVAIL_CACHE_VERSION = 3;
+const AVAIL_CRITERIA = [["Core SKU", "Core Item"], ["KVI SKU", "KVI"], ["Promo SKU", "Core Promo"], ["HGPHS SKU", "HGPHS"]];
+
+async function isCriteriaWorkbook(file) {
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array", sheetRows: 3, cellStyles: false });
+    const name = wb.SheetNames.find(n => n.trim().toLowerCase() === "compiled all");
+    if (!name) return false;
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "", blankrows: false });
+    const head = grid.flat().map(h => String(h).trim().toLowerCase());
+    return head.includes("item code") && head.includes("min stock should be");
+  } catch { return false; }
+}
+
+// Item Code → { min, flags } for the four criteria. Outlet columns are ignored.
+async function readCriteria(file) {
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array", sheetRows: 4000, cellStyles: false });
+  const sheetName = wb.SheetNames.find(n => n.trim().toLowerCase() === "compiled all");
+  const grid = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "", blankrows: false });
+  const headerRow = grid.findIndex(line => line.map(c => String(c).trim().toLowerCase()).includes("item code"));
+  if (headerRow < 0) throw new Error("No 'Item Code' header on Compiled ALL.");
+  const head = grid[headerRow].map(c => String(c).trim().toLowerCase());
+  const at = {
+    code: head.indexOf("item code"),
+    min: head.indexOf("min stock should be"),
+    flags: Object.fromEntries(AVAIL_CRITERIA.map(([label, column]) => [label, head.indexOf(column.toLowerCase())])),
+  };
+  const items = new Map();
+  const totals = Object.fromEntries(AVAIL_CRITERIA.map(([label]) => [label, 0]));
+  for (const line of grid.slice(headerRow + 1)) {
+    const code = String(line[at.code] ?? "").trim();
+    if (!code) continue;
+    const min = Number(line[at.min]) || 0;
+    const flags = {};
+    for (const [label] of AVAIL_CRITERIA) {
+      const on = String(line[at.flags[label]] ?? "").trim().toUpperCase() === "Y";
+      flags[label] = on;
+      if (on) totals[label] += 1;
+    }
+    items.set(code, { min, flags });
+  }
+  return { items, totals };
+}
+
+async function isStockFile(file) {
+  if (!/\.csv$/i.test(file.name)) return false;
+  const head = await file.slice(0, 400).text();
+  return /^\s*productcode\s*,/i.test(head);
+}
+
+function splitCsvLine(line) {
+  const out = []; let cur = "", quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i += 1; } else quoted = false; }
+      else cur += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ",") { out.push(cur); cur = ""; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+// The stock file runs to hundreds of megabytes, so it is streamed and only the
+// ~1,400 rows that appear in the criteria workbook are kept.
+async function readStockAvailability(file, criteria, onProgress) {
+  const { items, totals } = criteria;
+  const counts = new Map();     // outlet code -> { label: available }
+  let header = null, columns = [];
+  let carry = "", scanned = 0, matched = 0, read = 0;
+
+  const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    read += value.length;
+    const chunk = carry + value;
+    const lines = chunk.split("\n");
+    carry = lines.pop() ?? "";
+    for (const raw of lines) {
+      const line = raw.replace(/\r$/, "");
+      if (!line) continue;
+      if (!header) {
+        header = splitCsvLine(line);
+        columns = header.map((h, i) => [i, String(h).trim().toUpperCase()]).filter(([i, c]) => i >= 2 && c);
+        columns.forEach(([, code]) => counts.set(code,
+          Object.fromEntries(AVAIL_CRITERIA.map(([l]) => [l, { ok: 0, actual: 0 }]))));
+        continue;
+      }
+      scanned += 1;
+      if (scanned % 4000 === 0) onProgress?.(read, matched);
+      const comma = line.indexOf(",");
+      const code = line.slice(0, comma).trim();
+      const item = items.get(code);
+      if (!item) continue;
+      matched += 1;
+      const cells = splitCsvLine(line);
+      for (const [i, outlet] of columns) {
+        const value = parseFloat(cells[i]);
+        if (!Number.isFinite(value) || value <= 0) continue;
+        // "Actual" is stock physically present; the headline figure also demands
+        // the item reach its Min Stock Should Be.
+        const meetsMinimum = value >= item.min;
+        const bucket = counts.get(outlet);
+        for (const [label] of AVAIL_CRITERIA) {
+          if (!item.flags[label]) continue;
+          bucket[label].actual += 1;
+          if (meetsMinimum) bucket[label].ok += 1;
+        }
+      }
+    }
+  }
+
+  const result = new Map();
+  counts.forEach((bucket, outlet) => {
+    const entry = {};
+    for (const [label] of AVAIL_CRITERIA) {
+      const total = totals[label];
+      const { ok, actual } = bucket[label];
+      entry[label] = {
+        ok, actual, total,
+        pct: total ? (100 * ok / total) : 0,
+        pctActual: total ? (100 * actual / total) : 0,
+      };
+    }
+    result.set(outlet, entry);
+  });
+  return { result, matched, scanned };
+}
+
+const availFor = (code) => state.avail.get(String(code ?? "").trim().toUpperCase()) || null;
+
+/* ── aggregation ─────────────────────────────────────────────────────── */
+function aggregate() {
+  const num = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
+  const out = {
+    total: [0,0], cats: new Map(), sites: new Map(), questions: new Map(), days: new Map(),
+    audits: new Set(), outlets: new Set(),
+  };
+  for (const r of state.rows) {
+    const category = r["Question Category"] || "Uncategorised";
+    const site = String(r["Site Code"] || "").trim();
+    if (state.cat && category !== state.cat) continue;
+    if (state.site) {
+      const needle = state.site.toLowerCase();
+      const info = meta(site);
+      if (!site.toLowerCase().includes(needle) && !String(info.name).toLowerCase().includes(needle)) continue;
+    }
+    out.audits.add(r["Response ID"]); out.outlets.add(site);
+    const max = num(r["Question Max Score"]), got = num(r["Answer Score"]);
+    if (max === null || max <= 0 || got === null) continue;   // notes carry no marks
+    out.total[0] += got; out.total[1] += max;
+    const add = (map, key, extra) => {
+      const cur = map.get(key) || [0,0,extra];
+      cur[0] += got; cur[1] += max; map.set(key, cur);
+    };
+    add(out.cats, category);
+    add(out.sites, site);
+    add(out.questions, r["Question Title"] || "(untitled)", category);
+    const day = String(r["Date"] || "").split(",")[0].trim();
+    if (day) add(out.days, day);
+  }
+  return out;
+}
+
+function barRows(entries, limit) {
+  return entries.slice(0, limit).map(([label, [got, max, extra]]) => {
+    const v = pct(got, max);
+    return `<div class="bar-row">
+      <span class="lbl">${esc(label)}${extra ? `<br><span style="font-size:10.5px;color:var(--muted-text)">${esc(extra)}</span>` : ""}</span>
+      <span class="bar-track"><span class="bar-fill" style="width:${v.toFixed(1)}%;background:${tone(v)}"></span></span>
+      <span class="val" style="color:${tone(v)}">${v.toFixed(1)}%</span>
+    </div>`;
+  }).join("");
+}
+
+const SORT_LABELS = { name: "Outlet code", oname: "Outlet name", zonal: "Zonal", rho: "Regional (RHO)",
+  cat: "Category", got: "Earned", max: "Available", score: "Score" };
+
+function sortValue(entry, key) {
+  const [label, [got, max, extra]] = entry;
+  if (key === "name") return String(label).toLowerCase();
+  if (key === "cat") return String(extra || "").toLowerCase();
+  if (key === "oname") return String(meta(label).name).toLowerCase();
+  if (key === "zonal") return String(meta(label).zonal).toLowerCase();
+  if (key === "rho") return String(meta(label).rho).toLowerCase();
+  if (key === "got") return got;
+  if (key === "max") return max;
+  return pct(got, max);
+}
+
+// Sorts on several columns at once: the first entry in the chain wins, the next
+// breaks ties, and so on. Handy for "group by Zonal, then weakest outlet first".
+function sortRows(entries, chain) {
+  const keys = chain.length ? chain : [{ key: "score", dir: "asc" }];
+  return [...entries].sort((a, b) => {
+    for (const { key, dir } of keys) {
+      const x = sortValue(a, key), y = sortValue(b, key);
+      if (x < y) return dir === "asc" ? -1 : 1;
+      if (x > y) return dir === "asc" ? 1 : -1;
+    }
+    return 0;
+  });
+}
+
+function th(label, key, chain, table, extraClass = "") {
+  const at = chain.findIndex((c) => c.key === key);
+  const active = at >= 0;
+  const arrow = active ? (chain[at].dir === "asc" ? "▲" : "▼") : "▲";
+  const rank = active && chain.length > 1 ? `<sup class="rank">${at + 1}</sup>` : "";
+  return `<th class="sortable ${active ? "active" : ""} ${extraClass}" data-table="${table}" data-key="${key}"
+    title="Click to sort · Shift-click to add another level">${esc(label)}<span class="arrow">${arrow}${rank}</span></th>`;
+}
+
+function sortChips(chain, table) {
+  if (!chain.length) return "";
+  return `<div class="sort-chips"><span class="sc-label">Sorted by</span>` +
+    chain.map((c, i) => `<span class="chip">${i + 1}. ${esc(SORT_LABELS[c.key] || c.key)}
+      <button data-table="${table}" data-flip="${c.key}" title="Reverse">${c.dir === "asc" ? "▲" : "▼"}</button>
+      <button data-table="${table}" data-drop="${c.key}" title="Remove">×</button></span>`).join("") +
+    (chain.length > 1 ? `<button class="chip-clear" data-table="${table}" data-clear="1">Clear all</button>` : "") +
+    `</div>`;
+}
+
+function applySortClick(table, key, additive) {
+  const chain = table === "q" ? state.qSort : state.oSort;
+  const at = chain.findIndex((c) => c.key === key);
+  if (additive) {
+    if (at >= 0) chain[at].dir = chain[at].dir === "asc" ? "desc" : "asc";
+    else chain.push({ key, dir: "asc" });
+  } else if (at === 0 && chain.length === 1) {
+    chain[0].dir = chain[0].dir === "asc" ? "desc" : "asc";
+  } else {
+    chain.length = 0;
+    chain.push({ key, dir: "asc" });
+  }
+  render();
+}
+
+function scoreCell(v) {
+  return `<span class="mini"><i style="width:${v.toFixed(1)}%;background:${tone(v)}"></i></span><b style="color:${tone(v)}">${v.toFixed(1)}%</b>`;
+}
+
+function render() {
+  if (!state.rows.length) {
+    $("body").innerHTML = `<div class="empty-state"><h2>No data loaded yet</h2>
+      Choose the folder on your laptop where the survey export is saved.<br>
+      The newest matching Excel file is read automatically — the name can change every month.<br><br>
+      Nothing is uploaded; the file is read on this computer only.</div>`;
+    return;
+  }
+  const a = aggregate();
+  const overall = pct(a.total[0], a.total[1]);
+  const cats = [...a.cats.entries()].sort((x, y) => pct(x[1][0], x[1][1]) - pct(y[1][0], y[1][1]));
+  const questions = sortRows([...a.questions.entries()], state.qSort);
+  const outlets = sortRows([...a.sites.entries()], state.oSort);
+  const days = [...a.days.entries()].sort((x, y) => new Date(x[0]) - new Date(y[0]));
+  const below = { s60: 0, s70: 0, s80: 0 };
+  for (const [, [got, max]] of a.sites) {
+    const v = pct(got, max);
+    if (v < 60) below.s60 += 1;
+    if (v < 70) below.s70 += 1;
+    if (v < 80) below.s80 += 1;
+  }
+  state.view = { overall, cats, questions, outlets, days, audits: a.audits.size, outletCount: a.outlets.size, total: a.total, below };
+  state.view.drillMeta = state.site ? meta(state.site) : null;
+
+  const drillMeta = state.site ? meta(state.site) : EMPTY_META;
+  const drill = state.site
+    ? `<div class="drill"><b>Showing outlet ${esc(state.site.toUpperCase())}${drillMeta.name ? " · " + esc(drillMeta.name) : ""}</b>
+         <span class="coverage">every panel below is filtered to this outlet</span>
+         <button id="clear-drill" type="button">Show all outlets</button></div>` : "";
+
+  $("body").innerHTML = `
+    ${drill}
+    <section class="score-hero">
+      <div class="hero-cell hero-score">
+        <span class="big" style="color:${tone(overall)}">${overall.toFixed(1)}%</span>
+        <span class="cap">Overall compliance</span>
+      </div>
+      <div class="hero-cell hero-facts">
+        <div class="fact"><div class="n">${a.audits.size.toLocaleString()}</div><div class="l">Audits</div></div>
+        <div class="fact"><div class="n">${state.site ? questions.length : a.outlets.size.toLocaleString()}</div><div class="l">${state.site ? "Scored questions" : "Outlets covered"}</div></div>
+        <div class="fact"><div class="n" style="color:${tone(overall)}">${(a.total[1] - a.total[0]).toLocaleString()}</div><div class="l">Points lost</div></div>
+        ${state.site ? `
+        <div class="fact"><div class="n" style="font-size:15px">${esc(fmtVisit(drillMeta.lastVisitZonal))}</div>
+          <div class="l">Last visit · Zonal${drillMeta.lastVisitZonalBy ? ` · ${esc(drillMeta.lastVisitZonalBy)}` : ""}</div></div>
+        <div class="fact"><div class="n" style="font-size:15px">${esc(fmtVisit(drillMeta.lastVisitRho))}</div>
+          <div class="l">Last visit · RHO${drillMeta.lastVisitRhoBy ? ` · ${esc(drillMeta.lastVisitRhoBy)}` : ""}</div></div>`
+        : `
+        <div class="fact"><div class="n">${questions.length}</div><div class="l">Scored questions</div></div>
+        <div class="fact"><div class="n">${below.s70}</div><div class="l">Below 70%</div></div>
+        <div class="fact"><div class="n">${below.s80}</div><div class="l">Below 80%</div></div>`}
+      </div>
+    </section>
+
+    ${state.site && availFor(state.site) ? `
+    <section class="panel">
+      <div class="panel-head"><h2>Availability Status</h2>
+        <p class="panel-caption">Counts stock that meets the minimum Qty · ${esc(state.site.toUpperCase())}${state.availFile ? ` · ${esc(state.availFile)}` : ""}${state.stockFile ? ` + ${esc(state.stockFile)}` : ""}</p></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Availability Status</th><th class="num">Avail</th><th class="num">SKUs</th><th class="num">%</th></tr></thead>
+        <tbody>${AVAIL_CRITERIA.map(([label]) => {
+          const cell = availFor(state.site)[label];
+          return `<tr><td><b>${esc(label)}</b></td><td class="num">${cell.ok}</td><td class="num">${cell.total}</td>
+            <td class="num">${scoreCell(cell.pct)}</td></tr>`;
+        }).join("")}</tbody>
+      </table></div>
+    </section>` : ""}
+
+    <section class="panel">
+      <div class="panel-head"><h2>Score by category</h2>
+        <p class="panel-caption">${cats.length} categories</p></div>
+      <div style="padding:8px 18px 16px">${barRows(cats, 20)}</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Every scored question</h2>
+        <p class="panel-caption">${questions.length} questions · click a column to sort · shift-click to add a level</p></div>
+      ${sortChips(state.qSort, "q")}
+      <div class="table-wrap"><table>
+        <thead><tr>${th("Question","name",state.qSort,"q")}${th("Category","cat",state.qSort,"q")}
+          ${th("Earned","got",state.qSort,"q","num")}${th("Available","max",state.qSort,"q","num")}${th("Score","score",state.qSort,"q","num")}</tr></thead>
+        <tbody>${questions.map(([label,[got,max,cat]]) => `<tr>
+          <td><b>${esc(label)}</b></td><td>${esc(cat || "")}</td>
+          <td class="num">${got.toLocaleString()}</td><td class="num">${max.toLocaleString()}</td>
+          <td class="num">${scoreCell(pct(got,max))}</td></tr>`).join("")}</tbody>
+      </table></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Outlets</h2>
+        <p class="panel-caption">${outlets.length.toLocaleString()} in view · ${below.s60} below 60% · ${below.s70} below 70% · ${below.s80} below 80% · click a row to drill in · shift-click headers for multi-level sorting</p></div>
+      ${sortChips(state.oSort, "o")}
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th>${th("Outlet code","name",state.oSort,"o")}${th("Outlet name","oname",state.oSort,"o")}
+          ${th("Zonal","zonal",state.oSort,"o")}${th("Regional (RHO)","rho",state.oSort,"o")}
+          ${th("Earned","got",state.oSort,"o","num")}${th("Available","max",state.oSort,"o","num")}${th("Score","score",state.oSort,"o","num")}</tr></thead>
+        <tbody>${outlets.map(([code,[got,max]],i) => { const d = meta(code); return `<tr class="click-row ${state.site === code ? "on" : ""}" data-code="${esc(code)}">
+          <td>${i+1}</td><td><b>${esc(code)}</b></td><td>${esc(d.name)}</td><td>${esc(d.zonal)}</td><td>${esc(d.rho)}</td>
+          <td class="num">${got.toLocaleString()}</td><td class="num">${max.toLocaleString()}</td>
+          <td class="num">${scoreCell(pct(got,max))}</td></tr>`; }).join("")}</tbody>
+      </table></div>
+    </section>
+
+    ${days.length > 1 ? `<section class="panel"><div class="panel-head"><h2>Daily audit score</h2></div>
+      <div style="padding:8px 18px 16px">${barRows(days, 31)}</div></section>` : ""}
+
+    <p class="coverage">${state.zoneFile ? `Zonal and Regional (RHO) read from <b>${esc(state.zoneFile)}</b> in the same folder. ` : ""}Every question in the export is listed above. Questions carrying no marks
+      (free-text notes) are excluded from scoring so they cannot dilute the result.</p>`;
+
+  document.querySelectorAll("th.sortable").forEach(el => el.addEventListener("click", (ev) =>
+    applySortClick(el.dataset.table, el.dataset.key, ev.shiftKey)));
+  document.querySelectorAll(".sort-chips button").forEach(btn => btn.addEventListener("click", () => {
+    const chain = btn.dataset.table === "q" ? state.qSort : state.oSort;
+    if (btn.dataset.clear) { chain.length = 0; chain.push({ key: "score", dir: "asc" }); }
+    else if (btn.dataset.flip) {
+      const c = chain.find(x => x.key === btn.dataset.flip);
+      if (c) c.dir = c.dir === "asc" ? "desc" : "asc";
+    } else if (btn.dataset.drop) {
+      const i = chain.findIndex(x => x.key === btn.dataset.drop);
+      if (i >= 0) chain.splice(i, 1);
+      if (!chain.length) chain.push({ key: "score", dir: "asc" });
+    }
+    render();
+  }));
+  document.querySelectorAll("tr.click-row").forEach(el => el.addEventListener("click", () => {
+    state.site = state.site === el.dataset.code ? "" : el.dataset.code;
+    $("f-site").value = state.site;
+    render();
+  }));
+  $("clear-drill")?.addEventListener("click", () => { state.site = ""; $("f-site").value = ""; render(); });
+
+  const sel = $("f-cat"), keep = sel.value;
+  sel.innerHTML = `<option value="">All categories</option>` +
+    [...new Set(state.rows.map(r => r["Question Category"]).filter(Boolean))].sort()
+      .map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  sel.value = keep;
+}
+
+/* ── exports: whatever is on screen right now ────────────────────────── */
+function scopeLabel() {
+  const bits = [];
+  if (state.site) bits.push(`Outlet ${state.site}`);
+  if (state.cat) bits.push(state.cat);
+  return bits.length ? bits.join(" · ") : "All outlets and categories";
+}
+
+function downloadBlob(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+function exportCsv() {
+  const v = state.view; if (!v) return;
+  const q = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
+  const lines = [];
+  lines.push(["Audit Quality Dashboard"], [scopeLabel()], [`Source file`, state.file], [`Overall score`, v.overall.toFixed(1) + "%"],
+             [`Audits`, v.audits], [`Outlets covered`, v.outletCount], []);
+  lines.push(["CATEGORY", "Earned", "Available", "Score %"]);
+  v.cats.forEach(([k,[g,m]]) => lines.push([k, g, m, pct(g,m).toFixed(1)]));
+  lines.push([], ["QUESTION", "Category", "Earned", "Available", "Score %"]);
+  v.questions.forEach(([k,[g,m,c]]) => lines.push([k, c || "", g, m, pct(g,m).toFixed(1)]));
+  const av = state.site ? availFor(state.site) : null;
+  if (av) {
+    lines.push([], ["AVAILABILITY STATUS", "Avail (Stock meets the minimum Qty)", "SKUs",
+                    "% (Stock meets the minimum Qty)"]);
+    AVAIL_CRITERIA.forEach(([label]) => {
+      const c = av[label];
+      lines.push([label, c.ok, c.total, c.pct.toFixed(1)]);
+    });
+  }
+  lines.push([], ["OUTLET", "Outlet name", "Zonal", "Regional (RHO)", "Earned", "Available", "Score %"]);
+  v.outlets.forEach(([k,[g,m]]) => { const d = meta(k); lines.push([k, d.name, d.zonal, d.rho, g, m, pct(g,m).toFixed(1)]); });
+  const csv = lines.map(r => r.map(q).join(",")).join("\r\n");
+  downloadBlob(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }), `audit-quality-${Date.now()}.csv`);
+}
+
+/* Executive summary, always two A4 landscape pages.
+   No outlet selected → page 1 network picture, page 2 every outlet below 70%.
+   Outlet selected     → page 1 that outlet's categories, page 2 all its questions,
+   both ordered weakest first, which is what a review meeting reads down. */
+function exportPdf() {
+  const v = state.view; if (!v) return;
+  const { jsPDF } = window.jspdf || {};
+  if (!jsPDF) { alert("PDF library did not load — check the internet connection."); return; }
+
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  const W = doc.internal.pageSize.getWidth();     // 842
+  const H = doc.internal.pageSize.getHeight();    // 595
+  const M = 32;
+  const BOTTOM = H - 26;
+  const worst = (a, b) => pct(a[1][0], a[1][1]) - pct(b[1][0], b[1][1]);
+
+  const title = (text, sub) => {
+    doc.setFont("helvetica", "bold"); doc.setFontSize(15); doc.setTextColor(15, 36, 58);
+    doc.text(text, M, 34);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(95, 110, 125);
+    doc.text(sub, M, 47);
+    doc.setDrawColor(0); doc.setLineWidth(0.8); doc.line(M, 53, W - M, 53);
+  };
+  const footer = (n) => {
+    doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(120, 132, 145);
+    doc.text(`Page ${n} of 2`, W - M, H - 14, { align: "right" });
+    doc.text(`${state.file || "local file"} · generated ${new Date().toLocaleString()}`, M, H - 14);
+  };
+
+  // compact table; returns the y it finished at
+  // Every table is drawn with a full pure-black grid: outer box, a line under each
+  // row and a divider between columns. Grey hairlines look fine on screen but all
+  // but disappear on a printed page.
+  const table = (x, y, width, headers, widths, rows, heading, rowH = 10.5) => {
+    if (heading) {
+      doc.setFont("helvetica", "bold"); doc.setFontSize(9.5); doc.setTextColor(15, 36, 58);
+      doc.text(heading, x, y); y += 9;
+    }
+    const top = y;
+    doc.setFillColor(15, 36, 58); doc.rect(x, y, width, 13, "F");
+    doc.setFont("helvetica", "bold"); doc.setFontSize(6.8); doc.setTextColor(255, 255, 255);
+    let cx = x + 4;
+    headers.forEach((h, i) => {
+      const right = String(h).startsWith(">");
+      const label = right ? h.slice(1) : h;
+      doc.text(label, right ? cx + widths[i] - 6 : cx, y + 9, { align: right ? "right" : "left" });
+      cx += widths[i];
+    });
+    y += 13;
+
+    doc.setFont("helvetica", "normal"); doc.setFontSize(Math.min(6.6, rowH - 2.2));
+    rows.forEach((row, n) => {
+      if (n % 2) { doc.setFillColor(243, 246, 250); doc.rect(x, y, width, rowH, "F"); }
+      cx = x + 4;
+      row.forEach((cell, i) => {
+        const right = String(headers[i]).startsWith(">");
+        doc.setTextColor(30, 30, 30);
+        const text = String(cell ?? "");
+        const room = Math.floor((widths[i] - 8) / 3.05);
+        doc.text(text.length > room ? text.slice(0, room - 1) + "…" : text,
+                 right ? cx + widths[i] - 6 : cx, y + rowH - 3.1, { align: right ? "right" : "left" });
+        cx += widths[i];
+      });
+      y += rowH;
+    });
+
+    // grid, drawn last so no fill paints over it
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.45);
+    doc.rect(x, top, width, y - top);                 // outer box
+    doc.line(x, top + 13, x + width, top + 13);       // under the header
+    doc.setLineWidth(0.25);
+    for (let n = 1; n <= rows.length; n += 1) {       // under each row
+      const ly = top + 13 + n * rowH;
+      if (ly < y) doc.line(x, ly, x + width, ly);
+    }
+    let vx = x;                                        // between columns
+    widths.forEach((w, i) => {
+      if (i === widths.length - 1) return;
+      vx += w;
+      doc.line(vx, top, vx, y);
+    });
+    return y + 14;
+  };
+
+  const headline = (y, label) => {
+    doc.setDrawColor(0); doc.setLineWidth(0.7); doc.rect(M, y, W - 2 * M, 46);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(26); doc.setTextColor(20, 20, 20);
+    doc.text(`${v.overall.toFixed(1)}%`, M + 14, y + 30);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(6.8); doc.setTextColor(95, 110, 125);
+    doc.text(label, M + 14, y + 40);
+    const facts = [["Audits", v.audits], ["Outlets", v.outletCount], ["Questions", v.questions.length],
+                   ["Points lost", (v.total[1] - v.total[0]).toLocaleString()],
+                   ["Below 70%", v.below.s70], ["Below 80%", v.below.s80]];
+    facts.forEach(([l, n], i) => {
+      const x = M + 130 + i * ((W - 2 * M - 140) / 6);
+      doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(20, 20, 20);
+      doc.text(String(n), x, y + 26);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(6.2); doc.setTextColor(95, 110, 125);
+      doc.text(String(l).toUpperCase(), x, y + 37);
+    });
+    return y + 60;
+  };
+
+  const catRows = v.cats.map(([k, [g, m]]) => [k, g.toLocaleString(), m.toLocaleString(), pct(g, m).toFixed(1) + "%"]);
+  const catHead = ["Category", ">Earned", ">Available", ">Score"];
+  const catW = [190, 60, 62, 46];
+
+  if (state.site) {
+    // ── one outlet: everything on a single landscape page ────────────
+    const d = meta(state.site);
+    const code = state.site.toUpperCase();
+    title(`Audit Quality — ${code}${d.name ? " · " + d.name : ""}`,
+          `Zonal ${d.zonal || "—"}   ·   Regional (RHO) ${d.rho || "—"}   ·   `
+          + `Last visit by Zonal ${fmtVisit(d.lastVisitZonal)}   ·   by RHO ${fmtVisit(d.lastVisitRho)}   ·   weakest first`);
+
+    // compact headline band
+    doc.setDrawColor(0); doc.setLineWidth(0.7); doc.rect(M, 62, W - 2 * M, 42);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(23); doc.setTextColor(20, 20, 20);
+    doc.text(`${v.overall.toFixed(1)}%`, M + 13, 89);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(6.2); doc.setTextColor(95, 110, 125);
+    doc.text("OUTLET COMPLIANCE", M + 13, 99);
+    [["Audits", v.audits], ["Questions", v.questions.length],
+     ["Points lost", (v.total[1] - v.total[0]).toLocaleString()],
+     ["Last visit · Zonal", fmtVisit(d.lastVisitZonal)],
+     ["Last visit · RHO", fmtVisit(d.lastVisitRho)]].forEach(([l, n], i) => {
+      const x = M + 128 + i * ((W - 2 * M - 138) / 5);
+      doc.setFont("helvetica", "bold"); doc.setFontSize(String(n).length > 8 ? 8.5 : 12);
+      doc.setTextColor(20, 20, 20); doc.text(String(n), x, 86);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.setTextColor(95, 110, 125);
+      doc.text(String(l).toUpperCase(), x, 97);
+    });
+
+    // categories on the left, all questions in two columns beside them
+    const y0 = 118;
+    table(M, y0, 232, catHead, [116, 40, 42, 34], catRows, "Score by category — lowest first", 10.5);
+
+    const qAll = v.questions.slice().sort(worst);
+    const half = Math.ceil(qAll.length / 2);
+    const qHead = ["Question", "Category", ">Score"];
+    const qW = [116, 96, 38];
+    const rowsOf = (list) => list.map(([k, [g, m, c]]) => [k, c || "", pct(g, m).toFixed(1) + "%"]);
+    const rowH = Math.max(6.4, Math.min(10.5, (BOTTOM - y0 - 30) / Math.max(half, 1)));
+    table(M + 248, y0, 250, qHead, qW, rowsOf(qAll.slice(0, half)), `All ${qAll.length} questions, weakest first`, rowH);
+    table(M + 512, y0, 250, qHead, qW, rowsOf(qAll.slice(half)), " ", rowH);
+
+    // Availability Status sits under the category table, same page.
+    const av = availFor(state.site);
+    if (av) {
+      const avY = y0 + 37 + catRows.length * 10.5 + 16;
+      table(M, avY, 232, ["Availability Status", ">Avail", ">SKUs", ">%"], [104, 44, 44, 40],
+            AVAIL_CRITERIA.map(([label]) => {
+              const c = av[label];
+              return [label, c.ok, c.total, c.pct.toFixed(1) + "%"];
+            }),
+            "Availability Status", 11);
+    }
+
+    doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(120, 132, 145);
+    doc.text(`${state.file || "local file"} · generated ${new Date().toLocaleString()}`, M, H - 14);
+    doc.text("Page 1 of 1", W - M, H - 14, { align: "right" });
+  } else {
+    // ── whole network ────────────────────────────────────────────────
+    title("Audit Quality — Executive Summary", `${scopeLabel()}   ·   weakest first`);
+    let y = headline(62, "OVERALL COMPLIANCE");
+    table(M, y, 358, catHead, catW, catRows, "Score by category — lowest to highest");
+    const qHead = ["Question", "Category", ">Score"];
+    table(M + 420, y, 324, qHead, [150, 130, 44],
+          v.questions.slice().sort(worst).slice(0, 18).map(([k, [g, m, c]]) => [k, c || "", pct(g, m).toFixed(1) + "%"]),
+          "Weakest 18 questions");
+    footer(1);
+
+    doc.addPage("a4", "landscape");
+    const flagged = v.outlets.slice().sort(worst).filter(([, [g, m]]) => pct(g, m) < 70);
+    title(`Outlets needing attention — ${flagged.length} below 70%`, "Weakest first");
+    const oHead = ["Outlet", "Outlet name", "Zonal", "RHO", ">Score"];
+    const oW = [40, 118, 92, 92, 40];
+    const rowsOf = (list) => list.map(([code, [g, m]]) => {
+      const d = meta(code);
+      return [code, d.name, d.zonal, d.rho, pct(g, m).toFixed(1) + "%"];
+    });
+    // Two columns so the whole list lands on this one page.
+    // Two pages is a hard promise, so if the list is longer than a page can hold
+    // even at the smallest readable row height, the worst are shown and the rest
+    // are called out rather than silently dropped.
+    const maxPerCol = Math.floor((BOTTOM - 66 - 20) / 6.4);
+    const shown = flagged.slice(0, maxPerCol * 2);
+    const omitted = flagged.length - shown.length;
+    const perCol = Math.ceil(shown.length / 2);
+    const rowH = Math.max(6.4, Math.min(10.5, (BOTTOM - 66 - 20) / Math.max(perCol, 1)));
+    if (omitted > 0) {
+      doc.setFont("helvetica", "italic"); doc.setFontSize(7); doc.setTextColor(150, 60, 40);
+      doc.text(`Worst ${shown.length} shown · ${omitted} more below 70% are in the CSV export`, W - M, 47, { align: "right" });
+    }
+    table(M, 66, 382, oHead, oW, rowsOf(shown.slice(0, perCol)), "", rowH);
+    table(M + 400, 66, 382, oHead, oW, rowsOf(shown.slice(perCol)), "", rowH);
+    footer(2);
+  }
+
+  doc.save(`audit-summary-${state.site || "network"}-${Date.now()}.pdf`);
+}
+
+/* ── wiring ──────────────────────────────────────────────────────────── */
+$("pick-folder").addEventListener("click", pickFolder);
+$("grant").addEventListener("click", grantAccess);
+$("pick-file-btn").addEventListener("click", () => $("pick-file").click());
+$("pick-file").addEventListener("change", e => e.target.files[0] && readWorkbook(e.target.files[0]).catch(err => setState(`<span class="pill idle">error</span><br>${esc(err.message)}`)));
+$("f-cat").addEventListener("change", e => { state.cat = e.target.value; render(); });
+$("f-site").addEventListener("input", e => { state.site = e.target.value; render(); });
+$("f-rank").addEventListener("change", e => { state.rank = e.target.value; render(); });
+$("dl-csv").addEventListener("click", exportCsv);
+$("dl-pdf").addEventListener("click", exportPdf);
+$("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; state.rank = "worst";
+  $("f-cat").value = ""; $("f-site").value = ""; $("f-rank").value = "worst"; render(); });
+
+(async () => {
+  render();
+  // 1. Show the last data straight away - works with no folder access at all.
+  const cached = await idbGet("cache", "last");
+  if (cached?.packed?.length) {
+    state.rows = fatten(cached.packed); state.file = cached.file;
+    state.sig = cached.sig; state.source = "cache"; state.savedAt = cached.savedAt; state.stale = true;
+    showLoaded(); render();
+  } else {
+    setState(`<span class="pill idle">no folder</span><br>Choose the folder holding the survey export. It is remembered from then on.`);
+  }
+  // 2. Restore the last successful PC stock availability snapshot BEFORE
+  // reconnecting to the folder.  This prevents a refresh/empty folder from
+  // temporarily showing zero availability.
+  const availCache = await idbGet("cache", "avail");
+  const availUsable = availCache?.version === AVAIL_CACHE_VERSION
+    && availCache.entries?.length
+    && availCache.entries.some(([, e]) => e && Object.values(e).some(v => v && v.actual !== undefined));
+  if (availUsable) {
+    state.avail = new Map(availCache.entries);
+    state.availFile = availCache.file || "";
+    state.stockFile = availCache.stockFile || "";
+    state.criteriaSig = availCache.criteriaSig || "";
+    state.stockSig = availCache.stockSig || "";
+    state.availSavedAt = availCache.savedAt || 0;
+    state.availSource = "cache";
+    state.availMatched = availCache.matched || 0;
+    if (state.rows.length) { showLoaded(); render(); }
+  } else if (availCache) {
+    await idbDel("cache", "avail");
+  }
+
+  // 3. Use the server-side audit snapshot when one has been published.  The
+  // availability snapshot remains the local PC-folder copy restored above.
+  await loadPublishedAudit();
+  // 4. Load outlet ownership and then reconnect to the remembered folder.
+  await loadDirectory();
+  const zoneCache = await idbGet("cache", "zone");
+  if (zoneCache?.entries?.length) {
+    state.zoneFile = zoneCache.file;
+    mergeDirectory(new Map(zoneCache.entries));
+    if (state.rows.length) render();
+  }
+  const handle = await idbGet("h", "folder");
+  if (!handle) return;
+  state.dirHandle = handle;
+  let permission = "prompt";
+  try { permission = await handle.queryPermission({ mode: "read" }); } catch {}
+  if (permission === "granted") { await syncFolder({ silent: false }); startWatching(); }
+  else needsGrant();
+})();
+</script>
+</body>
+</html>
