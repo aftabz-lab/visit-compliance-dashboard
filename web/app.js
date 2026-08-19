@@ -1,4 +1,4 @@
-import { attachPcRawDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=pc-response-dashboard-plan-v9-retained-snapshot";
+import { attachPcRawDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=pc-response-dashboard-plan-v11-shared-snapshot";
 
 const columns = [
   ["status", "Status"],
@@ -104,6 +104,7 @@ function renderDataSource() {
   const isPcFolderSelection = source === "pc-folder-selection";
   const isPcFile = source === "pc-file";
   const isSavedCopy = source === "local-cache";
+  const isPublishedShared = source === "published-shared";
   const isWaiting = source === "awaiting-local";
   const responseSheet = m.responseSheet || "Response Summary";
   const acceptedResponses = Number(m.diagnostics?.acceptedResponses);
@@ -117,8 +118,10 @@ function renderDataSource() {
         ? "PC FILE — LIVE"
         : isSavedCopy
           ? "RETAINED SNAPSHOT"
-          : "PC FOLDER REQUIRED";
-  $("data-source-badge").classList.toggle("is-saved-copy", isSavedCopy);
+          : isPublishedShared
+            ? "SHARED SNAPSHOT"
+            : "PC FOLDER REQUIRED";
+  $("data-source-badge").classList.toggle("is-saved-copy", isSavedCopy || isPublishedShared);
   $("data-source-file").textContent = isWaiting
     ? "Choose your PC raw-data folder"
     : m.responseFile || "Response workbook";
@@ -131,7 +134,9 @@ function renderDataSource() {
   $("data-source-taken").textContent = snapshotTakenAt && !isWaiting
     ? `Snapshot taken ${fmtSnapshotTimestamp(snapshotTakenAt)}`
     : "Snapshot not yet taken";
-  $("data-source-note").textContent = `${localStatus.message || getDataStatus(dataLoad).text} The response source must be a local file named like “Store_Operations_Compliance_Audit_responses…xlsx”; only “${responseSheet}” is read.`;
+  $("data-source-note").textContent = isPublishedShared
+    ? `${localStatus.message || getDataStatus(dataLoad).text} The shared copy was originally created from a PC raw-data workbook named like “Store_Operations_Compliance_Audit_responses…xlsx”, using only “${responseSheet}”.`
+    : `${localStatus.message || getDataStatus(dataLoad).text} The response source must be a local file named like “Store_Operations_Compliance_Audit_responses…xlsx”; only “${responseSheet}” is read.`;
   const grantButton = $("grant-folder");
   if (grantButton) grantButton.hidden = localStatus.kind !== "needs-grant";
   const fallbackButton = $("pick-folder-fallback-btn");

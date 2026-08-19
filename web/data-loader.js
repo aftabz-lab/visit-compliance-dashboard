@@ -25,7 +25,8 @@ const OFFICER_ALIASES = [
 
 const PC_DB = "visit-compliance-pc-raw-data";
 const PC_DB_VERSION = 1;
-const PC_READER_VERSION = "pc-response-dashboard-plan-v9-retained-snapshot";
+const PC_READER_VERSION = "pc-response-dashboard-plan-v11-shared-snapshot";
+const SHARED_SNAPSHOT_URL = "./data/shared_snapshot.json";
 
 const DEFAULT_DEFINITIONS = Object.freeze({
   fullMonth: "Total Planned Visits (Full Month) counts every scheduled assignment in the current visit plan (local Zonal/RHO workbook when present, otherwise the dashboard visit plan).",
@@ -1681,6 +1682,23 @@ class PcRawDataSource {
   }
 }
 
+async function loadPublishedSharedDashboard() {
+  try {
+    const response = await fetch(`${SHARED_SNAPSHOT_URL}?_=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const data = payload?.visitDashboard;
+    if (!validDashboardData(data) || !data?.officers?.length || !data?.metadata?.snapshotDate) return null;
+    return {
+      data,
+      generatedAt: payload?.generatedAt || data?.metadata?.snapshotTakenAt || data?.metadata?.generatedAt || null,
+      sourceFile: data?.metadata?.responseFile || "Published shared snapshot",
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function loadPublishedScheduleBaseline() {
   // Read the deployed dashboard snapshot only to recover planned assignments.
   // It is never displayed as response data and never substitutes for the PC
@@ -1706,11 +1724,38 @@ async function loadPublishedScheduleBaseline() {
 
 export async function loadDashboardData() {
   const localSource = new PcRawDataSource();
-  // Load only the published visit-plan skeleton in the background. The page
-  // deliberately remains at zero until a PC Response Summary is selected.
+  // The published visit-plan skeleton is still used only as a plan fallback
+  // when a local PC response workbook is read.
   localSource.scheduleBaseData = await loadPublishedScheduleBaseline();
+
+  // A snapshot previously read on THIS browser has first priority.
   const local = await localSource.initialize();
   if (local) return local;
+
+  // On a different PC/network there is no IndexedDB snapshot.  In that case
+  // use the deliberately published shared snapshot.  Folder selection remains
+  // attached, so a user who has the raw-data folder can still override this
+  // immediately with a fresh local read.
+  const shared = await loadPublishedSharedDashboard();
+  if (shared) {
+    // Keep the shared copy as the in-memory baseline so attaching the optional
+    // PC-folder reader does not replace the shared status with an idle message.
+    localSource.currentData = shared.data;
+    localSource.currentSignature = "published-shared";
+    localSource.savedAt = shared.generatedAt || null;
+    return {
+      data: shared.data,
+      source: "published-shared",
+      usingLastData: true,
+      lastFetched: shared.generatedAt,
+      localStatus: {
+        kind: "published",
+        message: "Showing the published shared snapshot. This copy is available from any PC or network; choose the raw-data folder on an authorized source PC to refresh locally.",
+      },
+      localSource,
+    };
+  }
+
   return {
     data: emptyDashboardData(),
     source: "awaiting-local",
@@ -1735,5 +1780,6 @@ export function getDataStatus(result) {
   if (result?.source === "pc-folder-selection") return { type: "pc-folder-selection", text: "Showing data loaded from the selected PC raw-data folder." };
   if (result?.source === "pc-file") return { type: "pc-file", text: "Showing a live snapshot from the response workbook selected on this PC." };
   if (result?.source === "local-cache") return { type: "local-cache", text: "Showing the retained data from the last successful PC raw-data read." };
+  if (result?.source === "published-shared") return { type: "published-shared", text: "Showing the published shared snapshot. It is available to other PCs and networks without folder access." };
   return { type: "awaiting-local", text: "Choose your PC raw-data folder to load the current Response Summary." };
 }

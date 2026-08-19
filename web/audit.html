@@ -79,6 +79,7 @@
   </div>
   <div class="topbar-actions">
     <a class="btn link-btn" href="./index.html">Visit compliance</a>
+    <a class="btn secondary" href="./publish.html">Share snapshot</a>
   </div>
 </header>
 
@@ -132,7 +133,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
+const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
 
 // Green through amber to red — the same reading at a glance for any manager.
 function tone(v) {
@@ -183,6 +184,75 @@ const PUBLISHED_AUDIT_SOURCES = [
   { url: "data/audit_data.json", source: "published" },
   { url: "data/audit_data_last_good.json", source: "published-backup" },
 ];
+const SHARED_SNAPSHOT_URL = "data/shared_snapshot.json";
+
+function unpackSharedAudit(audit) {
+  if (!audit || !Array.isArray(audit.rows) || !audit.rows.length) return null;
+  if (audit.format !== "dict-v1") {
+    if (Array.isArray(audit.fields) && audit.fields.length === FIELDS.length) return audit.rows;
+    return null;
+  }
+  const d = audit.dictionaries || {};
+  const required = ["responseIds","siteCodes","categories","questions","dates"];
+  if (!required.every(k => Array.isArray(d[k]))) return null;
+  return audit.rows.map(r => [
+    d.responseIds[r[0]] ?? "",
+    d.siteCodes[r[1]] ?? "",
+    d.categories[r[2]] ?? "",
+    d.questions[r[3]] ?? "",
+    r[4], r[5],
+    d.dates[r[6]] ?? "",
+  ]);
+}
+
+async function loadSharedPublishedSnapshot() {
+  try {
+    const response = await fetch(`${SHARED_SNAPSHOT_URL}?_=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) return false;
+    const payload = await response.json();
+    const sharedAt = Date.parse(payload?.generatedAt || "") || 0;
+
+    if (payload?.visitDashboard?.outlets) state.sharedDashboard = payload.visitDashboard;
+
+    const auditPacked = unpackSharedAudit(payload?.audit);
+    const auditAt = Date.parse(payload?.audit?.metadata?.generatedAt || "") || sharedAt;
+    const currentIsLocal = state.source === "local" || state.source === "cache";
+    if (auditPacked?.length && (!state.rows.length || !currentIsLocal || auditAt >= Number(state.savedAt || 0))) {
+      state.rows = fatten(auditPacked);
+      state.file = payload.audit?.metadata?.sourceFile || "Shared PC snapshot";
+      state.sig = `shared:${payload?.generatedAt || ""}`;
+      state.source = "shared";
+      state.savedAt = auditAt || Date.now();
+      state.stale = true;
+      await idbPut("cache", "last", { file: state.file, sig: state.sig, savedAt: state.savedAt, packed: auditPacked });
+    }
+
+    const availability = payload?.availability;
+    const availabilityAt = Date.parse(availability?.metadata?.generatedAt || "") || sharedAt;
+    const sharedEntries = availability?.entries;
+    const currentAvailLocal = state.availSource === "local" || state.availSource === "cache" || state.availSource === "retained";
+    if (Array.isArray(sharedEntries) && sharedEntries.length && (!state.avail.size || !currentAvailLocal || availabilityAt >= Number(state.availSavedAt || 0))) {
+      state.avail = new Map(sharedEntries);
+      state.availFile = availability?.metadata?.criteriaFile || "";
+      state.stockFile = availability?.metadata?.stockFile || "";
+      state.availSavedAt = availabilityAt || Date.now();
+      state.availSource = "shared";
+      state.availMatched = Number(availability?.metadata?.matched || 0);
+      await idbPut("cache", "avail", {
+        version: Number(availability?.version || AVAIL_CACHE_VERSION),
+        file: state.availFile, stockFile: state.stockFile,
+        criteriaSig: "shared", stockSig: "shared",
+        savedAt: state.availSavedAt, matched: state.availMatched, entries: sharedEntries,
+      });
+    }
+
+    if (state.rows.length) { showLoaded(); render(); }
+    return Boolean(auditPacked?.length || sharedEntries?.length);
+  } catch (error) {
+    console.warn("Shared snapshot unavailable:", error);
+    return false;
+  }
+}
 
 function validPublishedAudit(payload) {
   return payload && Array.isArray(payload.fields)
@@ -279,6 +349,7 @@ async function readWorkbook(file, { cache = true } = {}) {
 }
 
 function sourceDisplay() {
+  if (state.source === "shared") return { label: "shared snapshot", live: false };
   if (state.source === "published") return { label: "published snapshot", live: false };
   if (state.source === "published-backup") return { label: "published backup", live: false };
   if (state.source === "cache" || state.stale) return { label: "saved copy", live: false };
@@ -287,12 +358,13 @@ function sourceDisplay() {
 
 function availabilityStatusHtml() {
   if (!state.avail.size) return "";
+  const shared = state.availSource === "shared";
   const retained = state.availSource === "retained" || state.availSource === "cache";
-  const label = retained ? "availability saved copy" : "availability snapshot";
+  const label = shared ? "published availability" : retained ? "availability saved copy" : "availability snapshot";
   const when = state.availSavedAt
     ? ` · ${new Date(state.availSavedAt).toLocaleString()}` : "";
   const sourceFile = state.stockFile ? `<br><b>${esc(state.stockFile)}</b>` : "";
-  return `<br><span style="color:${retained ? "#e0a53f" : "#75d89b"}">${label}${when}</span>${sourceFile}`;
+  return `<br><span style="color:${shared || retained ? "#e0a53f" : "#75d89b"}">${label}${when}</span>${sourceFile}`;
 }
 
 function showLoaded(note = "") {
@@ -470,117 +542,53 @@ function startWatching() {
 // visit-compliance dataset published alongside this page, joined on site code.
 async function loadDirectory() {
   try {
-    /*
-     * Permanent fallback for the Audit page.
-     *
-     * 1. Use the current generated dashboard_data.json when available.
-     * 2. Save the last successful fetch locally.
-     * 3. If current data is unavailable, first use the saved browser copy.
-     * 4. If there is no browser copy (new browser/device), use the
-     *    repository-level dashboard_data_last_good.json.
-     *
-     * This does NOT depend on data-loader-audit.js.
-     */
-    const LAST_DATA_KEY =
-      "visit_compliance_audit_last_successful_data";
+    /* Prefer the shared snapshot directory when it exists, because it was
+       generated from the same PC snapshot as the Audit data. */
+    let dashboardData = state.sharedDashboard || null;
 
-    const LAST_FETCH_KEY =
-      "visit_compliance_audit_last_successful_fetch";
-
-    let dashboardData = null;
-
-    try {
-      const res = await fetch(
-        `data/dashboard_data.json?_=${Date.now()}`,
-        { cache: "no-store" }
-      );
-
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-
-      const freshData = await res.json();
-
-      if (
-        !freshData ||
-        typeof freshData !== "object" ||
-        Object.keys(freshData).length === 0
-      ) {
-        throw new Error("Current dashboard data is empty.");
-      }
-
-      dashboardData = freshData;
+    if (!dashboardData) {
+      const LAST_DATA_KEY = "visit_compliance_audit_last_successful_data";
+      const LAST_FETCH_KEY = "visit_compliance_audit_last_successful_fetch";
 
       try {
-        localStorage.setItem(
-          LAST_DATA_KEY,
-          JSON.stringify(freshData)
-        );
-        localStorage.setItem(
-          LAST_FETCH_KEY,
-          new Date().toISOString()
-        );
-      } catch (storageError) {
-        console.warn("Audit local cache unavailable:", storageError);
-      }
-
-    } catch (currentError) {
-
-      console.warn(
-        "Audit current data unavailable. Trying last successful data.",
-        currentError
-      );
-
-      // First try this browser's last successful fetch.
-      try {
-        const cachedData =
-          localStorage.getItem(LAST_DATA_KEY);
-
-        if (cachedData) {
-          dashboardData = JSON.parse(cachedData);
+        const res = await fetch(`data/dashboard_data.json?_=${Date.now()}`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const freshData = await res.json();
+        if (!freshData || typeof freshData !== "object" || Object.keys(freshData).length === 0) {
+          throw new Error("Current dashboard data is empty.");
         }
-      } catch (cacheError) {
-        console.warn("Audit browser cache unavailable:", cacheError);
-      }
-
-      // If this is a new browser/device, use the permanent repository snapshot.
-      if (!dashboardData) {
+        dashboardData = freshData;
         try {
-          const fallbackResponse = await fetch(
-            `data/dashboard_data_last_good.json?_=${Date.now()}`,
-            { cache: "no-store" }
-          );
-
-          if (fallbackResponse.ok) {
-            const fallbackData =
-              await fallbackResponse.json();
-
-            if (
-              fallbackData &&
-              typeof fallbackData === "object" &&
-              Object.keys(fallbackData).length > 0
-            ) {
-              dashboardData = fallbackData;
+          localStorage.setItem(LAST_DATA_KEY, JSON.stringify(freshData));
+          localStorage.setItem(LAST_FETCH_KEY, new Date().toISOString());
+        } catch (storageError) {
+          console.warn("Audit local cache unavailable:", storageError);
+        }
+      } catch (currentError) {
+        console.warn("Audit current data unavailable. Trying last successful data.", currentError);
+        try {
+          const cachedData = localStorage.getItem(LAST_DATA_KEY);
+          if (cachedData) dashboardData = JSON.parse(cachedData);
+        } catch (cacheError) {
+          console.warn("Audit browser cache unavailable:", cacheError);
+        }
+        if (!dashboardData) {
+          try {
+            const fallbackResponse = await fetch(`data/dashboard_data_last_good.json?_=${Date.now()}`, { cache: "no-store" });
+            if (fallbackResponse.ok) {
+              const fallbackData = await fallbackResponse.json();
+              if (fallbackData && typeof fallbackData === "object" && Object.keys(fallbackData).length > 0) dashboardData = fallbackData;
             }
+          } catch (fallbackError) {
+            console.warn("Audit permanent fallback unavailable:", fallbackError);
           }
-        } catch (fallbackError) {
-          console.warn(
-            "Audit permanent fallback unavailable:",
-            fallbackError
-          );
         }
       }
+    }
 
-      if (!dashboardData) {
-        console.warn(
-          "No current or last-good Audit data is available."
-        );
-        return;
-      }
-
-      console.info(
-        "Audit is showing last successfully fetched data."
-      );
+    if (!dashboardData) {
+      console.warn("No current, shared, or last-good Audit directory data is available.");
+      return;
     }
 
     const outlets = dashboardData.outlets || {};
@@ -1350,7 +1358,9 @@ $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; st
   // 3. Use the server-side audit snapshot when one has been published.  The
   // availability snapshot remains the local PC-folder copy restored above.
   await loadPublishedAudit();
-  // 4. Load outlet ownership and then reconnect to the remembered folder.
+  // 4. Prefer the explicitly published cross-PC snapshot when available.
+  await loadSharedPublishedSnapshot();
+  // 5. Load outlet ownership and then reconnect to the remembered folder.
   await loadDirectory();
   const zoneCache = await idbGet("cache", "zone");
   if (zoneCache?.entries?.length) {
