@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>Visit Compliance Dashboard</title>
-  <meta name="dashboard-theme-version" content="visit-complete-dark-v9-sidebar" />
-  <link rel="stylesheet" href="styles.css?v=visit-complete-dark-v9-sidebar" />
+  <meta name="dashboard-theme-version" content="visit-complete-dark-v10-pc-v6" />
+  <link rel="stylesheet" href="styles.css?v=visit-complete-dark-v10-pc-v6" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to content</a>
@@ -15,6 +15,9 @@
     <div class="topbar-identity">
       <h1 id="page-title">Visit Compliance Dashboard</h1>
       <p id="subtitle" class="subtitle"></p>
+    </div>
+    <div class="topbar-actions">
+      <a class="btn link-btn" href="./audit.html" target="_blank" rel="noopener">Audit quality dashboard</a>
     </div>
     <div class="topbar-snapshot">
       <span id="snapshot-line" class="snapshot-line"></span>
@@ -27,6 +30,20 @@
       <button id="rail-toggle" class="rail-toggle" type="button" aria-expanded="false">Filters &amp; search</button>
 
       <div class="rail-body" id="rail-body">
+        <section class="rail-group data-source-card" aria-live="polite">
+          <h2 class="rail-heading">Data source</h2>
+          <span id="data-source-badge" class="data-source-badge">PC FOLDER REQUIRED</span>
+          <div id="data-source-file" class="data-source-file">Choose your PC raw-data folder</div>
+          <div id="data-source-sheet" class="data-source-sheet">Sheet: Response Summary only</div>
+          <div id="data-source-count" class="data-source-count"></div>
+          <div id="data-source-taken" class="data-source-taken"></div>
+          <p id="data-source-note" class="data-source-note"></p>
+          <button id="grant-folder" class="btn primary" type="button" hidden style="width:100%">Allow folder access</button>
+          <button id="pick-folder" class="btn secondary" type="button" style="width:100%">Change folder</button>
+          <input id="pick-folder-fallback" type="file" accept=".xlsx,.xlsm,.xls" webkitdirectory multiple hidden />
+          <button id="pick-folder-fallback-btn" class="btn secondary" type="button" style="width:100%" hidden>Open folder (compatibility)</button>
+        </section>
+
         <section class="rail-group">
           <h2 class="rail-heading">Find an outlet</h2>
           <label class="rail-field">
@@ -55,6 +72,8 @@
         <section class="rail-group rail-actions">
           <button id="download-btn" class="btn primary" type="button">Download visible CSV</button>
           <button id="reset-btn" class="btn secondary" type="button">Reset all filters</button>
+          <a class="btn link-btn" href="./audit.html" target="_blank" rel="noopener">Audit quality dashboard</a>
+          <a class="btn secondary" href="./prepare.html">Prepare upload file</a>
         </section>
 
         <section class="rail-group rail-legend">
@@ -88,6 +107,7 @@
     </main>
   </div>
 
-  <script type="module" src="app.js"></script>
+  <script src="./vendor/xlsx.full.min.js?v=0.18.5-local"></script>
+  <script type="module" src="app.js?v=pc-raw-folder-v7"></script>
 </body>
 </html>
