@@ -33,6 +33,23 @@ catch { document.documentElement.dataset.theme = "dark"; }
   .hero-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px,1fr)); gap: 16px; align-content: center; }
   .fact .n { font-size: 24px; font-weight: 800; color: var(--white-text); }
   .fact .l { font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-text); margin-top: 3px; }
+  .band-link {
+    appearance: none; border: 0; background: transparent; padding: 0; margin: 0;
+    color: var(--white-text); font-family: inherit; cursor: pointer;
+    text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px;
+    text-decoration-color: rgba(91,182,226,.72);
+  }
+  .band-link:hover, .band-link:focus-visible { color: var(--blue-2); text-decoration-color: var(--blue-2); }
+  .band-link:focus-visible { outline: 2px solid var(--blue-2); outline-offset: 4px; border-radius: 3px; }
+  .band-link.active { color: var(--blue-2); text-decoration-thickness: 2px; }
+  .band-outlet-panel .panel-head { align-items: center; }
+  .band-outlet-panel .table-wrap { max-height: 55vh; }
+  .band-outlet-table { table-layout: fixed; }
+  .band-outlet-table th:nth-child(1), .band-outlet-table td:nth-child(1) { width: 15%; }
+  .band-outlet-table th:nth-child(2), .band-outlet-table td:nth-child(2) { width: 35%; }
+  .band-outlet-table th:nth-child(3), .band-outlet-table td:nth-child(3) { width: 25%; }
+  .band-outlet-table th:nth-child(4), .band-outlet-table td:nth-child(4) { width: 25%; }
+  .band-outlet-table td { text-align: left; white-space: normal; overflow-wrap: anywhere; }
 
   .bar-row { display: grid; grid-template-columns: minmax(150px,210px) 1fr 56px; gap: 12px; align-items: center; padding: 9px 0; }
   .bar-row + .bar-row { border-top: 1px solid var(--line); }
@@ -102,6 +119,9 @@ catch { document.documentElement.dataset.theme = "dark"; }
   html[data-theme="light"] .score-hero { background: #c5d3dc !important; border-color: #c5d3dc !important; }
   html[data-theme="light"] .hero-cell, html[data-theme="light"] .panel { background: #ffffff !important; }
   html[data-theme="light"] .fact .n, html[data-theme="light"] .bar-row .lbl, html[data-theme="light"] .panel-head h2 { color: #102a3a !important; }
+  html[data-theme="light"] .band-link { color: #102a3a !important; text-decoration-color: #5f9dbb !important; }
+  html[data-theme="light"] .band-link:hover, html[data-theme="light"] .band-link:focus-visible,
+  html[data-theme="light"] .band-link.active { color: #0d6f9f !important; text-decoration-color: #0d6f9f !important; }
   html[data-theme="light"] .panel-head, html[data-theme="light"] .sort-chips { background: #f0f5f8 !important; border-color: #c5d3dc !important; }
   html[data-theme="light"] .sort-chips .chip { background: #ffffff !important; color: #102a3a !important; border-color: #c5d3dc !important; }
   html[data-theme="light"] .bar-track, html[data-theme="light"] .mini { background: #e3ebf0 !important; }
@@ -193,7 +213,7 @@ catch { document.documentElement.dataset.theme = "dark"; }
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: "", rank: "worst", latestRowsRef: null, latestResponseKeys: null };
+const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: "", rank: "worst", scoreBand: null, latestRowsRef: null, latestResponseKeys: null };
 const Drive = window.ShwapnoDrive;
 
 // Green through amber to red — the same reading at a glance for any manager.
@@ -1236,6 +1256,12 @@ function render() {
     if (v < 70) below.s70 += 1;
     if (v < 80) below.s80 += 1;
   }
+  const bandThreshold = !state.site && [70, 80].includes(Number(state.scoreBand)) ? Number(state.scoreBand) : null;
+  const bandOutlets = bandThreshold
+    ? sortRows([...a.sites.entries()].filter(([, [got, max]]) => pct(got, max) < bandThreshold), [
+        { key: "score", dir: "asc" }, { key: "name", dir: "asc" },
+      ])
+    : [];
   state.view = { overall, cats, questions, outlets, days, audits: a.audits.size, outletCount: a.outlets.size, total: a.total, below };
   state.view.drillMeta = state.site ? meta(state.site) : null;
 
@@ -1263,10 +1289,27 @@ function render() {
           <div class="l">Last visit · RHO${drillMeta.lastVisitRhoBy ? ` · ${esc(drillMeta.lastVisitRhoBy)}` : ""}</div></div>`
         : `
         <div class="fact"><div class="n">${questions.length}</div><div class="l">Scored questions</div></div>
-        <div class="fact"><div class="n">${below.s70}</div><div class="l">Below 70%</div></div>
-        <div class="fact"><div class="n">${below.s80}</div><div class="l">Below 80%</div></div>`}
+        <div class="fact"><button type="button" class="n band-link ${state.scoreBand === 70 ? "active" : ""}" data-band="70"
+          aria-expanded="${state.scoreBand === 70 ? "true" : "false"}" aria-controls="band-outlet-list" title="Show outlets below 70%">${below.s70}</button><div class="l">Below 70%</div></div>
+        <div class="fact"><button type="button" class="n band-link ${state.scoreBand === 80 ? "active" : ""}" data-band="80"
+          aria-expanded="${state.scoreBand === 80 ? "true" : "false"}" aria-controls="band-outlet-list" title="Show outlets below 80%">${below.s80}</button><div class="l">Below 80%</div></div>`}
       </div>
     </section>
+
+    ${bandThreshold ? `
+    <section id="band-outlet-list" class="panel band-outlet-panel" aria-live="polite">
+      <div class="panel-head">
+        <div><h2>Outlets below ${bandThreshold}%</h2>
+          <p class="panel-caption">${bandOutlets.length.toLocaleString()} outlets in the current view · weakest first</p></div>
+        <button id="clear-band" class="btn secondary" type="button">Close list</button>
+      </div>
+      <div class="table-wrap"><table class="band-outlet-table">
+        <thead><tr><th>Outlet Code</th><th>Outlet Name</th><th>Zonal Name</th><th>RHO Name</th></tr></thead>
+        <tbody>${bandOutlets.map(([code]) => { const d = meta(code); return `<tr>
+          <td><b>${esc(code)}</b></td><td>${esc(d.name || "—")}</td><td>${esc(d.zonal || "—")}</td><td>${esc(d.rho || "—")}</td>
+        </tr>`; }).join("")}</tbody>
+      </table></div>
+    </section>` : ""}
 
     ${state.site && availFor(state.site) ? `
     <section class="panel">
@@ -1338,7 +1381,16 @@ function render() {
     }
     render();
   }));
+  document.querySelectorAll(".band-link").forEach(btn => btn.addEventListener("click", () => {
+    const threshold = Number(btn.dataset.band);
+    const opening = state.scoreBand !== threshold;
+    state.scoreBand = opening ? threshold : null;
+    render();
+    if (opening) requestAnimationFrame(() => $("band-outlet-list")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }));
+  $("clear-band")?.addEventListener("click", () => { state.scoreBand = null; render(); });
   document.querySelectorAll("tr.click-row").forEach(el => el.addEventListener("click", () => {
+    state.scoreBand = null;
     state.site = state.site === el.dataset.code ? "" : el.dataset.code;
     $("f-site").value = state.site;
     render();
@@ -1630,7 +1682,7 @@ $("drive-clear").addEventListener("click", () => {
   else setState(`<span class="pill idle">Drive setup required</span><br>Shared Drive setup was cleared.`);
 });
 $("f-cat").addEventListener("change", e => { state.cat = e.target.value; render(); });
-$("f-site").addEventListener("input", e => { state.site = e.target.value; render(); });
+$("f-site").addEventListener("input", e => { state.site = e.target.value; state.scoreBand = null; render(); });
 $("f-rank").addEventListener("change", e => { state.rank = e.target.value; render(); });
 $("dl-csv").addEventListener("click", exportCsv);
 $("dl-pdf").addEventListener("click", exportPdf);
@@ -1639,7 +1691,7 @@ $("theme-toggle").addEventListener("click", () => {
   try { localStorage.setItem(THEME_KEY, next); } catch {}
   applyTheme(next);
 });
-$("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; state.rank = "worst";
+$("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; state.rank = "worst"; state.scoreBand = null;
   $("f-cat").value = ""; $("f-site").value = ""; $("f-rank").value = "worst"; render(); });
 
 (async () => {
