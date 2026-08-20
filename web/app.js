@@ -16,6 +16,23 @@ const columns = [
 const ALL_OFFICERS = "__ALL_OFFICERS__";
 const state = { data: null, dataLoad: null, outletSearch: "", selectedOutlet: null, status: "All statuses", officerKey: ALL_OFFICERS, search: "", sortKey: "status", sortDir: 1, activeDetailTab: "planned", activeKpi: null, drillSortKey: null, drillSortDir: 1 };
 const $ = id => document.getElementById(id);
+const THEME_KEY = "visit-compliance-theme";
+
+function applyTheme(theme) {
+  const next = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  document.documentElement.style.colorScheme = next;
+  const btn = $("theme-toggle");
+  if (btn) {
+    btn.textContent = next === "dark" ? "Light theme" : "Dark theme";
+    btn.setAttribute("aria-pressed", next === "light" ? "true" : "false");
+  }
+}
+
+let savedTheme = "dark";
+try { savedTheme = localStorage.getItem(THEME_KEY) || "dark"; } catch {}
+applyTheme(savedTheme);
+
 const numberFmt = new Intl.NumberFormat("en-US");
 function fmtDate(iso) { return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day:"2-digit", month:"short", year:"numeric", timeZone:"UTC" }); }
 function fmtSnapshotTimestamp(value) {
@@ -474,6 +491,7 @@ function renderOutletCard() {
   const card = $("outlet-card");
   if (!card) return;
   const outlet = state.selectedOutlet ? state.data.outlets?.[state.selectedOutlet] : null;
+  document.body.classList.toggle("outlet-focus-mode", Boolean(outlet));
   if (!outlet) { card.hidden = true; card.innerHTML = ""; return; }
   card.hidden = false;
   card.innerHTML = `
@@ -529,7 +547,24 @@ async function init() {
     $("officer-search").addEventListener("input",e=>{state.search=e.target.value;render();});
     $("reset-btn").addEventListener("click",()=>{state.status="All statuses";state.officerKey=ALL_OFFICERS;state.search="";state.activeDetailTab="planned";state.activeKpi=null;$("status-filter").value=state.status;$("officer-search").value="";state.outletSearch="";state.selectedOutlet=null;$("outlet-search").value="";renderOutletResults();renderOutletCard();updateOfficerOptions();render();});
     $("download-btn").addEventListener("click",downloadCsv);
-    $("outlet-search").addEventListener("input", e => { state.outletSearch = e.target.value; renderOutletResults(); });
+    $("theme-toggle").addEventListener("click", () => {
+      const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+      try { localStorage.setItem(THEME_KEY, next); } catch {}
+      applyTheme(next);
+    });
+    $("outlet-search").addEventListener("input", e => {
+      state.outletSearch = e.target.value;
+      const q = state.outletSearch.trim().toLowerCase();
+      const selected = state.selectedOutlet ? state.data.outlets?.[state.selectedOutlet] : null;
+      if (state.selectedOutlet && (!q || !selected || (
+        !String(selected.siteCode || "").toLowerCase().includes(q) &&
+        !String(selected.outletName || "").toLowerCase().includes(q)
+      ))) {
+        state.selectedOutlet = null;
+        renderOutletCard();
+      }
+      renderOutletResults();
+    });
     const rail = document.querySelector(".rail");
     $("rail-toggle").addEventListener("click", () => {
       const open = rail.classList.toggle("open");

@@ -74,7 +74,7 @@ catch { document.documentElement.dataset.theme = "dark"; }
   .exports { display: flex; gap: 9px; flex-wrap: wrap; }
   .exports .btn { height: 34px; font-size: 11.5px; }
 
-  /* v13 — Audit-only light/dark switch. The main Visit dashboard theme is untouched. */
+  /* v13 — Audit light/dark switch. */
   .theme-toggle { min-width: 104px; }
   html[data-theme="light"] {
     --dark-0: #eef3f6; --dark-1: #f5f8fa; --dark-2: #ffffff; --dark-3: #f0f5f8; --dark-4: #e5edf2;
@@ -127,7 +127,6 @@ catch { document.documentElement.dataset.theme = "dark"; }
   <div class="topbar-actions">
     <button id="theme-toggle" class="btn secondary theme-toggle" type="button" aria-label="Switch dashboard theme">Light theme</button>
     <a class="btn link-btn" href="./index.html">Visit compliance</a>
-    <a class="btn secondary" href="./publish.html">Cloud sync</a>
   </div>
 </header>
 

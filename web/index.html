@@ -3,10 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="dark" />
+  <meta name="color-scheme" content="dark light" />
   <title>Visit Compliance Dashboard</title>
-  <meta name="dashboard-theme-version" content="visit-complete-dark-v14-google-drive" />
-  <link rel="stylesheet" href="styles.css?v=visit-complete-dark-v14-google-drive" />
+  <meta name="dashboard-theme-version" content="visit-complete-v15-outlet-theme" />
+  <script>
+  try { document.documentElement.dataset.theme = localStorage.getItem("visit-compliance-theme") || "dark"; }
+  catch { document.documentElement.dataset.theme = "dark"; }
+  </script>
+  <link rel="stylesheet" href="styles.css?v=visit-complete-v15-outlet-theme" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to content</a>
@@ -18,6 +22,7 @@
     </div>
     <div class="topbar-actions">
       <a class="btn link-btn" href="./audit.html" target="_blank" rel="noopener">Audit quality dashboard</a>
+      <button id="theme-toggle" class="btn secondary theme-toggle" type="button" aria-label="Switch dashboard theme">Light theme</button>
     </div>
     <div class="topbar-snapshot">
       <span id="snapshot-line" class="snapshot-line"></span>
@@ -85,7 +90,7 @@
 
       <section id="kpis" class="kpi-grid" aria-label="Headline numbers"></section>
 
-      <section class="panel">
+      <section id="performance-panel" class="panel">
         <div class="panel-head">
           <h2>Officer-wise visit performance</h2>
           <p id="summary-caption" class="panel-caption"></p>
@@ -120,6 +125,6 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="google-drive-source.js?v=shared-drive-v1"></script>
-  <script type="module" src="app.js?v=visit-google-drive-v14"></script>
+  <script type="module" src="app.js?v=visit-google-drive-v15-outlet-theme"></script>
 </body>
 </html>
