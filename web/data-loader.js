@@ -1693,6 +1693,258 @@ class PcRawDataSource {
   }
 }
 
+/*
+ * Google Drive source (v14)
+ *
+ * This replaces the visible PC-folder workflow while retaining the proven
+ * workbook parsers and calculation rules above. The selected folder and Google
+ * Cloud values use the same localStorage keys as Zone Distribution.
+ */
+class GoogleDriveRawDataSource {
+  constructor() {
+    this.currentData = null;
+    this.currentSignature = "";
+    this.savedAt = null;
+    this.baseData = null;
+    this.scheduleBaseData = null;
+    this.onData = null;
+    this.onStatus = null;
+    this.watchTimer = null;
+    this.refreshPromise = null;
+    this.lastStatusKey = "";
+  }
+
+  get drive() { return window.ShwapnoDrive; }
+
+  result(data, source, usingLastData, status) {
+    return {
+      data,
+      source,
+      usingLastData,
+      lastFetched: this.savedAt || data?.metadata?.snapshotTakenAt || null,
+      localStatus: status || null,
+      localSource: this,
+    };
+  }
+
+  async initialize() {
+    const saved = await pcDbGet("snapshots", "google-drive-latest-v1");
+    const data = saved?.data;
+    if (validDashboardData(data) && data?.metadata?.localSource) {
+      this.currentData = data;
+      this.currentSignature = String(saved?.signature || "");
+      this.savedAt = saved?.savedAt || data.metadata?.snapshotTakenAt || null;
+      const folder = this.drive?.getFolder?.();
+      return this.result(data, "local-cache", true, {
+        kind: this.drive?.cachedToken?.() ? "retained" : "needs-drive-auth",
+        message: folder
+          ? `Showing the retained data. Google Drive folder “${folder.name}” is remembered; reconnect to check for updates.`
+          : "Showing the retained data. Use Drive setup to select the shared Google Drive folder.",
+      });
+    }
+    return null;
+  }
+
+  attach({ baseData, onData, onStatus }) {
+    this.baseData = this.scheduleBaseData || baseData;
+    this.onData = onData;
+    this.onStatus = onStatus;
+    this.bindControls();
+    if (this.drive?.cachedToken?.() && this.drive?.getFolder?.()) {
+      this.refreshDrive({ silent: true }).catch(() => {});
+    } else {
+      const folder = this.drive?.getFolder?.();
+      this.setStatus({
+        kind: folder ? "needs-drive-auth" : "needs-drive-setup",
+        message: folder
+          ? `Google Drive folder “${folder.name}” is already shared from Zone Distribution. Click Reconnect Google Drive to authorize this page.`
+          : "Use Drive setup to select the shared Google Drive folder.",
+      });
+    }
+  }
+
+  setStatus(status) {
+    const key = `${status?.kind || ""}|${status?.message || ""}`;
+    if (key === this.lastStatusKey) return;
+    this.lastStatusKey = key;
+    if (this.onStatus) this.onStatus(status);
+  }
+
+  sendData(data, source, usingLastData, status) {
+    this.currentData = data;
+    this.savedAt = data.metadata?.snapshotTakenAt || new Date().toISOString();
+    if (this.onData) this.onData(this.result(data, source, usingLastData, status));
+  }
+
+  async saveLatest(data, signature) {
+    this.currentData = data;
+    this.currentSignature = signature;
+    this.savedAt = data.metadata?.snapshotTakenAt || new Date().toISOString();
+    await pcDbPut("snapshots", "google-drive-latest-v1", {
+      data,
+      signature,
+      savedAt: this.savedAt,
+      folder: this.drive.getFolder(),
+    });
+    void publishIfSignedIn("visit", { version: 2, generatedAt: this.savedAt, data });
+  }
+
+  bindControls() {
+    document.getElementById("grant-folder")?.addEventListener("click", () => {
+      if (this.drive.configReady()) this.connectDrive({ pickFolder: false });
+      else this.openSetup();
+    });
+    document.getElementById("drive-setup")?.addEventListener("click", () => this.openSetup());
+    document.getElementById("drive-modal-close")?.addEventListener("click", () => this.closeSetup());
+    document.getElementById("drive-modal")?.addEventListener("click", event => {
+      if (event.target === document.getElementById("drive-modal")) this.closeSetup();
+    });
+    document.getElementById("drive-save")?.addEventListener("click", () => {
+      try {
+        this.drive.saveConfig({
+          clientId: document.getElementById("google-client-id").value,
+          apiKey: document.getElementById("google-api-key").value,
+          appId: document.getElementById("google-app-id").value,
+        });
+        this.closeSetup();
+        setTimeout(() => this.connectDrive({ pickFolder: true }), 0);
+      } catch (error) { alert(error.message); }
+    });
+    document.getElementById("drive-clear")?.addEventListener("click", () => {
+      if (!confirm("Clear the shared Google Drive setup for all supported dashboards on this browser?")) return;
+      this.drive.clearSetup();
+      this.closeSetup();
+      this.setStatus({ kind: "needs-drive-setup", message: this.currentData ? "Shared Drive setup was cleared. Showing the retained snapshot." : "Shared Drive setup was cleared." });
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && this.drive.cachedToken() && this.drive.getFolder()) this.refreshDrive({ silent: true });
+    });
+  }
+
+  openSetup() {
+    const config = this.drive.getConfig();
+    document.getElementById("google-client-id").value = config.clientId;
+    document.getElementById("google-api-key").value = config.apiKey;
+    document.getElementById("google-app-id").value = config.appId;
+    document.getElementById("drive-modal").hidden = false;
+  }
+
+  closeSetup() { document.getElementById("drive-modal").hidden = true; }
+
+  async connectDrive({ pickFolder = false } = {}) {
+    try {
+      this.setStatus({ kind: "reading", message: "Connecting to Google Drive…" });
+      const result = await this.drive.connect({
+        pickFolder: pickFolder || !this.drive.getFolder(),
+        title: "Select shared Shwapno dashboard data folder",
+      });
+      if (!result) {
+        this.setStatus({ kind: this.currentData ? "retained" : "needs-drive-setup", message: this.currentData ? "Folder selection was cancelled. Showing the retained snapshot." : "Google Drive folder selection was cancelled." });
+        return;
+      }
+      this.currentSignature = "";
+      await this.refreshDrive({ silent: false });
+      this.startWatching();
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      const message = error?.message || "Google Drive connection failed.";
+      if (!this.fallback(message)) this.setStatus({ kind: "error", message });
+    }
+  }
+
+  fallback(reason) {
+    if (!this.currentData) return false;
+    const status = { kind: "retained", message: `Showing the retained data. ${reason}` };
+    this.setStatus(status);
+    if (this.onData) this.onData(this.result(this.currentData, "local-cache", true, status));
+    return true;
+  }
+
+  async refreshDrive(options = {}) {
+    if (this.refreshPromise) return this.refreshPromise;
+    const run = this.refreshDriveNow(options);
+    this.refreshPromise = run;
+    try { return await run; }
+    finally { if (this.refreshPromise === run) this.refreshPromise = null; }
+  }
+
+  async refreshDriveNow({ silent = true } = {}) {
+    const folder = this.drive.getFolder();
+    if (!folder) {
+      if (!this.fallback("No shared Google Drive folder is selected.")) this.setStatus({ kind: "needs-drive-setup", message: "Use Drive setup to select the shared Google Drive folder." });
+      return;
+    }
+    if (!this.drive.cachedToken()) {
+      if (!this.fallback(`Google Drive folder “${folder.name}” is remembered; click Reconnect Google Drive to check for updates.`)) this.setStatus({ kind: "needs-drive-auth", message: `Folder “${folder.name}” is remembered. Click Reconnect Google Drive.` });
+      return;
+    }
+    try {
+      if (!silent || !this.currentData) this.setStatus({ kind: "reading", message: `Checking Google Drive folder “${folder.name}”…` });
+      const metas = (await this.drive.listFolderFiles(folder.id))
+        .filter(meta => /\.(xlsx|xlsm|xls)$/i.test(meta.name || "") && !String(meta.name || "").startsWith("~$") && meta.capabilities?.canDownload !== false)
+        .sort((a, b) => Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || "") || String(a.name).localeCompare(String(b.name)));
+      const responseMeta = metas.filter(isTargetResponseFilename)[0];
+      if (!responseMeta) throw new Error('No workbook named like “Store_Operations_Compliance_Audit_responses…xlsx” was found in the shared Drive folder.');
+      const scheduleMetas = metas
+        .filter(meta => meta !== responseMeta && scheduleFilePriority(meta) < 99)
+        .sort((a, b) => scheduleFilePriority(a) - scheduleFilePriority(b) || Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || ""));
+      const signature = this.drive.remoteSignature(responseMeta) + "|" + (scheduleMetas.length ? scheduleMetas.map(meta => this.drive.remoteSignature(meta)).sort().join("||") : "dashboard-plan");
+      if (this.currentData && signature === this.currentSignature) {
+        if (!silent) this.setStatus({ kind: "live", message: `Live from Google Drive folder “${folder.name}”. Only Response Summary is read.` });
+        this.startWatching();
+        return;
+      }
+      this.setStatus({ kind: "reading", message: `Downloading ${responseMeta.name} from Google Drive…` });
+      const responseFile = await this.drive.downloadFile(responseMeta);
+      const parsedResponse = await readResponseWorkbook(responseFile);
+      let scheduleFile = null;
+      let parsedSchedule = null;
+      for (const meta of scheduleMetas.slice(0, 4)) {
+        try {
+          this.setStatus({ kind: "reading", message: `Checking visit plan ${meta.name}…` });
+          const file = await this.drive.downloadFile(meta);
+          const parsed = await readScheduleWorkbook(file);
+          scheduleFile = file;
+          parsedSchedule = parsed;
+          break;
+        } catch { /* Try the next clearly named visit-plan workbook. */ }
+      }
+      await this.applyResponseFile(responseFile, scheduleFile, signature, parsedResponse, parsedSchedule, folder);
+      this.startWatching();
+    } catch (error) {
+      const message = error?.message || "Could not read Google Drive.";
+      if (!this.fallback(message)) this.setStatus({ kind: "error", message });
+    }
+  }
+
+  async applyResponseFile(responseFile, scheduleFile, signature, parsedResponse, parsedSchedule, folder) {
+    let schedule;
+    if (scheduleFile && parsedSchedule) {
+      schedule = parsedSchedule;
+      schedule.isRaw = true;
+    } else {
+      this.setStatus({ kind: "reading", message: "No Drive visit-plan workbook found. Reusing the dashboard visit plan…" });
+      schedule = retainedSchedule(this.scheduleBaseData || this.baseData);
+      schedule.isRaw = false;
+    }
+    this.setStatus({ kind: "reading", message: "Calculating Visit Compliance from Drive Response Summary…" });
+    await browserYield();
+    const data = calculateLocalDashboard(this.currentData || this.baseData, schedule, parsedResponse, responseFile, "google-drive");
+    data.metadata.driveFolderName = folder.name;
+    data.metadata.driveFolderId = folder.id;
+    data.metadata.scheduleSource = schedule.isRaw ? "selected Google Drive folder" : "dashboard visit-plan snapshot";
+    await this.saveLatest(data, signature);
+    this.sendData(data, "google-drive", false, { kind: "live", message: `Live from Google Drive folder “${folder.name}”. Only the Response Summary sheet is read.` });
+  }
+
+  startWatching() {
+    if (this.watchTimer) return;
+    this.watchTimer = window.setInterval(() => {
+      if (!document.hidden && this.drive.cachedToken()) this.refreshDrive({ silent: true });
+    }, 30000);
+  }
+}
+
 async function loadPublishedSharedDashboard() {
   // v12 primary cross-PC source: Supabase. The old GitHub JSON is retained
   // only as a migration fallback for deployments that have not published a
@@ -1752,23 +2004,20 @@ async function loadPublishedScheduleBaseline() {
 }
 
 export async function loadDashboardData() {
-  const localSource = new PcRawDataSource();
-  // The published visit-plan skeleton is still used only as a plan fallback
-  // when a local PC response workbook is read.
+  const localSource = new GoogleDriveRawDataSource();
+  // The published visit-plan skeleton is used only as a plan fallback when the
+  // shared Drive folder does not contain a Zonal/RHO visit-plan workbook.
   localSource.scheduleBaseData = await loadPublishedScheduleBaseline();
 
-  // A snapshot previously read on THIS browser has first priority.
+  // A Drive snapshot previously calculated on this browser has first priority.
   const local = await localSource.initialize();
   if (local) return local;
 
-  // On a different PC/network there is no IndexedDB snapshot.  In that case
-  // use the deliberately published shared snapshot.  Folder selection remains
-  // attached, so a user who has the raw-data folder can still override this
-  // immediately with a fresh local read.
+  // On a different browser there may be no retained Drive snapshot. In that
+  // case use the deliberately published shared snapshot until Drive connects.
   const shared = await loadPublishedSharedDashboard();
   if (shared) {
-    // Keep the shared copy as the in-memory baseline so attaching the optional
-    // PC-folder reader does not replace the shared status with an idle message.
+    // Keep the shared copy as the in-memory baseline while Drive reconnects.
     localSource.currentData = shared.data;
     localSource.currentSignature = "published-shared";
     localSource.savedAt = shared.generatedAt || null;
@@ -1779,7 +2028,7 @@ export async function loadDashboardData() {
       lastFetched: shared.generatedAt,
       localStatus: {
         kind: "published",
-        message: "Showing the latest shared cloud snapshot. This copy is available from any PC or network; the authorized source PC refreshes it automatically after each successful snapshot.",
+        message: "Showing the latest shared cloud snapshot. Connect the shared Google Drive folder to check for a newer Response Summary.",
       },
       localSource,
     };
@@ -1793,22 +2042,20 @@ export async function loadDashboardData() {
     localStatus: {
       kind: "idle",
       message: localSource.scheduleBaseData
-        ? "Choose your PC raw-data folder. The dashboard will read Store_Operations_Compliance_Audit_responses…xlsx from that folder and only its Response Summary sheet. A Visit Schedule workbook is not required in the selected folder."
-        : "Choose your PC raw-data folder. Response Summary will be read from Store_Operations_Compliance_Audit_responses…xlsx. The dashboard visit plan is not available yet, so include a Zonal/RHO visit-plan workbook in the folder for this load.",
+        ? "Connect the shared Google Drive folder. The dashboard will read Store_Operations_Compliance_Audit_responses…xlsx and only its Response Summary sheet."
+        : "Connect the shared Google Drive folder containing the response export and a Zonal/RHO visit-plan workbook.",
     },
     localSource,
   };
 }
 
-export function attachPcRawDataSource(localSource, options) {
+export function attachGoogleDriveDataSource(localSource, options) {
   if (localSource) localSource.attach(options);
 }
 
 export function getDataStatus(result) {
-  if (result?.source === "pc-folder") return { type: "pc-folder", text: "Showing a live snapshot from the selected PC raw-data folder." };
-  if (result?.source === "pc-folder-selection") return { type: "pc-folder-selection", text: "Showing data loaded from the selected PC raw-data folder." };
-  if (result?.source === "pc-file") return { type: "pc-file", text: "Showing a live snapshot from the response workbook selected on this PC." };
-  if (result?.source === "local-cache") return { type: "local-cache", text: "Showing the retained data from the last successful PC raw-data read." };
+  if (result?.source === "google-drive") return { type: "google-drive", text: "Showing a live snapshot from the shared Google Drive folder." };
+  if (result?.source === "local-cache") return { type: "local-cache", text: "Showing the retained data from the last successful Google Drive read." };
   if (result?.source === "published-shared") return { type: "published-shared", text: "Showing the latest shared cloud snapshot from Supabase. It is available to other PCs and networks without folder access." };
-  return { type: "awaiting-local", text: "Choose your PC raw-data folder to load the current Response Summary." };
+  return { type: "awaiting-drive", text: "Connect the shared Google Drive folder to load the current Response Summary." };
 }

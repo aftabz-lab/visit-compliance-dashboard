@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>Visit Compliance Dashboard</title>
-  <meta name="dashboard-theme-version" content="visit-complete-dark-v10-pc-v6" />
-  <link rel="stylesheet" href="styles.css?v=visit-complete-dark-v10-pc-v6" />
+  <meta name="dashboard-theme-version" content="visit-complete-dark-v14-google-drive" />
+  <link rel="stylesheet" href="styles.css?v=visit-complete-dark-v14-google-drive" />
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to content</a>
@@ -33,16 +33,14 @@
       <div class="rail-body" id="rail-body">
         <section class="rail-group data-source-card" aria-live="polite">
           <h2 class="rail-heading">Data source</h2>
-          <span id="data-source-badge" class="data-source-badge">PC FOLDER REQUIRED</span>
-          <div id="data-source-file" class="data-source-file">Choose your PC raw-data folder</div>
+          <span id="data-source-badge" class="data-source-badge">GOOGLE DRIVE REQUIRED</span>
+          <div id="data-source-file" class="data-source-file">Connect the shared Drive folder</div>
           <div id="data-source-sheet" class="data-source-sheet">Sheet: Response Summary only</div>
           <div id="data-source-count" class="data-source-count"></div>
           <div id="data-source-taken" class="data-source-taken"></div>
           <p id="data-source-note" class="data-source-note"></p>
-          <button id="grant-folder" class="btn primary" type="button" hidden style="width:100%">Allow folder access</button>
-          <button id="pick-folder" class="btn secondary" type="button" style="width:100%">Change folder</button>
-          <input id="pick-folder-fallback" type="file" accept=".xlsx,.xlsm,.xls" webkitdirectory multiple hidden />
-          <button id="pick-folder-fallback-btn" class="btn secondary" type="button" style="width:100%" hidden>Open folder (compatibility)</button>
+          <button id="grant-folder" class="btn primary" type="button" style="width:100%">Reconnect Google Drive</button>
+          <button id="drive-setup" class="btn secondary" type="button" style="width:100%">Drive setup / change folder</button>
         </section>
 
         <section class="rail-group">
@@ -109,7 +107,22 @@
     </main>
   </div>
 
-  <script src="./vendor/xlsx.full.min.js?v=0.18.5-local"></script>
-  <script type="module" src="app.js?v=pc-response-dashboard-plan-v12-supabase-auto-share"></script>
+  <div id="drive-modal" class="drive-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="drive-modal-title" hidden>
+    <section class="drive-modal">
+      <div class="drive-modal-head"><div><div class="rail-heading">SHARED DRIVE SETUP</div><h2 id="drive-modal-title">Google Drive cloud setup</h2></div><button id="drive-modal-close" class="drive-modal-close" type="button" aria-label="Close">×</button></div>
+      <p>The setup and selected folder are shared with Zone Distribution, Z-Report, Audit and the portal on this browser. Feasibility stays separate.</p>
+      <div class="drive-setup-grid">
+        <label>OAuth Client ID<input id="google-client-id" type="text" autocomplete="off" placeholder="1234567890-abc123.apps.googleusercontent.com" /></label>
+        <label>API Key<input id="google-api-key" type="text" autocomplete="off" placeholder="AIza..." /></label>
+        <label>Project Number / App ID<input id="google-app-id" type="text" inputmode="numeric" autocomplete="off" placeholder="123456789012" /></label>
+      </div>
+      <div class="drive-setup-note"><strong>Authorized JavaScript origin:</strong> https://aftabz-lab.github.io<br><strong>Required APIs:</strong> Google Drive API + Google Picker API<br><strong>Scope:</strong> Drive read-only. No client secret is used.</div>
+      <div class="drive-modal-actions"><button id="drive-clear" class="btn secondary" type="button">Clear shared setup</button><button id="drive-save" class="btn primary" type="button">Save &amp; select folder</button></div>
+    </section>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="google-drive-source.js?v=shared-drive-v1"></script>
+  <script type="module" src="app.js?v=visit-google-drive-v14"></script>
 </body>
 </html>

@@ -768,3 +768,12 @@ input,
 .topbar-actions { flex-direction: column; align-items: flex-end; gap: 4px; }
 .topbar-actions .link-hint { text-align: right; }
 @media (max-width: 900px) { .topbar-actions { align-items: stretch; } .topbar-actions .link-hint { text-align: left; max-width: none; } }
+
+/* Shared Google Drive setup dialog (v14). */
+.drive-modal-backdrop{position:fixed;inset:0;z-index:3000;display:grid;place-items:center;padding:20px;background:rgba(0,0,0,.76);backdrop-filter:blur(5px)}
+.drive-modal-backdrop[hidden]{display:none}
+.drive-modal{width:min(650px,100%);padding:22px;border:1px solid var(--line);border-radius:16px;background:var(--dark-2);box-shadow:0 28px 80px rgba(0,0,0,.7)}
+.drive-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.drive-modal h2{margin:5px 0 0;font-size:22px}.drive-modal>p{color:var(--muted-text);font-size:12px;line-height:1.55}
+.drive-modal-close{width:34px;height:34px;border:1px solid var(--line);border-radius:8px;background:var(--dark-3);color:var(--white-text);font-size:22px;cursor:pointer}
+.drive-setup-grid{display:grid;gap:11px}.drive-setup-grid label{display:grid;gap:5px;color:var(--muted-text);font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}.drive-setup-grid input{height:42px;border:1px solid var(--line);border-radius:8px;background:var(--dark-1);color:var(--white-text);padding:0 12px;font:inherit;text-transform:none;letter-spacing:0}
+.drive-setup-note{margin-top:13px;padding:11px 12px;border:1px solid var(--line);border-radius:9px;background:var(--dark-1);color:var(--muted-text);font-size:11px;line-height:1.6}.drive-modal-actions{margin-top:16px;display:flex;justify-content:flex-end;gap:9px;flex-wrap:wrap}

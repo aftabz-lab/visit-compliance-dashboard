@@ -1,4 +1,4 @@
-import { attachPcRawDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=pc-response-dashboard-plan-v12-supabase-auto-share";
+import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-google-drive-v14";
 
 const columns = [
   ["status", "Status"],
@@ -85,10 +85,10 @@ function renderHeader() {
   const hasLocalSnapshot = Boolean(m.snapshotDate && state.data.officers.length);
   $("snapshot-line").textContent = hasLocalSnapshot
     ? `Response snapshot through ${fmtDate(m.snapshotDate)}`
-    : "PC raw-data folder required";
+    : "Google Drive connection required";
   $("snapshot-note").textContent = hasLocalSnapshot
     ? `Till-date plans are due through this date; full-month plans cover all of ${m.reportMonth}.`
-    : "Choose the PC raw-data folder containing Store_Operations_Compliance_Audit_responses. A Visit Schedule workbook is optional in that folder.";
+    : "Connect the shared Google Drive folder containing Store_Operations_Compliance_Audit_responses. A Visit Schedule workbook is optional in that folder.";
   renderDataSource();
   const statuses = ["All statuses", ...new Set(state.data.officers.map(r=>r.status))];
   $("status-filter").innerHTML = statuses.map(v=>`<option>${esc(v)}</option>`).join("");
@@ -98,36 +98,30 @@ function renderHeader() {
 function renderDataSource() {
   const m = state.data.metadata || {};
   const dataLoad = state.dataLoad || {};
-  const source = dataLoad.source || "awaiting-local";
+  const source = dataLoad.source || "awaiting-drive";
   const localStatus = dataLoad.localStatus || {};
-  const isPcFolder = source === "pc-folder";
-  const isPcFolderSelection = source === "pc-folder-selection";
-  const isPcFile = source === "pc-file";
+  const isDrive = source === "google-drive";
   const isSavedCopy = source === "local-cache";
   const isPublishedShared = source === "published-shared";
-  const isWaiting = source === "awaiting-local";
+  const isWaiting = source === "awaiting-drive" || source === "awaiting-local";
   const responseSheet = m.responseSheet || "Response Summary";
   const acceptedResponses = Number(m.diagnostics?.acceptedResponses);
   const snapshotTakenAt = m.snapshotTakenAt || m.generatedAt || dataLoad.lastFetched;
 
-  $("data-source-badge").textContent = isPcFolder
-    ? "PC FOLDER — LIVE"
-    : isPcFolderSelection
-      ? "PC FOLDER — LOADED"
-      : isPcFile
-        ? "PC FILE — LIVE"
-        : isSavedCopy
-          ? "RETAINED SNAPSHOT"
-          : isPublishedShared
-            ? "SHARED SNAPSHOT"
-            : "PC FOLDER REQUIRED";
+  $("data-source-badge").textContent = isDrive
+    ? "GOOGLE DRIVE — LIVE"
+    : isSavedCopy
+      ? "RETAINED SNAPSHOT"
+      : isPublishedShared
+        ? "SHARED SNAPSHOT"
+        : "GOOGLE DRIVE REQUIRED";
   $("data-source-badge").classList.toggle("is-saved-copy", isSavedCopy || isPublishedShared);
   $("data-source-file").textContent = isWaiting
-    ? "Choose your PC raw-data folder"
+    ? "Connect the shared Google Drive folder"
     : m.responseFile || "Response workbook";
   $("data-source-sheet").textContent = `Sheet: ${responseSheet} only`;
   $("data-source-count").textContent = isWaiting
-    ? "Waiting for selected PC raw-data folder"
+    ? "Waiting for Google Drive connection"
     : Number.isFinite(acceptedResponses)
     ? `${numberFmt.format(acceptedResponses)} accepted responses`
     : "Accepted response total unavailable";
@@ -135,12 +129,10 @@ function renderDataSource() {
     ? `Snapshot taken ${fmtSnapshotTimestamp(snapshotTakenAt)}`
     : "Snapshot not yet taken";
   $("data-source-note").textContent = isPublishedShared
-    ? `${localStatus.message || getDataStatus(dataLoad).text} The shared copy was originally created from a PC raw-data workbook named like “Store_Operations_Compliance_Audit_responses…xlsx”, using only “${responseSheet}”.`
-    : `${localStatus.message || getDataStatus(dataLoad).text} The response source must be a local file named like “Store_Operations_Compliance_Audit_responses…xlsx”; only “${responseSheet}” is read.`;
+    ? `${localStatus.message || getDataStatus(dataLoad).text} Connect Drive to check the current workbook named like “Store_Operations_Compliance_Audit_responses…xlsx”.`
+    : `${localStatus.message || getDataStatus(dataLoad).text} Only “${responseSheet}” is read from the matching Drive workbook.`;
   const grantButton = $("grant-folder");
-  if (grantButton) grantButton.hidden = localStatus.kind !== "needs-grant";
-  const fallbackButton = $("pick-folder-fallback-btn");
-  if (fallbackButton && localStatus.kind === "needs-folder-fallback") fallbackButton.hidden = false;
+  if (grantButton) grantButton.textContent = localStatus.kind === "reading" ? "Working…" : "Reconnect Google Drive";
 }
 function distinctNeverOutlets(rows) {
   const set = new Set();
@@ -402,8 +394,8 @@ function renderDefinitions() {
     : "";
   const dataStatus = state.dataLoad ? ` · ${getDataStatus(state.dataLoad).text}` : "";
   const surveyFooter = m.surveyReportUrl ? ` · <a href="${esc(m.surveyReportUrl)}" target="_blank" rel="noopener noreferrer">Survey reports</a>` : "";
-  if (state.dataLoad?.source === "awaiting-local") {
-    $("source-footer").textContent = "Data source: waiting for a PC raw-data folder. Repository dashboard data is not used.";
+  if (state.dataLoad?.source === "awaiting-drive" || state.dataLoad?.source === "awaiting-local") {
+    $("source-footer").textContent = "Data source: waiting for the shared Google Drive folder.";
     return;
   }
   $("source-footer").innerHTML=`Data source: ${esc(m.scheduleFile)} + ${esc(m.responseFile)} · Generated ${esc(new Date(m.generatedAt).toLocaleString())}${esc(unmapped)}${esc(superseded)}${esc(dataStatus)}${surveyFooter}`;
@@ -543,7 +535,7 @@ async function init() {
       const open = rail.classList.toggle("open");
       $("rail-toggle").setAttribute("aria-expanded", String(open));
     });
-    attachPcRawDataSource(state.dataLoad.localSource, {
+    attachGoogleDriveDataSource(state.dataLoad.localSource, {
       baseData: state.data,
       onData: applyDataLoad,
       onStatus: (localStatus) => {
@@ -552,7 +544,7 @@ async function init() {
       },
     });
   } catch(err) {
-    document.querySelector("main").innerHTML=`<div class="error-box"><strong>Dashboard could not load.</strong>\n${esc(err.message)}\n\nUse Chrome or Edge, then choose the PC raw-data folder containing Store_Operations_Compliance_Audit_responses.</div>`;
+    document.querySelector("main").innerHTML=`<div class="error-box"><strong>Dashboard could not load.</strong>\n${esc(err.message)}\n\nUse Drive setup to connect the shared Google Drive folder containing Store_Operations_Compliance_Audit_responses.</div>`;
   }
 }
 init();

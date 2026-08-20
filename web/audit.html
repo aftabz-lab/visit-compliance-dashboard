@@ -137,10 +137,8 @@ catch { document.documentElement.dataset.theme = "dark"; }
       <section class="rail-group source-box">
         <h2 class="rail-heading">Data source</h2>
         <div id="src-state" class="source-state"></div>
-        <button id="grant" class="btn primary" type="button" hidden>Allow folder access</button>
-        <button id="pick-folder" class="btn secondary" type="button">Change folder</button>
-        <input id="pick-file" type="file" accept=".xlsx,.xlsm" hidden />
-        <button id="pick-file-btn" class="btn secondary" type="button">Open a single file</button>
+        <button id="grant" class="btn primary" type="button">Reconnect Google Drive</button>
+        <button id="drive-setup" class="btn secondary" type="button">Drive setup / change folder</button>
       </section>
 
       <section class="rail-group">
@@ -175,13 +173,29 @@ catch { document.documentElement.dataset.theme = "dark"; }
   </main>
 </div>
 
+<div id="drive-modal" class="drive-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="drive-modal-title" hidden>
+  <section class="drive-modal">
+    <div class="drive-modal-head"><div><div class="rail-heading">SHARED DRIVE SETUP</div><h2 id="drive-modal-title">Google Drive cloud setup</h2></div><button id="drive-modal-close" class="drive-modal-close" type="button" aria-label="Close">×</button></div>
+    <p>The setup and selected folder are shared with Zone Distribution, Z-Report, Visit Compliance and the portal on this browser. Feasibility stays separate.</p>
+    <div class="drive-setup-grid">
+      <label>OAuth Client ID<input id="google-client-id" type="text" autocomplete="off" placeholder="1234567890-abc123.apps.googleusercontent.com" /></label>
+      <label>API Key<input id="google-api-key" type="text" autocomplete="off" placeholder="AIza..." /></label>
+      <label>Project Number / App ID<input id="google-app-id" type="text" inputmode="numeric" autocomplete="off" placeholder="123456789012" /></label>
+    </div>
+    <div class="drive-setup-note"><strong>Authorized JavaScript origin:</strong> https://aftabz-lab.github.io<br><strong>Required APIs:</strong> Google Drive API + Google Picker API<br><strong>Scope:</strong> Drive read-only. No client secret is used.</div>
+    <div class="drive-modal-actions"><button id="drive-clear" class="btn secondary" type="button">Clear shared setup</button><button id="drive-save" class="btn primary" type="button">Save &amp; select folder</button></div>
+  </section>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="google-drive-source.js?v=shared-drive-v1"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst", latestRowsRef: null, latestResponseKeys: null };
+const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: "", rank: "worst", latestRowsRef: null, latestResponseKeys: null };
+const Drive = window.ShwapnoDrive;
 
 // Green through amber to red — the same reading at a glance for any manager.
 function tone(v) {
@@ -473,7 +487,7 @@ async function readWorkbook(file, { cache = true } = {}) {
   const sheet = wb.SheetNames.find(n => n.trim().toLowerCase() === "answer details") || wb.SheetNames[wb.SheetNames.length - 1];
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { defval: "" });
   if (!rows.length || !("Question Category" in rows[0])) throw new Error(`"${sheet}" is not the Answer Details sheet.`);
-  state.rows = rows; state.file = file.name; state.sig = signature(file); state.source = "local"; state.stale = false;
+  state.rows = rows; state.file = file.name; state.sig = signature(file); state.source = state.driveMode ? "gdrive" : "local"; state.stale = false;
   state.savedAt = Date.now();
   const packed = slim(rows);
   if (cache) await idbPut("cache", "last", { file: file.name, sig: state.sig, savedAt: state.savedAt, packed });
@@ -485,6 +499,7 @@ async function readWorkbook(file, { cache = true } = {}) {
 }
 
 function sourceDisplay() {
+  if (state.source === "gdrive" && !state.stale) return { label: "Google Drive live", live: true };
   if (state.source === "shared") return { label: "cloud snapshot", live: false };
   if (state.source === "published") return { label: "published snapshot", live: false };
   if (state.source === "published-backup") return { label: "published backup", live: false };
@@ -529,7 +544,7 @@ async function syncFolder({ silent = true } = {}) {
     let chosen = null;
     for (const file of ordered) { if (await isAuditWorkbook(file)) { chosen = file; break; } }
 
-    // Availability is also sourced from the selected PC raw-data folder.
+    // Availability is also sourced from the selected shared Drive folder.
     // Keep the last successful calculation as a small browser snapshot so
     // removing stock_extraction_report*.csv does not blank the availability count.
     // A newer/replaced stock or criteria file automatically refreshes the snapshot.
@@ -674,9 +689,99 @@ async function grantAccess() {
 let watchTimer = null;
 function startWatching() {
   if (watchTimer) return;
-  watchTimer = setInterval(() => { if (!document.hidden) syncFolder(); }, 5000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) syncFolder(); });
+  watchTimer = setInterval(() => { if (!document.hidden && Drive.cachedToken()) syncDrive(); }, 30000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && Drive.cachedToken()) syncDrive(); });
 }
+
+function driveFileScore(meta) {
+  const name = String(meta?.name || "").toLowerCase();
+  if (name.startsWith("~$")) return 99;
+  if (/\.csv$/i.test(name) && /stock[ _-]*extraction[ _-]*report/.test(name)) return 0;
+  if (!/\.(xlsx|xlsm|xls)$/i.test(name)) return 99;
+  if (/audit|response|survey|compliance/.test(name)) return 0;
+  if (/zone|distribution/.test(name)) return 1;
+  if (/product.*crit|avaiablity|availability/.test(name)) return 2;
+  return 99;
+}
+
+function memoryFolderHandle(files) {
+  return {
+    queryPermission: async () => "granted",
+    requestPermission: async () => "granted",
+    async *entries() {
+      for (const file of files) yield [file.name, { kind: "file", getFile: async () => file }];
+    },
+  };
+}
+
+async function syncDrive({ silent = true, interactive = false, pickFolder = false } = {}) {
+  try {
+    if (interactive) {
+      setState(`<span class="pill idle">connecting</span><br>Connecting to Google Drive…`);
+      const connection = await Drive.connect({ pickFolder: pickFolder || !Drive.getFolder(), title: "Select shared Shwapno dashboard data folder" });
+      if (!connection) return;
+      state.driveRemoteSig = "";
+    }
+    const folder = Drive.getFolder();
+    if (!folder) {
+      $("grant").hidden = false;
+      const extra = state.rows.length ? " Showing the saved snapshot meanwhile." : "";
+      setState(`<span class="pill idle">Drive setup required</span><br>Select the shared Google Drive folder.${extra}`);
+      return;
+    }
+    if (!Drive.cachedToken()) {
+      $("grant").hidden = false;
+      const extra = state.rows.length ? " Showing the saved snapshot meanwhile." : "";
+      setState(`<span class="pill idle">reconnect Drive</span><br>Folder <b>${esc(folder.name)}</b> is remembered. Click Reconnect Google Drive.${extra}`);
+      return;
+    }
+    if (!silent || !state.rows.length) setState(`<span class="pill idle">checking Drive</span><br>Checking <b>${esc(folder.name)}</b>…`);
+    const metas = (await Drive.listFolderFiles(folder.id))
+      .filter(meta => driveFileScore(meta) < 99 && meta.capabilities?.canDownload !== false)
+      .sort((a, b) => driveFileScore(a) - driveFileScore(b) || Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || "") || String(a.name).localeCompare(String(b.name)));
+    if (!metas.length) {
+      const message = "No Audit/Response, Zone Distribution, criteria, or stock workbook was found in the shared Drive folder.";
+      if (state.rows.length) { state.stale = true; showLoaded(message); render(); }
+      else setState(`<span class="pill idle">no match</span><br>${esc(message)}`);
+      return;
+    }
+    const remoteSig = metas.map(Drive.remoteSignature).sort().join("||");
+    if (state.driveRemoteSig === remoteSig && state.rows.length) {
+      if (state.source === "gdrive") state.stale = false;
+      $("grant").hidden = true;
+      if (!silent) showLoaded(`Live from Google Drive folder “${folder.name}”.`);
+      return;
+    }
+    const files = [];
+    for (let index = 0; index < metas.length; index += 1) {
+      const meta = metas[index];
+      setState(`<span class="pill idle">downloading</span><br>${index + 1} of ${metas.length}: <b>${esc(meta.name)}</b>`);
+      files.push(await Drive.downloadFile(meta));
+    }
+    state.driveMode = true;
+    $("grant").hidden = true;
+    state.dirHandle = memoryFolderHandle(files);
+    await syncFolder({ silent: false });
+    state.driveRemoteSig = remoteSig;
+    await idbPut("cache", "drive-source", { remoteSig, folderId: folder.id, folderName: folder.name, savedAt: Date.now() });
+    if (state.source === "gdrive") showLoaded(`Live from Google Drive folder “${folder.name}”.`);
+    startWatching();
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    const message = error?.message || "Could not read Google Drive.";
+    if (state.rows.length) { state.stale = true; showLoaded(`Showing the retained data. ${message}`); render(); }
+    else setState(`<span class="pill idle">Drive error</span><br>${esc(message)}`);
+  }
+}
+
+function openDriveSetup() {
+  const config = Drive.getConfig();
+  $("google-client-id").value = config.clientId;
+  $("google-api-key").value = config.apiKey;
+  $("google-app-id").value = config.appId;
+  $("drive-modal").hidden = false;
+}
+function closeDriveSetup() { $("drive-modal").hidden = true; }
 
 // Outlet name, Zonal and RHO are not in the audit export - they come from the
 // visit-compliance dataset published alongside this page, joined on site code.
@@ -807,7 +912,7 @@ async function readZoneDirectory(file) {
 }
 
 // Published copy is the base; the folder's zone workbook overrides it wherever it
-// has a value, so a fresher local file always wins.
+// has a value, so a fresher Drive file always wins.
 function mergeDirectory(zoneMap) {
   const merged = new Map(state.baseDir);
   zoneMap.forEach((v, code) => {
@@ -1314,7 +1419,7 @@ function exportPdf() {
   const footer = (n) => {
     doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(120, 132, 145);
     doc.text(`Page ${n} of 2`, W - M, H - 14, { align: "right" });
-    doc.text(`${state.file || "local file"} · generated ${new Date().toLocaleString()}`, M, H - 14);
+    doc.text(`${state.file || "Drive workbook"} · generated ${new Date().toLocaleString()}`, M, H - 14);
   };
 
   // compact table; returns the y it finished at
@@ -1447,7 +1552,7 @@ function exportPdf() {
     }
 
     doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(120, 132, 145);
-    doc.text(`${state.file || "local file"} · generated ${new Date().toLocaleString()}`, M, H - 14);
+    doc.text(`${state.file || "Drive workbook"} · generated ${new Date().toLocaleString()}`, M, H - 14);
     doc.text("Page 1 of 1", W - M, H - 14, { align: "right" });
   } else {
     // ── whole network ────────────────────────────────────────────────
@@ -1507,10 +1612,24 @@ try { savedTheme = localStorage.getItem(THEME_KEY) || "dark"; } catch {}
 applyTheme(savedTheme);
 
 /* ── wiring ──────────────────────────────────────────────────────────── */
-$("pick-folder").addEventListener("click", pickFolder);
-$("grant").addEventListener("click", grantAccess);
-$("pick-file-btn").addEventListener("click", () => $("pick-file").click());
-$("pick-file").addEventListener("change", e => e.target.files[0] && readWorkbook(e.target.files[0]).catch(err => setState(`<span class="pill idle">error</span><br>${esc(err.message)}`)));
+$("grant").addEventListener("click", () => Drive.configReady() ? syncDrive({ interactive: true, pickFolder: false }) : openDriveSetup());
+$("drive-setup").addEventListener("click", openDriveSetup);
+$("drive-modal-close").addEventListener("click", closeDriveSetup);
+$("drive-modal").addEventListener("click", e => { if (e.target === $("drive-modal")) closeDriveSetup(); });
+$("drive-save").addEventListener("click", () => {
+  try {
+    Drive.saveConfig({ clientId: $("google-client-id").value, apiKey: $("google-api-key").value, appId: $("google-app-id").value });
+    closeDriveSetup();
+    setTimeout(() => syncDrive({ interactive: true, pickFolder: true }), 0);
+  } catch (error) { alert(error.message); }
+});
+$("drive-clear").addEventListener("click", () => {
+  if (!confirm("Clear the shared Google Drive setup for all supported dashboards on this browser?")) return;
+  Drive.clearSetup();
+  closeDriveSetup();
+  if (state.rows.length) { state.stale = true; showLoaded("Shared Drive setup was cleared. Showing the retained data."); }
+  else setState(`<span class="pill idle">Drive setup required</span><br>Shared Drive setup was cleared.`);
+});
 $("f-cat").addEventListener("change", e => { state.cat = e.target.value; render(); });
 $("f-site").addEventListener("input", e => { state.site = e.target.value; render(); });
 $("f-rank").addEventListener("change", e => { state.rank = e.target.value; render(); });
@@ -1533,7 +1652,7 @@ $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; st
     state.sig = cached.sig; state.source = "cache"; state.savedAt = cached.savedAt; state.stale = true;
     showLoaded(); render();
   } else {
-    setState(`<span class="pill idle">no folder</span><br>Choose the folder holding the survey export. It is remembered from then on.`);
+    setState(`<span class="pill idle">Drive setup required</span><br>Connect the shared Google Drive folder holding the survey export.`);
   }
   // 2. Restore the last successful PC stock availability snapshot BEFORE
   // reconnecting to the folder.  This prevents a refresh/empty folder from
@@ -1561,7 +1680,7 @@ $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; st
   await loadPublishedAudit();
   // 4. Prefer the explicitly published cross-PC snapshot when available.
   await loadSharedPublishedSnapshot();
-  // 5. Load outlet ownership and then reconnect to the remembered folder.
+  // 5. Load outlet ownership and then reconnect to the remembered Drive folder.
   await loadDirectory();
   const zoneCache = await idbGet("cache", "zone");
   if (zoneCache?.entries?.length) {
@@ -1569,13 +1688,12 @@ $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; st
     mergeDirectory(new Map(zoneCache.entries));
     if (state.rows.length) render();
   }
-  const handle = await idbGet("h", "folder");
-  if (!handle) return;
-  state.dirHandle = handle;
-  let permission = "prompt";
-  try { permission = await handle.queryPermission({ mode: "read" }); } catch {}
-  if (permission === "granted") { await syncFolder({ silent: false }); startWatching(); }
-  else needsGrant();
+  const driveCache = await idbGet("cache", "drive-source");
+  if (driveCache?.folderId === Drive.getFolder()?.id) state.driveRemoteSig = driveCache.remoteSig || "";
+  const folder = Drive.getFolder();
+  if (folder && Drive.cachedToken()) { await syncDrive({ silent: false }); startWatching(); }
+  else if (folder) setState(`<span class="pill idle">reconnect Drive</span><br>Folder <b>${esc(folder.name)}</b> is already selected. Click Reconnect Google Drive.${state.rows.length ? " The retained snapshot remains visible." : ""}`);
+  else if (state.rows.length) showLoaded("Use Drive setup to select the shared Google Drive folder.");
 })();
 </script>
 </body>
