@@ -3,9 +3,13 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="color-scheme" content="dark" />
+<meta name="color-scheme" content="dark light" />
 <title>Audit Quality Dashboard</title>
-<link rel="stylesheet" href="styles.css?v=visit-complete-dark-v9-sidebar" />
+<script>
+try { document.documentElement.dataset.theme = localStorage.getItem("audit-quality-theme") || "dark"; }
+catch { document.documentElement.dataset.theme = "dark"; }
+</script>
+<link rel="stylesheet" href="styles.css?v=visit-audit-latest-theme-v13" />
 <style>
   body { background: var(--dark-1); }
   .audit-layout { display: grid; grid-template-columns: 288px minmax(0,1fr); align-items: start; }
@@ -69,15 +73,59 @@
   .coverage b { color: var(--white-text); }
   .exports { display: flex; gap: 9px; flex-wrap: wrap; }
   .exports .btn { height: 34px; font-size: 11.5px; }
+
+  /* v13 — Audit-only light/dark switch. The main Visit dashboard theme is untouched. */
+  .theme-toggle { min-width: 104px; }
+  html[data-theme="light"] {
+    --dark-0: #eef3f6; --dark-1: #f5f8fa; --dark-2: #ffffff; --dark-3: #f0f5f8; --dark-4: #e5edf2;
+    --line: #c5d3dc; --blue: #1976a8; --blue-2: #0d6f9f; --white-text: #102a3a; --muted-text: #617787;
+    --navy: #f5f8fa !important; --navy2: #ffffff !important; --border: #c5d3dc !important;
+    --text: #102a3a !important; --muted: #617787 !important; --white: #ffffff !important;
+    --shadow: 0 8px 24px rgba(24,58,78,.12) !important;
+    color-scheme: light;
+  }
+  html[data-theme="light"], html[data-theme="light"] body { background: #f5f8fa !important; color: #102a3a !important; }
+  html[data-theme="light"] .topbar { background: #ffffff !important; border-color: #c5d3dc !important; }
+  html[data-theme="light"] .topbar h1 { color: #102a3a !important; }
+  html[data-theme="light"] .topbar .subtitle { color: #617787 !important; }
+  html[data-theme="light"] .rail { background: #ffffff !important; border-color: #c5d3dc !important; }
+  html[data-theme="light"] .rail-heading { color: #0d6f9f !important; }
+  html[data-theme="light"] .source-state, html[data-theme="light"] .definitions-text, html[data-theme="light"] .coverage, html[data-theme="light"] .panel-caption { color: #617787 !important; }
+  html[data-theme="light"] .source-state b, html[data-theme="light"] .definitions-text b { color: #102a3a !important; }
+  html[data-theme="light"] .rail-field > span { color: #506978 !important; }
+  html[data-theme="light"] .rail-field select, html[data-theme="light"] .rail-field input,
+  html[data-theme="light"] select, html[data-theme="light"] input { background: #ffffff !important; color: #102a3a !important; border-color: #b9cbd5 !important; }
+  html[data-theme="light"] select option { background: #ffffff !important; color: #102a3a !important; }
+  html[data-theme="light"] .btn.secondary { background: #edf3f6 !important; color: #23495d !important; border-color: #b9cbd5 !important; }
+  html[data-theme="light"] .btn.secondary:hover { background: #e1ebf0 !important; }
+  html[data-theme="light"] .link-btn { background: #edf5f9 !important; color: #0d6f9f !important; border-color: #8db8cf !important; }
+  html[data-theme="light"] .score-hero { background: #c5d3dc !important; border-color: #c5d3dc !important; }
+  html[data-theme="light"] .hero-cell, html[data-theme="light"] .panel { background: #ffffff !important; }
+  html[data-theme="light"] .fact .n, html[data-theme="light"] .bar-row .lbl, html[data-theme="light"] .panel-head h2 { color: #102a3a !important; }
+  html[data-theme="light"] .panel-head, html[data-theme="light"] .sort-chips { background: #f0f5f8 !important; border-color: #c5d3dc !important; }
+  html[data-theme="light"] .sort-chips .chip { background: #ffffff !important; color: #102a3a !important; border-color: #c5d3dc !important; }
+  html[data-theme="light"] .bar-track, html[data-theme="light"] .mini { background: #e3ebf0 !important; }
+  html[data-theme="light"] .table-wrap, html[data-theme="light"] .detail-table-wrap, html[data-theme="light"] table { background: #ffffff !important; color: #102a3a !important; }
+  html[data-theme="light"] th { background: #dfeaf0 !important; color: #17384a !important; border-color: #c2d2db !important; }
+  html[data-theme="light"] th:hover { background: #d3e2e9 !important; }
+  html[data-theme="light"] td { color: #17384a !important; border-color: #d5e0e6 !important; }
+  html[data-theme="light"] tbody tr:nth-child(odd) { background: #ffffff !important; }
+  html[data-theme="light"] tbody tr:nth-child(even) { background: #f5f9fb !important; }
+  html[data-theme="light"] tbody tr:hover, html[data-theme="light"] tr.click-row:hover td { background: #e9f4fa !important; }
+  html[data-theme="light"] tr.click-row.on td { background: #d8edf7 !important; }
+  html[data-theme="light"] .drill { background: #eaf5fb !important; color: #17384a !important; }
+  html[data-theme="light"] .drill button { color: #506978 !important; border-color: #b9cbd5 !important; }
+  html[data-theme="light"] .empty-state h2 { color: #102a3a !important; }
 </style>
 </head>
 <body>
 <header class="topbar">
   <div class="topbar-identity">
     <h1>Audit Quality Dashboard</h1>
-    <p class="subtitle" id="sub">Store Operations Compliance Audit — answer-level scoring</p>
+    <p class="subtitle" id="sub">Store Operations Compliance Audit — answer-level scoring · latest audit per outlet</p>
   </div>
   <div class="topbar-actions">
+    <button id="theme-toggle" class="btn secondary theme-toggle" type="button" aria-label="Switch dashboard theme">Light theme</button>
     <a class="btn link-btn" href="./index.html">Visit compliance</a>
     <a class="btn secondary" href="./publish.html">Cloud sync</a>
   </div>
@@ -116,7 +164,7 @@
 
       <section class="rail-group">
         <h2 class="rail-heading">How the score works</h2>
-        <p class="definitions-text">Score is <b>points earned ÷ points available</b> across every answered question. Questions carrying no marks (free-text notes) are excluded so they cannot dilute the result.</p>
+        <p class="definitions-text">For each outlet, only its <b>latest audit response</b> is scored. The score is <b>points earned ÷ points available</b> across the answered questions in that latest response. Questions carrying no marks (free-text notes) are excluded.</p>
       </section>
     </div>
   </aside>
@@ -133,7 +181,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst" };
+const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, cat: "", site: "", rank: "worst", latestRowsRef: null, latestResponseKeys: null };
 
 // Green through amber to red — the same reading at a glance for any manager.
 function tone(v) {
@@ -913,8 +961,46 @@ async function readStockAvailability(file, criteria, onProgress) {
 const availFor = (code) => state.avail.get(String(code ?? "").trim().toUpperCase()) || null;
 
 /* ── aggregation ─────────────────────────────────────────────────────── */
+// v13 scoring rule: one audit per outlet. Determine the newest Response ID for
+// every Site Code first, then keep answer-level scoring exactly as before inside
+// that response. Date is the primary key; Response ID breaks same-day ties.
+function auditDateRank(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const text = String(value ?? "").trim();
+  if (!text) return -Infinity;
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) return numeric;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : -Infinity;
+}
+function responseRank(value) {
+  const text = String(value ?? "").trim();
+  const numeric = Number(text);
+  return Number.isFinite(numeric) ? numeric : text;
+}
+function latestResponseKeys() {
+  if (state.latestRowsRef === state.rows && state.latestResponseKeys) return state.latestResponseKeys;
+  const latest = new Map();
+  for (const r of state.rows) {
+    const site = String(r["Site Code"] || "").trim();
+    const response = String(r["Response ID"] ?? "").trim();
+    if (!site || !response) continue;
+    const date = auditDateRank(r["Date"]);
+    const rid = responseRank(response);
+    const current = latest.get(site);
+    const newerDate = !current || date > current.date;
+    const sameDateNewerResponse = current && date === current.date && ((typeof rid === "number" && typeof current.rid === "number") ? rid > current.rid : String(rid) > String(current.rid));
+    if (newerDate || sameDateNewerResponse) latest.set(site, { response, date, rid });
+  }
+  const keys = new Set([...latest.entries()].map(([site, v]) => `${site}\u0000${v.response}`));
+  state.latestRowsRef = state.rows;
+  state.latestResponseKeys = keys;
+  return keys;
+}
+
 function aggregate() {
   const num = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
+  const latestKeys = latestResponseKeys();
   const out = {
     total: [0,0], cats: new Map(), sites: new Map(), questions: new Map(), days: new Map(),
     audits: new Set(), outlets: new Set(),
@@ -922,6 +1008,8 @@ function aggregate() {
   for (const r of state.rows) {
     const category = r["Question Category"] || "Uncategorised";
     const site = String(r["Site Code"] || "").trim();
+    const response = String(r["Response ID"] ?? "").trim();
+    if (!latestKeys.has(`${site}\u0000${response}`)) continue;
     if (state.cat && category !== state.cat) continue;
     if (state.site) {
       const needle = state.site.toLowerCase();
@@ -1402,6 +1490,22 @@ function exportPdf() {
   doc.save(`audit-summary-${state.site || "network"}-${Date.now()}.pdf`);
 }
 
+/* ── theme ───────────────────────────────────────────────────────────── */
+const THEME_KEY = "audit-quality-theme";
+function applyTheme(theme) {
+  const next = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  document.documentElement.style.colorScheme = next;
+  const btn = $("theme-toggle");
+  if (btn) {
+    btn.textContent = next === "dark" ? "Light theme" : "Dark theme";
+    btn.setAttribute("aria-pressed", next === "light" ? "true" : "false");
+  }
+}
+let savedTheme = "dark";
+try { savedTheme = localStorage.getItem(THEME_KEY) || "dark"; } catch {}
+applyTheme(savedTheme);
+
 /* ── wiring ──────────────────────────────────────────────────────────── */
 $("pick-folder").addEventListener("click", pickFolder);
 $("grant").addEventListener("click", grantAccess);
@@ -1412,6 +1516,11 @@ $("f-site").addEventListener("input", e => { state.site = e.target.value; render
 $("f-rank").addEventListener("change", e => { state.rank = e.target.value; render(); });
 $("dl-csv").addEventListener("click", exportCsv);
 $("dl-pdf").addEventListener("click", exportPdf);
+$("theme-toggle").addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  try { localStorage.setItem(THEME_KEY, next); } catch {}
+  applyTheme(next);
+});
 $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; state.rank = "worst";
   $("f-cat").value = ""; $("f-site").value = ""; $("f-rank").value = "worst"; render(); });
 
