@@ -50,6 +50,12 @@ catch { document.documentElement.dataset.theme = "dark"; }
   .threshold-outlet-table th:nth-child(4), .threshold-outlet-table td:nth-child(4) { width: 22%; }
   .threshold-outlet-table th:nth-child(5), .threshold-outlet-table td:nth-child(5) { width: 10%; text-align: right; }
   .threshold-outlet-table td { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+  .outlet-pdf-link {
+    color: var(--blue-2); font-weight: 800; text-decoration: underline;
+    text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer;
+  }
+  .outlet-pdf-link:hover, .outlet-pdf-link:focus-visible { color: #8fdcff; text-decoration-thickness: 2px; }
+  .outlet-pdf-link:focus-visible { outline: 2px solid var(--blue-2); outline-offset: 3px; border-radius: 2px; }
 
   .bar-row { display: grid; grid-template-columns: minmax(150px,210px) 1fr 56px; gap: 12px; align-items: center; padding: 9px 0; }
   .bar-row + .bar-row { border-top: 1px solid var(--line); }
@@ -122,6 +128,8 @@ catch { document.documentElement.dataset.theme = "dark"; }
   html[data-theme="light"] .band-link { color: #102a3a !important; text-decoration-color: #5f9dbb !important; }
   html[data-theme="light"] .band-link:hover, html[data-theme="light"] .band-link:focus-visible,
   html[data-theme="light"] .band-link.active { color: #0d6f9f !important; text-decoration-color: #0d6f9f !important; }
+  html[data-theme="light"] .outlet-pdf-link { color: #0d6f9f !important; }
+  html[data-theme="light"] .outlet-pdf-link:hover, html[data-theme="light"] .outlet-pdf-link:focus-visible { color: #064f72 !important; }
   html[data-theme="light"] .panel-head, html[data-theme="light"] .sort-chips { background: #f0f5f8 !important; border-color: #c5d3dc !important; }
   html[data-theme="light"] .sort-chips .chip { background: #ffffff !important; color: #102a3a !important; border-color: #c5d3dc !important; }
   html[data-theme="light"] .bar-track, html[data-theme="light"] .mini { background: #e3ebf0 !important; }
@@ -1263,6 +1271,24 @@ function applySortClick(table, key, additive) {
   render();
 }
 
+function wireSortControls() {
+  document.querySelectorAll("th.sortable").forEach(el => el.addEventListener("click", (ev) =>
+    applySortClick(el.dataset.table, el.dataset.key, ev.shiftKey)));
+  document.querySelectorAll(".sort-chips button").forEach(btn => btn.addEventListener("click", () => {
+    const chain = btn.dataset.table === "q" ? state.qSort : state.oSort;
+    if (btn.dataset.clear) { chain.length = 0; chain.push({ key: "score", dir: "asc" }); }
+    else if (btn.dataset.flip) {
+      const c = chain.find(x => x.key === btn.dataset.flip);
+      if (c) c.dir = c.dir === "asc" ? "desc" : "asc";
+    } else if (btn.dataset.drop) {
+      const i = chain.findIndex(x => x.key === btn.dataset.drop);
+      if (i >= 0) chain.splice(i, 1);
+      if (!chain.length) chain.push({ key: "score", dir: "asc" });
+    }
+    render();
+  }));
+}
+
 function scoreCell(v) {
   return `<span class="mini"><i style="width:${v.toFixed(1)}%;background:${tone(v)}"></i></span><b style="color:${tone(v)}">${v.toFixed(1)}%</b>`;
 }
@@ -1299,9 +1325,7 @@ function render() {
   }
   const scoreThreshold = state.rank === "all" ? null : Number(state.rank);
   const thresholdOutlets = Number.isFinite(scoreThreshold)
-    ? sortRows([...a.sites.entries()].filter(([, [got, max]]) => pct(got, max) < scoreThreshold), [
-        { key: "score", dir: "asc" }, { key: "name", dir: "asc" },
-      ])
+    ? sortRows([...a.sites.entries()].filter(([, [got, max]]) => pct(got, max) < scoreThreshold), state.oSort)
     : [];
   const visibleOutlets = Number.isFinite(scoreThreshold) ? thresholdOutlets : outlets;
   state.view = { overall, cats, questions, outlets: visibleOutlets, days, audits: a.audits.size,
@@ -1313,15 +1337,23 @@ function render() {
   if (Number.isFinite(scoreThreshold)) {
     $("body").innerHTML = `<section id="threshold-outlet-list" class="panel threshold-outlet-panel" aria-live="polite">
       <div class="panel-head"><div><h2>Outlets below ${scoreThreshold}%</h2>
-        <p class="panel-caption">${thresholdOutlets.length.toLocaleString()} outlets · weakest score first</p></div></div>
+        <p class="panel-caption">${thresholdOutlets.length.toLocaleString()} outlets · click a column to sort · Shift-click to add another sorting level</p></div></div>
+      ${sortChips(state.oSort, "o")}
       <div class="table-wrap"><table class="threshold-outlet-table">
-        <thead><tr><th>Outlet Code</th><th>Outlet Name</th><th>Zonal Name</th><th>RHO Name</th><th>Score %</th></tr></thead>
+        <thead><tr>${th("Outlet Code","name",state.oSort,"o")}${th("Outlet Name","oname",state.oSort,"o")}
+          ${th("Zonal Name","zonal",state.oSort,"o")}${th("RHO Name","rho",state.oSort,"o")}${th("Score %","score",state.oSort,"o","num")}</tr></thead>
         <tbody>${thresholdOutlets.length ? thresholdOutlets.map(([code, [got, max]]) => { const d = meta(code); return `<tr>
-          <td><b>${esc(code)}</b></td><td>${esc(d.name || "—")}</td><td>${esc(d.zonal || "—")}</td><td>${esc(d.rho || "—")}</td>
+          <td><a class="outlet-pdf-link" href="#" data-code="${esc(code)}" title="Open ${esc(code)} outlet PDF">${esc(code)}</a></td>
+          <td>${esc(d.name || "—")}</td><td>${esc(d.zonal || "—")}</td><td>${esc(d.rho || "—")}</td>
           <td class="num"><b style="color:${tone(pct(got, max))}">${pct(got, max).toFixed(1)}%</b></td>
         </tr>`; }).join("") : `<tr><td colspan="5" class="empty-state">No outlets are below ${scoreThreshold}% in the current category.</td></tr>`}</tbody>
       </table></div>
     </section>`;
+    wireSortControls();
+    document.querySelectorAll(".outlet-pdf-link").forEach(link => link.addEventListener("click", event => {
+      event.preventDefault();
+      openOutletPdf(link.dataset.code);
+    }));
     return;
   }
 
@@ -1417,21 +1449,7 @@ function render() {
     <p class="coverage">${state.zoneFile ? `Zonal and Regional (RHO) read from <b>${esc(state.zoneFile)}</b> in the same folder. ` : ""}Every question in the export is listed above. Questions carrying no marks
       (free-text notes) are excluded from scoring so they cannot dilute the result.</p>`;
 
-  document.querySelectorAll("th.sortable").forEach(el => el.addEventListener("click", (ev) =>
-    applySortClick(el.dataset.table, el.dataset.key, ev.shiftKey)));
-  document.querySelectorAll(".sort-chips button").forEach(btn => btn.addEventListener("click", () => {
-    const chain = btn.dataset.table === "q" ? state.qSort : state.oSort;
-    if (btn.dataset.clear) { chain.length = 0; chain.push({ key: "score", dir: "asc" }); }
-    else if (btn.dataset.flip) {
-      const c = chain.find(x => x.key === btn.dataset.flip);
-      if (c) c.dir = c.dir === "asc" ? "desc" : "asc";
-    } else if (btn.dataset.drop) {
-      const i = chain.findIndex(x => x.key === btn.dataset.drop);
-      if (i >= 0) chain.splice(i, 1);
-      if (!chain.length) chain.push({ key: "score", dir: "asc" });
-    }
-    render();
-  }));
+  wireSortControls();
   document.querySelectorAll(".band-link").forEach(btn => btn.addEventListener("click", () => {
     const threshold = Number(btn.dataset.band);
     state.rank = String(threshold);
@@ -1503,14 +1521,29 @@ function exportCsv() {
   downloadBlob(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }), `audit-quality-${Date.now()}.csv`);
 }
 
+function finishPdf(doc, filename, previewWindow = null) {
+  if (!previewWindow) {
+    doc.save(filename);
+    return;
+  }
+  const url = URL.createObjectURL(doc.output("blob"));
+  previewWindow.location.replace(url);
+  // Keep the object URL alive while the browser's PDF viewer is open.
+  setTimeout(() => URL.revokeObjectURL(url), 30 * 60 * 1000);
+}
+
 /* Executive summary, always two A4 landscape pages.
    No outlet selected → page 1 network picture, page 2 every outlet below 70%.
    Outlet selected     → page 1 that outlet's categories, page 2 all its questions,
    both ordered weakest first, which is what a review meeting reads down. */
-function exportPdf() {
+function exportPdf({ previewWindow = null } = {}) {
   const v = state.view; if (!v) return;
   const { jsPDF } = window.jspdf || {};
-  if (!jsPDF) { alert("PDF library did not load — check the internet connection."); return; }
+  if (!jsPDF) {
+    previewWindow?.close();
+    alert("PDF library did not load — check the internet connection.");
+    return;
+  }
 
   const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
   const W = doc.internal.pageSize.getWidth();     // 842
@@ -1605,7 +1638,7 @@ function exportPdf() {
       doc.text(`${state.file || "Drive workbook"} · generated ${new Date().toLocaleString()}`, M, H - 14);
       doc.text(`Page ${page + 1} of ${pages}`, W - M, H - 14, { align: "right" });
     }
-    doc.save(`audit-outlets-below-${v.scoreThreshold}-${Date.now()}.pdf`);
+    finishPdf(doc, `audit-outlets-below-${v.scoreThreshold}-${Date.now()}.pdf`, previewWindow);
     return;
   }
 
@@ -1723,7 +1756,53 @@ function exportPdf() {
     footer(2);
   }
 
-  doc.save(`audit-summary-${state.site || "network"}-${Date.now()}.pdf`);
+  finishPdf(doc, `audit-summary-${state.site || "network"}-${Date.now()}.pdf`, previewWindow);
+}
+
+// Open the exact one-outlet PDF without switching the visible dashboard from
+// the threshold list to the outlet-detail screen.
+function openOutletPdf(code) {
+  const outletCode = String(code || "").trim().toUpperCase();
+  if (!outletCode) return;
+  const previewWindow = window.open("", "_blank");
+  if (!previewWindow) {
+    alert("Please allow pop-ups for this dashboard so the outlet PDF can open in a new tab.");
+    return;
+  }
+  previewWindow.document.title = `${outletCode} · Audit PDF`;
+  previewWindow.document.body.innerHTML = `<p style="font:16px Arial,sans-serif;padding:24px">Preparing ${esc(outletCode)} outlet PDF…</p>`;
+
+  const saved = { site: state.site, cat: state.cat, rank: state.rank, view: state.view };
+  try {
+    state.site = outletCode;
+    state.cat = "";
+    state.rank = "all";
+    const a = aggregate();
+    if (!a.sites.size) throw new Error(`No audit data found for ${outletCode}.`);
+    const overall = pct(a.total[0], a.total[1]);
+    const cats = [...a.cats.entries()].sort((x, y) => pct(x[1][0], x[1][1]) - pct(y[1][0], y[1][1]));
+    const questions = sortRows([...a.questions.entries()], state.qSort);
+    const outlets = sortRows([...a.sites.entries()], state.oSort);
+    const days = [...a.days.entries()].sort((x, y) => new Date(x[0]) - new Date(y[0]));
+    const below = { s60: 0, s70: 0, s80: 0 };
+    for (const [, [got, max]] of a.sites) {
+      const score = pct(got, max);
+      if (score < 60) below.s60 += 1;
+      if (score < 70) below.s70 += 1;
+      if (score < 80) below.s80 += 1;
+    }
+    state.view = { overall, cats, questions, outlets, days, audits: a.audits.size,
+      outletCount: a.outlets.size, total: a.total, below, scoreThreshold: null, drillMeta: meta(outletCode) };
+    exportPdf({ previewWindow });
+  } catch (error) {
+    previewWindow.close();
+    alert(error?.message || `Could not create the ${outletCode} outlet PDF.`);
+  } finally {
+    state.site = saved.site;
+    state.cat = saved.cat;
+    state.rank = saved.rank;
+    state.view = saved.view;
+  }
 }
 
 /* ── theme ───────────────────────────────────────────────────────────── */
@@ -1775,7 +1854,7 @@ $("f-rank").addEventListener("change", e => {
   render();
 });
 $("dl-csv").addEventListener("click", exportCsv);
-$("dl-pdf").addEventListener("click", exportPdf);
+$("dl-pdf").addEventListener("click", () => exportPdf());
 $("theme-toggle").addEventListener("click", () => {
   const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
   try { localStorage.setItem(THEME_KEY, next); } catch {}
