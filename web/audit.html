@@ -9,6 +9,8 @@
 try { document.documentElement.dataset.theme = localStorage.getItem("audit-quality-theme") || "dark"; }
 catch { document.documentElement.dataset.theme = "dark"; }
 </script>
+<style>html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }</style>
+<script src="drive-owner-mode.js?v=owner-device-v1"></script>
 <link rel="stylesheet" href="styles.css?v=visit-audit-latest-theme-v13" />
 <style>
   body { background: var(--dark-1); }
@@ -170,8 +172,8 @@ catch { document.documentElement.dataset.theme = "dark"; }
       <section class="rail-group source-box">
         <h2 class="rail-heading">Data source</h2>
         <div id="src-state" class="source-state"></div>
-        <button id="grant" class="btn primary" type="button">Reconnect Google Drive</button>
-        <button id="drive-setup" class="btn secondary" type="button">Drive setup / change folder</button>
+        <button id="grant" class="btn primary" type="button" data-drive-owner-only>Reconnect Google Drive</button>
+        <button id="drive-setup" class="btn secondary" type="button" data-drive-owner-only>Drive setup / change folder</button>
       </section>
 
       <section class="rail-group">
@@ -217,7 +219,7 @@ catch { document.documentElement.dataset.theme = "dark"; }
   </main>
 </div>
 
-<div id="drive-modal" class="drive-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="drive-modal-title" hidden>
+<div id="drive-modal" class="drive-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="drive-modal-title" hidden data-drive-owner-only>
   <section class="drive-modal">
     <div class="drive-modal-head"><div><div class="rail-heading">SHARED DRIVE SETUP</div><h2 id="drive-modal-title">Google Drive cloud setup</h2></div><button id="drive-modal-close" class="drive-modal-close" type="button" aria-label="Close">×</button></div>
     <p>The setup and selected folder are shared with Zone Distribution, Z-Report, Visit Compliance and the portal on this browser. Feasibility stays separate.</p>
