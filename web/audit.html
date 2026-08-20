@@ -42,14 +42,14 @@ catch { document.documentElement.dataset.theme = "dark"; }
   .band-link:hover, .band-link:focus-visible { color: var(--blue-2); text-decoration-color: var(--blue-2); }
   .band-link:focus-visible { outline: 2px solid var(--blue-2); outline-offset: 4px; border-radius: 3px; }
   .band-link.active { color: var(--blue-2); text-decoration-thickness: 2px; }
-  .band-outlet-panel .panel-head { align-items: center; }
-  .band-outlet-panel .table-wrap { max-height: 55vh; }
-  .band-outlet-table { table-layout: fixed; }
-  .band-outlet-table th:nth-child(1), .band-outlet-table td:nth-child(1) { width: 15%; }
-  .band-outlet-table th:nth-child(2), .band-outlet-table td:nth-child(2) { width: 35%; }
-  .band-outlet-table th:nth-child(3), .band-outlet-table td:nth-child(3) { width: 25%; }
-  .band-outlet-table th:nth-child(4), .band-outlet-table td:nth-child(4) { width: 25%; }
-  .band-outlet-table td { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+  .threshold-outlet-panel .table-wrap { max-height: calc(100vh - 185px); }
+  .threshold-outlet-table { table-layout: fixed; }
+  .threshold-outlet-table th:nth-child(1), .threshold-outlet-table td:nth-child(1) { width: 14%; }
+  .threshold-outlet-table th:nth-child(2), .threshold-outlet-table td:nth-child(2) { width: 31%; }
+  .threshold-outlet-table th:nth-child(3), .threshold-outlet-table td:nth-child(3) { width: 23%; }
+  .threshold-outlet-table th:nth-child(4), .threshold-outlet-table td:nth-child(4) { width: 22%; }
+  .threshold-outlet-table th:nth-child(5), .threshold-outlet-table td:nth-child(5) { width: 10%; text-align: right; }
+  .threshold-outlet-table td { text-align: left; white-space: normal; overflow-wrap: anywhere; }
 
   .bar-row { display: grid; grid-template-columns: minmax(150px,210px) 1fr 56px; gap: 12px; align-items: center; padding: 9px 0; }
   .bar-row + .bar-row { border-top: 1px solid var(--line); }
@@ -165,8 +165,17 @@ catch { document.documentElement.dataset.theme = "dark"; }
         <label class="rail-field"><span>Category</span><select id="f-cat"></select></label>
         <label class="rail-field"><span>Outlet code or name</span><input id="f-site" type="search" placeholder="e.g. F327 or Gulshan" autocomplete="off" /></label>
         <label class="rail-field"><span>Show outlets</span><select id="f-rank">
-          <option value="worst">Weakest first</option>
-          <option value="best">Strongest first</option>
+          <option value="all">All outlets</option>
+          <option value="10">Below 10%</option>
+          <option value="20">Below 20%</option>
+          <option value="30">Below 30%</option>
+          <option value="40">Below 40%</option>
+          <option value="50">Below 50%</option>
+          <option value="60">Below 60%</option>
+          <option value="70">Below 70%</option>
+          <option value="80">Below 80%</option>
+          <option value="90">Below 90%</option>
+          <option value="100">Below 100%</option>
         </select></label>
         <button id="reset" class="btn secondary" type="button" style="width:100%">Reset filters</button>
       </section>
@@ -213,7 +222,7 @@ catch { document.documentElement.dataset.theme = "dark"; }
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: "", rank: "worst", scoreBand: null, latestRowsRef: null, latestResponseKeys: null };
+const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: "", rank: "all", latestRowsRef: null, latestResponseKeys: null };
 const Drive = window.ShwapnoDrive;
 
 // Green through amber to red — the same reading at a glance for any manager.
@@ -1084,6 +1093,29 @@ async function readStockAvailability(file, criteria, onProgress) {
 
 const availFor = (code) => state.avail.get(String(code ?? "").trim().toUpperCase()) || null;
 
+// Roll up the latest stock snapshot across every outlet.  The network rate is
+// calculated from the summed counts (total available / total eligible SKUs),
+// so a small outlet cannot carry the same weight as a large one.
+function allOutletAvailability() {
+  const values = Object.fromEntries(AVAIL_CRITERIA.map(([label]) => [label, { ok: 0, total: 0, pct: 0 }]));
+  let outletCount = 0;
+  for (const entry of state.avail.values()) {
+    if (!entry || !AVAIL_CRITERIA.some(([label]) => entry[label])) continue;
+    outletCount += 1;
+    for (const [label] of AVAIL_CRITERIA) {
+      const cell = entry[label];
+      if (!cell) continue;
+      values[label].ok += Number(cell.ok || 0);
+      values[label].total += Number(cell.total || 0);
+    }
+  }
+  for (const [label] of AVAIL_CRITERIA) {
+    const cell = values[label];
+    cell.pct = cell.total ? (100 * cell.ok / cell.total) : 0;
+  }
+  return outletCount ? { outletCount, values } : null;
+}
+
 /* ── aggregation ─────────────────────────────────────────────────────── */
 // v13 scoring rule: one audit per outlet. Determine the newest Response ID for
 // every Site Code first, then keep answer-level scoring exactly as before inside
@@ -1235,14 +1267,23 @@ function scoreCell(v) {
   return `<span class="mini"><i style="width:${v.toFixed(1)}%;background:${tone(v)}"></i></span><b style="color:${tone(v)}">${v.toFixed(1)}%</b>`;
 }
 
+function refreshCategoryOptions() {
+  const sel = $("f-cat");
+  const keep = state.cat;
+  sel.innerHTML = `<option value="">All categories</option>` +
+    [...new Set(state.rows.map(r => r["Question Category"]).filter(Boolean))].sort()
+      .map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  sel.value = keep;
+}
+
 function render() {
   if (!state.rows.length) {
     $("body").innerHTML = `<div class="empty-state"><h2>No data loaded yet</h2>
-      Choose the folder on your laptop where the survey export is saved.<br>
-      The newest matching Excel file is read automatically — the name can change every month.<br><br>
-      Nothing is uploaded; the file is read on this computer only.</div>`;
+      Connect the shared Google Drive folder containing the survey export.<br>
+      The newest matching Excel file will be read automatically.</div>`;
     return;
   }
+  refreshCategoryOptions();
   const a = aggregate();
   const overall = pct(a.total[0], a.total[1]);
   const cats = [...a.cats.entries()].sort((x, y) => pct(x[1][0], x[1][1]) - pct(y[1][0], y[1][1]));
@@ -1256,14 +1297,39 @@ function render() {
     if (v < 70) below.s70 += 1;
     if (v < 80) below.s80 += 1;
   }
-  const bandThreshold = !state.site && [70, 80].includes(Number(state.scoreBand)) ? Number(state.scoreBand) : null;
-  const bandOutlets = bandThreshold
-    ? sortRows([...a.sites.entries()].filter(([, [got, max]]) => pct(got, max) < bandThreshold), [
+  const scoreThreshold = state.rank === "all" ? null : Number(state.rank);
+  const thresholdOutlets = Number.isFinite(scoreThreshold)
+    ? sortRows([...a.sites.entries()].filter(([, [got, max]]) => pct(got, max) < scoreThreshold), [
         { key: "score", dir: "asc" }, { key: "name", dir: "asc" },
       ])
     : [];
-  state.view = { overall, cats, questions, outlets, days, audits: a.audits.size, outletCount: a.outlets.size, total: a.total, below };
+  const visibleOutlets = Number.isFinite(scoreThreshold) ? thresholdOutlets : outlets;
+  state.view = { overall, cats, questions, outlets: visibleOutlets, days, audits: a.audits.size,
+    outletCount: visibleOutlets.length, total: a.total, below, scoreThreshold };
   state.view.drillMeta = state.site ? meta(state.site) : null;
+
+  // A threshold choice is intentionally a list-only screen: no score cards,
+  // category/question details, availability table, or other dashboard panels.
+  if (Number.isFinite(scoreThreshold)) {
+    $("body").innerHTML = `<section id="threshold-outlet-list" class="panel threshold-outlet-panel" aria-live="polite">
+      <div class="panel-head"><div><h2>Outlets below ${scoreThreshold}%</h2>
+        <p class="panel-caption">${thresholdOutlets.length.toLocaleString()} outlets · weakest score first</p></div></div>
+      <div class="table-wrap"><table class="threshold-outlet-table">
+        <thead><tr><th>Outlet Code</th><th>Outlet Name</th><th>Zonal Name</th><th>RHO Name</th><th>Score %</th></tr></thead>
+        <tbody>${thresholdOutlets.length ? thresholdOutlets.map(([code, [got, max]]) => { const d = meta(code); return `<tr>
+          <td><b>${esc(code)}</b></td><td>${esc(d.name || "—")}</td><td>${esc(d.zonal || "—")}</td><td>${esc(d.rho || "—")}</td>
+          <td class="num"><b style="color:${tone(pct(got, max))}">${pct(got, max).toFixed(1)}%</b></td>
+        </tr>`; }).join("") : `<tr><td colspan="5" class="empty-state">No outlets are below ${scoreThreshold}% in the current category.</td></tr>`}</tbody>
+      </table></div>
+    </section>`;
+    return;
+  }
+
+  const networkAvailability = !state.site ? allOutletAvailability() : null;
+  const availabilityView = state.site ? availFor(state.site) : networkAvailability?.values;
+  const availabilityCaption = state.site
+    ? `Counts stock that meets the minimum Qty · ${esc(state.site.toUpperCase())}`
+    : `Counts stock that meets the minimum Qty · All ${(networkAvailability?.outletCount || 0).toLocaleString()} outlets in the latest availability snapshot`;
 
   const drillMeta = state.site ? meta(state.site) : EMPTY_META;
   const drill = state.site
@@ -1289,37 +1355,22 @@ function render() {
           <div class="l">Last visit · RHO${drillMeta.lastVisitRhoBy ? ` · ${esc(drillMeta.lastVisitRhoBy)}` : ""}</div></div>`
         : `
         <div class="fact"><div class="n">${questions.length}</div><div class="l">Scored questions</div></div>
-        <div class="fact"><button type="button" class="n band-link ${state.scoreBand === 70 ? "active" : ""}" data-band="70"
-          aria-expanded="${state.scoreBand === 70 ? "true" : "false"}" aria-controls="band-outlet-list" title="Show outlets below 70%">${below.s70}</button><div class="l">Below 70%</div></div>
-        <div class="fact"><button type="button" class="n band-link ${state.scoreBand === 80 ? "active" : ""}" data-band="80"
-          aria-expanded="${state.scoreBand === 80 ? "true" : "false"}" aria-controls="band-outlet-list" title="Show outlets below 80%">${below.s80}</button><div class="l">Below 80%</div></div>`}
+        <div class="fact"><button type="button" class="n band-link" data-band="70"
+          aria-controls="threshold-outlet-list" title="Show outlets below 70%">${below.s70}</button><div class="l">Below 70%</div></div>
+        <div class="fact"><button type="button" class="n band-link" data-band="80"
+          aria-controls="threshold-outlet-list" title="Show outlets below 80%">${below.s80}</button><div class="l">Below 80%</div></div>`}
       </div>
     </section>
 
-    ${bandThreshold ? `
-    <section id="band-outlet-list" class="panel band-outlet-panel" aria-live="polite">
-      <div class="panel-head">
-        <div><h2>Outlets below ${bandThreshold}%</h2>
-          <p class="panel-caption">${bandOutlets.length.toLocaleString()} outlets in the current view · weakest first</p></div>
-        <button id="clear-band" class="btn secondary" type="button">Close list</button>
-      </div>
-      <div class="table-wrap"><table class="band-outlet-table">
-        <thead><tr><th>Outlet Code</th><th>Outlet Name</th><th>Zonal Name</th><th>RHO Name</th></tr></thead>
-        <tbody>${bandOutlets.map(([code]) => { const d = meta(code); return `<tr>
-          <td><b>${esc(code)}</b></td><td>${esc(d.name || "—")}</td><td>${esc(d.zonal || "—")}</td><td>${esc(d.rho || "—")}</td>
-        </tr>`; }).join("")}</tbody>
-      </table></div>
-    </section>` : ""}
-
-    ${state.site && availFor(state.site) ? `
+    ${availabilityView ? `
     <section class="panel">
       <div class="panel-head"><h2>Availability Status</h2>
-        <p class="panel-caption">Counts stock that meets the minimum Qty · ${esc(state.site.toUpperCase())}${state.availFile ? ` · ${esc(state.availFile)}` : ""}${state.stockFile ? ` + ${esc(state.stockFile)}` : ""}</p></div>
+        <p class="panel-caption">${availabilityCaption}${state.availFile ? ` · ${esc(state.availFile)}` : ""}${state.stockFile ? ` + ${esc(state.stockFile)}` : ""}</p></div>
       <div class="table-wrap"><table>
         <thead><tr><th>Availability Status</th><th class="num">Avail</th><th class="num">SKUs</th><th class="num">%</th></tr></thead>
         <tbody>${AVAIL_CRITERIA.map(([label]) => {
-          const cell = availFor(state.site)[label];
-          return `<tr><td><b>${esc(label)}</b></td><td class="num">${cell.ok}</td><td class="num">${cell.total}</td>
+          const cell = availabilityView[label];
+          return `<tr><td><b>${esc(label)}</b></td><td class="num">${cell.ok.toLocaleString()}</td><td class="num">${cell.total.toLocaleString()}</td>
             <td class="num">${scoreCell(cell.pct)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>
@@ -1383,25 +1434,20 @@ function render() {
   }));
   document.querySelectorAll(".band-link").forEach(btn => btn.addEventListener("click", () => {
     const threshold = Number(btn.dataset.band);
-    const opening = state.scoreBand !== threshold;
-    state.scoreBand = opening ? threshold : null;
+    state.rank = String(threshold);
+    state.site = "";
+    $("f-rank").value = state.rank;
+    $("f-site").value = "";
     render();
-    if (opening) requestAnimationFrame(() => $("band-outlet-list")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }));
-  $("clear-band")?.addEventListener("click", () => { state.scoreBand = null; render(); });
   document.querySelectorAll("tr.click-row").forEach(el => el.addEventListener("click", () => {
-    state.scoreBand = null;
     state.site = state.site === el.dataset.code ? "" : el.dataset.code;
+    state.rank = "all";
     $("f-site").value = state.site;
+    $("f-rank").value = "all";
     render();
   }));
   $("clear-drill")?.addEventListener("click", () => { state.site = ""; $("f-site").value = ""; render(); });
-
-  const sel = $("f-cat"), keep = sel.value;
-  sel.innerHTML = `<option value="">All categories</option>` +
-    [...new Set(state.rows.map(r => r["Question Category"]).filter(Boolean))].sort()
-      .map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
-  sel.value = keep;
 }
 
 /* ── exports: whatever is on screen right now ────────────────────────── */
@@ -1409,6 +1455,7 @@ function scopeLabel() {
   const bits = [];
   if (state.site) bits.push(`Outlet ${state.site}`);
   if (state.cat) bits.push(state.cat);
+  if (state.rank !== "all") bits.push(`Below ${state.rank}%`);
   return bits.length ? bits.join(" · ") : "All outlets and categories";
 }
 
@@ -1423,13 +1470,25 @@ function exportCsv() {
   const v = state.view; if (!v) return;
   const q = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
   const lines = [];
+  if (Number.isFinite(v.scoreThreshold)) {
+    lines.push(["Audit Quality Dashboard"], [scopeLabel()], [`Source file`, state.file],
+               [`Outlets below ${v.scoreThreshold}%`, v.outlets.length], []);
+    lines.push(["Outlet Code", "Outlet Name", "Zonal Name", "RHO Name", "Score %"]);
+    v.outlets.forEach(([code, [got, max]]) => {
+      const d = meta(code);
+      lines.push([code, d.name, d.zonal, d.rho, pct(got, max).toFixed(1)]);
+    });
+    const csv = lines.map(r => r.map(q).join(",")).join("\r\n");
+    downloadBlob(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }), `audit-outlets-below-${v.scoreThreshold}-${Date.now()}.csv`);
+    return;
+  }
   lines.push(["Audit Quality Dashboard"], [scopeLabel()], [`Source file`, state.file], [`Overall score`, v.overall.toFixed(1) + "%"],
              [`Audits`, v.audits], [`Outlets covered`, v.outletCount], []);
   lines.push(["CATEGORY", "Earned", "Available", "Score %"]);
   v.cats.forEach(([k,[g,m]]) => lines.push([k, g, m, pct(g,m).toFixed(1)]));
   lines.push([], ["QUESTION", "Category", "Earned", "Available", "Score %"]);
   v.questions.forEach(([k,[g,m,c]]) => lines.push([k, c || "", g, m, pct(g,m).toFixed(1)]));
-  const av = state.site ? availFor(state.site) : null;
+  const av = state.site ? availFor(state.site) : allOutletAvailability()?.values;
   if (av) {
     lines.push([], ["AVAILABILITY STATUS", "Avail (Stock meets the minimum Qty)", "SKUs",
                     "% (Stock meets the minimum Qty)"]);
@@ -1528,6 +1587,27 @@ function exportPdf() {
     });
     return y + 14;
   };
+
+  if (Number.isFinite(v.scoreThreshold)) {
+    const headers = ["Outlet Code", "Outlet Name", "Zonal Name", "RHO Name", ">Score %"];
+    const widths = [72, 232, 158, 158, 158];
+    const rows = v.outlets.map(([code, [got, max]]) => {
+      const d = meta(code);
+      return [code, d.name || "—", d.zonal || "—", d.rho || "—", pct(got, max).toFixed(1) + "%"];
+    });
+    const perPage = 44;
+    const pages = Math.max(1, Math.ceil(rows.length / perPage));
+    for (let page = 0; page < pages; page += 1) {
+      if (page) doc.addPage("a4", "landscape");
+      title(`Outlets below ${v.scoreThreshold}%`, `${rows.length.toLocaleString()} outlets · weakest score first · ${state.cat || "All categories"}`);
+      table(M, 66, W - 2 * M, headers, widths, rows.slice(page * perPage, (page + 1) * perPage), "", 10.5);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(120, 132, 145);
+      doc.text(`${state.file || "Drive workbook"} · generated ${new Date().toLocaleString()}`, M, H - 14);
+      doc.text(`Page ${page + 1} of ${pages}`, W - M, H - 14, { align: "right" });
+    }
+    doc.save(`audit-outlets-below-${v.scoreThreshold}-${Date.now()}.pdf`);
+    return;
+  }
 
   const headline = (y, label) => {
     doc.setDrawColor(0); doc.setLineWidth(0.7); doc.rect(M, y, W - 2 * M, 46);
@@ -1682,8 +1762,18 @@ $("drive-clear").addEventListener("click", () => {
   else setState(`<span class="pill idle">Drive setup required</span><br>Shared Drive setup was cleared.`);
 });
 $("f-cat").addEventListener("change", e => { state.cat = e.target.value; render(); });
-$("f-site").addEventListener("input", e => { state.site = e.target.value; state.scoreBand = null; render(); });
-$("f-rank").addEventListener("change", e => { state.rank = e.target.value; render(); });
+$("f-site").addEventListener("input", e => {
+  state.site = e.target.value;
+  state.rank = "all";
+  $("f-rank").value = "all";
+  render();
+});
+$("f-rank").addEventListener("change", e => {
+  state.rank = e.target.value;
+  state.site = "";
+  $("f-site").value = "";
+  render();
+});
 $("dl-csv").addEventListener("click", exportCsv);
 $("dl-pdf").addEventListener("click", exportPdf);
 $("theme-toggle").addEventListener("click", () => {
@@ -1691,8 +1781,8 @@ $("theme-toggle").addEventListener("click", () => {
   try { localStorage.setItem(THEME_KEY, next); } catch {}
   applyTheme(next);
 });
-$("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; state.rank = "worst"; state.scoreBand = null;
-  $("f-cat").value = ""; $("f-site").value = ""; $("f-rank").value = "worst"; render(); });
+$("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; state.rank = "all";
+  $("f-cat").value = ""; $("f-site").value = ""; $("f-rank").value = "all"; render(); });
 
 (async () => {
   render();
