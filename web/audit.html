@@ -284,7 +284,7 @@ function formatSnapshotTime(value) {
   if (!parsed || Number.isNaN(parsed.getTime())) return "Not published yet";
   return parsed.toLocaleString("en-GB", {
     day: "2-digit", month: "short", year: "numeric",
-    hour: "numeric", minute: "2-digit", hour12: true,
+    hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
     timeZone: "Asia/Dhaka",
   });
 }
@@ -879,11 +879,13 @@ async function grantAccess() {
   } catch (e) { setState(`<span class="pill idle">error</span><br>${esc(e.message)}`); }
 }
 
+const DRIVE_WATCH_MS = 1000;
 let watchTimer = null;
+let driveSyncPromise = null;
 function startWatching() {
   if (watchTimer) return;
-  watchTimer = setInterval(() => { if (!document.hidden && Drive.cachedToken()) syncDrive(); }, 30000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && Drive.cachedToken()) syncDrive(); });
+  watchTimer = setInterval(() => { if (Drive.cachedToken()) syncDrive({ silent: true }); }, DRIVE_WATCH_MS);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && Drive.cachedToken()) syncDrive({ silent: true }); });
 }
 
 function driveFileScore(meta) {
@@ -908,7 +910,15 @@ function memoryFolderHandle(files) {
   };
 }
 
-async function syncDrive({ silent = true, interactive = false, pickFolder = false } = {}) {
+async function syncDrive(options = {}) {
+  if (driveSyncPromise) return driveSyncPromise;
+  const run = syncDriveNow(options);
+  driveSyncPromise = run;
+  try { return await run; }
+  finally { if (driveSyncPromise === run) driveSyncPromise = null; }
+}
+
+async function syncDriveNow({ silent = true, interactive = false, pickFolder = false } = {}) {
   try {
     if (interactive) {
       setState(`<span class="pill idle">connecting</span><br>Connecting to Google Drive…`);

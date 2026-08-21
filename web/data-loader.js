@@ -28,6 +28,7 @@ const OFFICER_ALIASES = [
 const PC_DB = "visit-compliance-pc-raw-data";
 const PC_DB_VERSION = 1;
 const PC_READER_VERSION = "pc-response-dashboard-plan-v14-attendance-time-rebuild";
+const DRIVE_WATCH_MS = 1000;
 const LEGACY_SHARED_SNAPSHOT_URL = "./data/shared_snapshot.json";
 const attendanceApi = () => globalThis.ShwapnoAttendance || null;
 
@@ -2010,8 +2011,8 @@ class GoogleDriveRawDataSource {
   startWatching() {
     if (this.watchTimer) return;
     this.watchTimer = window.setInterval(() => {
-      if (!document.hidden && this.drive.cachedToken()) this.refreshDrive({ silent: true });
-    }, 30000);
+      if (this.drive.cachedToken()) this.refreshDrive({ silent: true });
+    }, DRIVE_WATCH_MS);
   }
 }
 

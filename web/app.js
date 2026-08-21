@@ -1,4 +1,4 @@
-import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-google-drive-v18-attendance-time-fix";
+import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-google-drive-v19-one-second-snapshot";
 
 const columns = [
   ["status", "Status"],
