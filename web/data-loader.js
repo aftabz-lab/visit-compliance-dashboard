@@ -47,7 +47,7 @@ function emptyDashboardData() {
   return {
     metadata: {
       title: "Visit Compliance Dashboard",
-      subtitle: "Choose your PC raw-data folder to load the dashboard",
+      subtitle: "No published snapshot is currently available",
       snapshotDate: null,
       reportMonth: "the selected reporting month",
       scheduleFile: "Dashboard visit plan",

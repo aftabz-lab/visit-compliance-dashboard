@@ -1,4 +1,4 @@
-import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-google-drive-v14";
+import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-google-drive-v15-private-source";
 
 const columns = [
   ["status", "Status"],
@@ -124,6 +124,12 @@ function renderDataSource() {
   const responseSheet = m.responseSheet || "Response Summary";
   const acceptedResponses = Number(m.diagnostics?.acceptedResponses);
   const snapshotTakenAt = m.snapshotTakenAt || m.generatedAt || dataLoad.lastFetched;
+  const publicSnapshot = $("public-snapshot-time");
+  if (publicSnapshot) {
+    publicSnapshot.textContent = state.data?.officers?.length
+      ? fmtSnapshotTimestamp(snapshotTakenAt)
+      : "Not published yet";
+  }
 
   $("data-source-badge").textContent = isDrive
     ? "GOOGLE DRIVE — LIVE"
@@ -579,7 +585,12 @@ async function init() {
       },
     });
   } catch(err) {
-    document.querySelector("main").innerHTML=`<div class="error-box"><strong>Dashboard could not load.</strong>\n${esc(err.message)}\n\nUse Drive setup to connect the shared Google Drive folder containing Store_Operations_Compliance_Audit_responses.</div>`;
+    const owner=window.DashboardDriveOwner?.isOwner?.();
+    const detail=owner ? err.message : "The latest published dashboard data could not be loaded.";
+    const guidance=owner
+      ? "Use Drive setup to connect the shared Google Drive folder containing Store_Operations_Compliance_Audit_responses."
+      : "No published snapshot is currently available.";
+    document.querySelector("main").innerHTML=`<div class="error-box"><strong>Dashboard could not load.</strong>\n${esc(detail)}\n\n${esc(guidance)}</div>`;
   }
 }
 init();

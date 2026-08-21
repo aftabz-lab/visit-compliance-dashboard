@@ -9,9 +9,11 @@
 try { document.documentElement.dataset.theme = localStorage.getItem("audit-quality-theme") || "dark"; }
 catch { document.documentElement.dataset.theme = "dark"; }
 </script>
-<style>html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }</style>
+<style>
+html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
+</style>
 <script src="drive-owner-mode.js?v=owner-device-v1"></script>
-<link rel="stylesheet" href="styles.css?v=visit-audit-latest-theme-v13" />
+<link rel="stylesheet" href="styles.css?v=visit-audit-private-source-v14" />
 <style>
   body { background: var(--dark-1); }
   .audit-layout { display: grid; grid-template-columns: 288px minmax(0,1fr); align-items: start; }
@@ -169,11 +171,16 @@ catch { document.documentElement.dataset.theme = "dark"; }
 <div class="audit-layout">
   <aside class="rail">
     <div class="rail-body">
-      <section class="rail-group source-box">
+      <section class="rail-group source-box" data-drive-owner-only>
         <h2 class="rail-heading">Data source</h2>
         <div id="src-state" class="source-state"></div>
         <button id="grant" class="btn primary" type="button" data-drive-owner-only>Reconnect Google Drive</button>
         <button id="drive-setup" class="btn secondary" type="button" data-drive-owner-only>Drive setup / change folder</button>
+      </section>
+
+      <section class="rail-group" aria-live="polite" data-public-snapshot>
+        <h2 class="rail-heading">Last snapshot taken</h2>
+        <div id="public-snapshot-time" class="source-state">Checking…</div>
       </section>
 
       <section class="rail-group">
@@ -255,6 +262,34 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
 const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: "", rank: "all", latestRowsRef: null, latestResponseKeys: null };
 const Drive = window.ShwapnoDrive;
+const isDriveOwner = () => Boolean(window.DashboardDriveOwner?.isOwner?.());
+
+function formatSnapshotTime(value) {
+  const parsed = value ? new Date(value) : null;
+  if (!parsed || Number.isNaN(parsed.getTime())) return "Not published yet";
+  return parsed.toLocaleString("en-GB", {
+    day: "2-digit", month: "short", year: "numeric",
+    hour: "numeric", minute: "2-digit", hour12: true,
+    timeZone: "Asia/Dhaka",
+  });
+}
+
+function updatePublicSnapshotTime() {
+  const node = $("public-snapshot-time");
+  if (node) node.textContent = formatSnapshotTime(state.savedAt);
+}
+
+function exportSourceRow() {
+  return isDriveOwner()
+    ? ["Source file", state.file]
+    : ["Last snapshot taken", formatSnapshotTime(state.savedAt)];
+}
+
+function exportFooterText() {
+  return isDriveOwner()
+    ? `${state.file || "Dashboard workbook"} · generated ${new Date().toLocaleString()}`
+    : `Last snapshot taken: ${formatSnapshotTime(state.savedAt)}`;
+}
 
 // Green through amber to red — the same reading at a glance for any manager.
 function tone(v) {
@@ -578,6 +613,7 @@ function availabilityStatusHtml() {
 }
 
 function showLoaded(note = "") {
+  updatePublicSnapshotTime();
   const source = sourceDisplay();
   const when = !source.live && state.savedAt
     ? `<br><span style="color:#e0a53f">snapshot from ${new Date(state.savedAt).toLocaleString()}</span>` : "";
@@ -1332,10 +1368,12 @@ function refreshCategoryOptions() {
 }
 
 function render() {
+  updatePublicSnapshotTime();
   if (!state.rows.length) {
-    $("body").innerHTML = `<div class="empty-state"><h2>No data loaded yet</h2>
-      Connect the shared Google Drive folder containing the survey export.<br>
-      The newest matching Excel file will be read automatically.</div>`;
+    const message = isDriveOwner()
+      ? "Connect the shared Google Drive folder containing the survey export.<br>The newest matching Excel file will be read automatically."
+      : "No published snapshot is currently available.";
+    $("body").innerHTML = `<div class="empty-state"><h2>No data loaded yet</h2>${message}</div>`;
     return;
   }
   refreshCategoryOptions();
@@ -1434,7 +1472,7 @@ function render() {
     ${availabilityView ? `
     <section class="panel">
       <div class="panel-head"><h2>Availability Status</h2>
-        <p class="panel-caption">${availabilityCaption}${state.availFile ? ` · ${esc(state.availFile)}` : ""}${state.stockFile ? ` + ${esc(state.stockFile)}` : ""}</p></div>
+        <p class="panel-caption">${availabilityCaption}${isDriveOwner() && state.availFile ? ` · ${esc(state.availFile)}` : ""}${isDriveOwner() && state.stockFile ? ` + ${esc(state.stockFile)}` : ""}</p></div>
       <div class="table-wrap"><table>
         <thead><tr><th>Availability Status</th><th class="num">Avail</th><th class="num">SKUs</th><th class="num">%</th></tr></thead>
         <tbody>${AVAIL_CRITERIA.map(([label]) => {
@@ -1551,7 +1589,7 @@ function exportCsv({ share = false } = {}) {
   const q = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
   const lines = [];
   if (Number.isFinite(v.scoreThreshold)) {
-    lines.push(["Audit Quality Dashboard"], [scopeLabel()], [`Source file`, state.file],
+    lines.push(["Audit Quality Dashboard"], [scopeLabel()], exportSourceRow(),
                [`Outlets below ${v.scoreThreshold}%`, v.outlets.length], []);
     lines.push(["Outlet Code", "Outlet Name", "Zonal Name", "RHO Name", "Score %"]);
     v.outlets.forEach(([code, [got, max]]) => {
@@ -1565,7 +1603,7 @@ function exportCsv({ share = false } = {}) {
     else downloadBlob(blob, filename);
     return;
   }
-  lines.push(["Audit Quality Dashboard"], [scopeLabel()], [`Source file`, state.file], [`Overall score`, v.overall.toFixed(1) + "%"],
+  lines.push(["Audit Quality Dashboard"], [scopeLabel()], exportSourceRow(), [`Overall score`, v.overall.toFixed(1) + "%"],
              [`Audits`, v.audits], [`Outlets covered`, v.outletCount], []);
   lines.push(["CATEGORY", "Earned", "Available", "Score %"]);
   v.cats.forEach(([k,[g,m]]) => lines.push([k, g, m, pct(g,m).toFixed(1)]));
@@ -1629,7 +1667,7 @@ function exportPdf({ share = false } = {}) {
   const footer = (n) => {
     doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(120, 132, 145);
     doc.text(`Page ${n} of 2`, W - M, H - 14, { align: "right" });
-    doc.text(`${state.file || "Drive workbook"} · generated ${new Date().toLocaleString()}`, M, H - 14);
+    doc.text(exportFooterText(), M, H - 14);
   };
 
   // compact table; returns the y it finished at
@@ -1702,7 +1740,7 @@ function exportPdf({ share = false } = {}) {
       title(`Outlets below ${v.scoreThreshold}%`, `${rows.length.toLocaleString()} outlets · weakest score first · ${state.cat || "All categories"}`);
       table(M, 66, W - 2 * M, headers, widths, rows.slice(page * perPage, (page + 1) * perPage), "", 10.5);
       doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(120, 132, 145);
-      doc.text(`${state.file || "Drive workbook"} · generated ${new Date().toLocaleString()}`, M, H - 14);
+      doc.text(exportFooterText(), M, H - 14);
       doc.text(`Page ${page + 1} of ${pages}`, W - M, H - 14, { align: "right" });
     }
     finishPdf(doc, `audit-outlets-below-${v.scoreThreshold}-${Date.now()}.pdf`, share);
@@ -1785,7 +1823,7 @@ function exportPdf({ share = false } = {}) {
     }
 
     doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(120, 132, 145);
-    doc.text(`${state.file || "Drive workbook"} · generated ${new Date().toLocaleString()}`, M, H - 14);
+    doc.text(exportFooterText(), M, H - 14);
     doc.text("Page 1 of 1", W - M, H - 14, { align: "right" });
   } else {
     // ── whole network ────────────────────────────────────────────────
