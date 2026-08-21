@@ -1,4 +1,4 @@
-import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-google-drive-v17-attendance-times";
+import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-google-drive-v18-attendance-time-fix";
 
 const columns = [
   ["status", "Status"],
@@ -489,12 +489,22 @@ function renderOutletResults() {
     btn.addEventListener("click", () => selectOutlet(btn.dataset.code)));
 }
 
-function visitCell(label, iso, who, outletTime) {
-  const hasAttendanceField = outletTime !== undefined;
-  const timeText = hasAttendanceField ? ` · ${esc(outletTime || "Missing")}` : "";
+function legacyAttendanceTimes(value) {
+  const match = String(value || "").match(/^\s*(.+?)\s+[-–—]\s+(.+?)\s*$/);
+  return match ? { inTime: match[1].trim(), outTime: match[2].trim() } : { inTime: "", outTime: "" };
+}
+
+function visitCell(label, iso, who, inTime, outTime, legacyTime) {
+  const hasAttendanceField = inTime !== undefined || outTime !== undefined || legacyTime !== undefined;
+  const legacy = legacyAttendanceTimes(legacyTime);
+  const resolvedIn = inTime || legacy.inTime || "Missing";
+  const resolvedOut = outTime || legacy.outTime || "Missing";
+  const timeText = hasAttendanceField
+    ? ` · In time: ${esc(resolvedIn)} · Out time: ${esc(resolvedOut)}`
+    : "";
   const value = iso
     ? `${esc(fmtDate(iso))}${timeText}${who ? `<span class="by">by ${esc(who)}</span>` : ""}`
-    : `Not visited yet${hasAttendanceField ? `<span class="by">In/Out: Missing</span>` : ""}`;
+    : `Not visited yet${hasAttendanceField ? `<span class="by">In time: Missing · Out time: Missing</span>` : ""}`;
   return `<div class="outlet-cell"><dt>${esc(label)}</dt><dd class="${iso ? "" : "none"}">${value}</dd></div>`;
 }
 
@@ -516,8 +526,8 @@ function renderOutletCard() {
       <div class="outlet-cell"><dt>Zonal</dt><dd class="${outlet.zonalName ? "" : "none"}">${esc(outlet.zonalName || "Not assigned")}</dd></div>
       <div class="outlet-cell"><dt>Regional (RHO)</dt><dd class="${outlet.rhoName ? "" : "none"}">${esc(outlet.rhoName || "Not assigned")}</dd></div>
       ${visitCell("Last visit", outlet.lastVisit, outlet.lastVisitBy)}
-      ${visitCell("Last visit by Zonal", outlet.lastVisitZonal, outlet.lastVisitZonalBy, outlet.lastVisitZonalTime || "")}
-      ${visitCell("Last visit by Regional (RHO)", outlet.lastVisitRho, outlet.lastVisitRhoBy, outlet.lastVisitRhoTime || "")}
+      ${visitCell("Last visit by Zonal", outlet.lastVisitZonal, outlet.lastVisitZonalBy, outlet.lastVisitZonalInTime, outlet.lastVisitZonalOutTime, outlet.lastVisitZonalTime || "")}
+      ${visitCell("Last visit by Regional (RHO)", outlet.lastVisitRho, outlet.lastVisitRhoBy, outlet.lastVisitRhoInTime, outlet.lastVisitRhoOutTime, outlet.lastVisitRhoTime || "")}
     </dl>`;
   $("outlet-card-close").addEventListener("click", () => {
     state.selectedOutlet = null;

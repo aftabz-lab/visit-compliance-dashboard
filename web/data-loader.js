@@ -27,7 +27,7 @@ const OFFICER_ALIASES = [
 
 const PC_DB = "visit-compliance-pc-raw-data";
 const PC_DB_VERSION = 1;
-const PC_READER_VERSION = "pc-response-dashboard-plan-v13-attendance-times";
+const PC_READER_VERSION = "pc-response-dashboard-plan-v14-attendance-time-rebuild";
 const LEGACY_SHARED_SNAPSHOT_URL = "./data/shared_snapshot.json";
 const attendanceApi = () => globalThis.ShwapnoAttendance || null;
 
@@ -1195,19 +1195,25 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
     outlet.lastVisit = null;
     outlet.lastVisitBy = "";
     outlet.lastVisitTime = "";
+    outlet.lastVisitInTime = "";
+    outlet.lastVisitOutTime = "";
     outlet.lastVisitZonal = null;
     outlet.lastVisitZonalBy = "";
     outlet.lastVisitZonalTime = "";
+    outlet.lastVisitZonalInTime = "";
+    outlet.lastVisitZonalOutTime = "";
     outlet.lastVisitRho = null;
     outlet.lastVisitRhoBy = "";
     outlet.lastVisitRhoTime = "";
+    outlet.lastVisitRhoInTime = "";
+    outlet.lastVisitRhoOutTime = "";
   });
   responses.forEach((response) => {
     const outlet = outlets[response.siteCode] || {
       siteCode: response.siteCode, outletName: "", rhoName: "", zonalName: "", unscheduled: true,
-      lastVisit: null, lastVisitBy: "", lastVisitTime: "",
-      lastVisitZonal: null, lastVisitZonalBy: "", lastVisitZonalTime: "",
-      lastVisitRho: null, lastVisitRhoBy: "", lastVisitRhoTime: "",
+      lastVisit: null, lastVisitBy: "", lastVisitTime: "", lastVisitInTime: "", lastVisitOutTime: "",
+      lastVisitZonal: null, lastVisitZonalBy: "", lastVisitZonalTime: "", lastVisitZonalInTime: "", lastVisitZonalOutTime: "",
+      lastVisitRho: null, lastVisitRhoBy: "", lastVisitRhoTime: "", lastVisitRhoInTime: "", lastVisitRhoOutTime: "",
     };
     const status = resolved.officers.get(response.officerKey)?.status || "";
     if (!outlet.lastVisit || response.responseDate > outlet.lastVisit
@@ -1215,18 +1221,24 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
       outlet.lastVisit = response.responseDate;
       outlet.lastVisitBy = response.officer;
       outlet.lastVisitTime = response.outletTimeRange || "";
+      outlet.lastVisitInTime = response.attendanceInTime || "";
+      outlet.lastVisitOutTime = response.attendanceOutTime || "";
     }
     if (status === "Zonal" && (!outlet.lastVisitZonal || response.responseDate > outlet.lastVisitZonal
       || (response.responseDate === outlet.lastVisitZonal && !outlet.lastVisitZonalTime && response.outletTimeRange))) {
       outlet.lastVisitZonal = response.responseDate;
       outlet.lastVisitZonalBy = response.officer;
       outlet.lastVisitZonalTime = response.outletTimeRange || "";
+      outlet.lastVisitZonalInTime = response.attendanceInTime || "";
+      outlet.lastVisitZonalOutTime = response.attendanceOutTime || "";
     }
     if (status === "RHO" && (!outlet.lastVisitRho || response.responseDate > outlet.lastVisitRho
       || (response.responseDate === outlet.lastVisitRho && !outlet.lastVisitRhoTime && response.outletTimeRange))) {
       outlet.lastVisitRho = response.responseDate;
       outlet.lastVisitRhoBy = response.officer;
       outlet.lastVisitRhoTime = response.outletTimeRange || "";
+      outlet.lastVisitRhoInTime = response.attendanceInTime || "";
+      outlet.lastVisitRhoOutTime = response.attendanceOutTime || "";
     }
     outlets[response.siteCode] = outlet;
   });
@@ -1264,6 +1276,8 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
         resolutionCounts: resolved.resolutionCounts,
         unmappedResponseNames: uniqueUnmapped,
         attendanceSourceRows: Number(attendanceData?.sourceRows || 0),
+        attendanceSourceColumns: Number(attendanceData?.sourceColumns || 0),
+        attendanceRowsWithOutletRanges: Number(attendanceData?.rowsWithOutletRanges || 0),
         attendanceOutletRanges: Number(attendanceData?.entries?.length || 0),
         attendanceMatches: Number(attendanceMatch.matchedCount || 0),
         attendanceMissing: Number(attendanceMatch.missingCount || 0),
@@ -1283,9 +1297,9 @@ function fileSignature(file) {
 }
 
 function folderSignature(files) {
-  return files
+  return [PC_READER_VERSION, ...files
     .map((file) => fileSignature(file))
-    .sort()
+    .sort()]
     .join("||");
 }
 
@@ -1620,7 +1634,7 @@ class PcRawDataSource {
       this.setStatus({ kind: "reading", message: "Response Summary loaded (" + responseSource.parsed.responses.length.toLocaleString() + " responses). Checking for a local Zonal/RHO visit plan…" });
       await browserYield();
       const scheduleSource = await findScheduleFile(files, responseSource.file);
-      const signature = fileSignature(responseSource.file) + "|" + (scheduleSource ? fileSignature(scheduleSource.file) : "retained-plan");
+      const signature = PC_READER_VERSION + "|" + fileSignature(responseSource.file) + "|" + (scheduleSource ? fileSignature(scheduleSource.file) : "retained-plan");
       if (signature === this.currentSignature && this.currentData) {
         this.currentFolderSignature = currentFolderSignature;
         this.setStatus({ kind: "live", message: "Response live from the selected PC raw-data folder. Only Response Summary is read." });
@@ -1931,6 +1945,7 @@ class GoogleDriveRawDataSource {
         .sort((a, b) => scheduleFilePriority(a) - scheduleFilePriority(b) || Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || ""));
       const attendanceMetas = folderMetas.filter(isAttendanceFilename).slice(0, 12);
       const signature = [
+        PC_READER_VERSION,
         this.drive.remoteSignature(responseMeta),
         scheduleMetas.length ? scheduleMetas.map(meta => this.drive.remoteSignature(meta)).sort().join("||") : "dashboard-plan",
         attendanceMetas.length ? attendanceMetas.map(meta => this.drive.remoteSignature(meta)).sort().join("||") : "no-attendance",

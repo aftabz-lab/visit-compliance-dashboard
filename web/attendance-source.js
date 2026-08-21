@@ -75,7 +75,7 @@
 
   function formatClock(value) {
     const parsed = parseClockMinutes(value);
-    if (parsed == null) return cleanText(value);
+    if (parsed == null) return "";
     const totalMinutes = ((Math.round(parsed) % 1440) + 1440) % 1440;
     const hour24 = Math.floor(totalMinutes / 60);
     const minute = totalMinutes % 60;
@@ -123,11 +123,12 @@
     String(value || "").split(";").forEach((rawRange) => {
       const match = rawRange.match(/^\s*([A-Za-z0-9_-]+)\s*\(\s*([^)]+?)\s*\)\s*$/);
       if (!match) return;
-      const times = match[2].match(/^\s*(.+?)\s+[-–—]\s+(.+?)\s*$/);
-      if (!times) return;
-      const inTime = formatClock(times[1]);
-      const outTime = formatClock(times[2]);
-      if (!inTime || !outTime) return;
+      const times = match[2].match(/^\s*(.*?)\s*[-–—]\s*(.*?)\s*$/);
+      const inRaw = times ? times[1] : match[2];
+      const outRaw = times ? times[2] : "";
+      const inTime = formatClock(inRaw);
+      const outTime = formatClock(outRaw);
+      if (!inTime && !outTime) return;
       entries.push({
         date: context.date,
         siteCode: siteKey(match[1]),
@@ -135,8 +136,8 @@
         employeeName: validEmployeeName(context.employeeName),
         inTime,
         outTime,
-        inMinutes: parseClockMinutes(times[1]),
-        outMinutes: parseClockMinutes(times[2]),
+        inMinutes: parseClockMinutes(inRaw),
+        outMinutes: parseClockMinutes(outRaw),
         label: `${inTime} - ${outTime}`,
         sourceFile: context.sourceFile || "",
       });
@@ -154,11 +155,19 @@
     const at = (name) => headers.get(name);
     const entries = [];
     let sourceRows = 0;
+    let datedRows = 0;
+    let rowsWithOutletRanges = 0;
+    let sourceColumns = (grid[headerRow] || []).length;
     for (const row of grid.slice(headerRow + 1)) {
+      if (!(row || []).some((value) => cleanText(value))) continue;
+      sourceRows += 1;
+      sourceColumns = Math.max(sourceColumns, (row || []).length);
       const date = parseDate(row[at("date")]);
       const range = row[at("outlet time range")];
-      if (!date || !cleanText(range)) continue;
-      sourceRows += 1;
+      if (!date) continue;
+      datedRows += 1;
+      if (!cleanText(range)) continue;
+      rowsWithOutletRanges += 1;
       entries.push(...parseOutletRanges(range, {
         date,
         employeeCode: row[at("employee code")],
@@ -166,7 +175,7 @@
         sourceFile,
       }));
     }
-    return { entries, sourceRows };
+    return { entries, sourceRows, sourceColumns, datedRows, rowsWithOutletRanges };
   }
 
   async function readAttendanceFile(file) {
@@ -189,12 +198,15 @@
 
   async function readAttendanceFiles(files) {
     const entries = [], fileNames = [], errors = [];
-    let sourceRows = 0;
+    let sourceRows = 0, sourceColumns = 0, datedRows = 0, rowsWithOutletRanges = 0;
     for (const file of files || []) {
       try {
         const parsed = await readAttendanceFile(file);
         entries.push(...parsed.entries);
         sourceRows += parsed.sourceRows;
+        sourceColumns = Math.max(sourceColumns, Number(parsed.sourceColumns || 0));
+        datedRows += Number(parsed.datedRows || 0);
+        rowsWithOutletRanges += Number(parsed.rowsWithOutletRanges || 0);
         fileNames.push(parsed.fileName);
       } catch (error) {
         errors.push(`${file?.name || "Attendance file"}: ${error?.message || "could not read"}`);
@@ -207,7 +219,10 @@
       const key = [entry.date, entry.siteCode, entry.employeeCode].join("|");
       if (!unique.has(key)) unique.set(key, entry);
     });
-    return { entries: [...unique.values()], fileNames, sourceRows, errors };
+    return {
+      entries: [...unique.values()], fileNames, sourceRows, sourceColumns,
+      datedRows, rowsWithOutletRanges, errors,
+    };
   }
 
   function intervalDistance(time, start, end) {
@@ -299,10 +314,24 @@
       const selected = finalCandidate(response, candidates, officerCodes.get(nameKey(response.officer)) || "");
       if (!selected) {
         if (candidates.length) ambiguousCount += 1;
-        return { ...response, outletTimeRange: "", attendanceEmployeeCode: "" };
+        return {
+          ...response,
+          outletTimeRange: "",
+          attendanceInTime: "",
+          attendanceOutTime: "",
+          attendanceEmployeeCode: "",
+          attendanceSourceFile: "",
+        };
       }
       matchedCount += 1;
-      return { ...response, outletTimeRange: selected.label, attendanceEmployeeCode: selected.employeeCode };
+      return {
+        ...response,
+        outletTimeRange: selected.label,
+        attendanceInTime: selected.inTime || "",
+        attendanceOutTime: selected.outTime || "",
+        attendanceEmployeeCode: selected.employeeCode,
+        attendanceSourceFile: selected.sourceFile || "",
+      };
     });
     return {
       responses: matched,

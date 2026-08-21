@@ -268,7 +268,7 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="attendance-source.js?v=visit-attendance-v1"></script>
+<script src="attendance-source.js?v=visit-attendance-v2-time-fix"></script>
 <script src="google-drive-source.js?v=shared-drive-v1"></script>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -621,20 +621,38 @@ function refreshDirectoryAttendanceTimes() {
   const matched = Attendance.matchResponses(state.responseSummaries, state.attendanceEntries).responses;
   const exact = new Map();
   matched.forEach((row) => {
-    if (!row.outletTimeRange) return;
+    if (!row.outletTimeRange && !row.attendanceInTime && !row.attendanceOutTime) return;
     const key = `${row.responseDate}|${Attendance.siteKey(row.siteCode)}|${Attendance.normalizeName(row.officer)}`;
     if (!exact.has(key)) exact.set(key, []);
     exact.get(key).push(row);
   });
-  const timing = (code, date, who, current) => {
-    if (!date || !who) return current || "";
+  const timing = (code, date, who, currentIn, currentOut, currentRange) => {
+    const legacy = splitAttendanceTime(currentRange);
+    if (!date || !who) return {
+      inTime: currentIn || legacy.inTime || "",
+      outTime: currentOut || legacy.outTime || "",
+      range: currentRange || "",
+    };
     const rows = exact.get(`${date}|${Attendance.siteKey(code)}|${Attendance.normalizeName(who)}`) || [];
     rows.sort((a, b) => Number(b.responseTimeMinutes ?? -1) - Number(a.responseTimeMinutes ?? -1));
-    return rows[0]?.outletTimeRange || current || "";
+    const row = rows[0];
+    return {
+      inTime: row?.attendanceInTime || currentIn || legacy.inTime || "",
+      outTime: row?.attendanceOutTime || currentOut || legacy.outTime || "",
+      range: row?.outletTimeRange || currentRange || "",
+    };
   };
   state.dir.forEach((entry, code) => {
-    entry.lastVisitZonalTime = timing(code, entry.lastVisitZonal, entry.lastVisitZonalBy, entry.lastVisitZonalTime);
-    entry.lastVisitRhoTime = timing(code, entry.lastVisitRho, entry.lastVisitRhoBy, entry.lastVisitRhoTime);
+    const zonal = timing(code, entry.lastVisitZonal, entry.lastVisitZonalBy,
+      entry.lastVisitZonalInTime, entry.lastVisitZonalOutTime, entry.lastVisitZonalTime);
+    entry.lastVisitZonalInTime = zonal.inTime;
+    entry.lastVisitZonalOutTime = zonal.outTime;
+    entry.lastVisitZonalTime = zonal.range;
+    const rho = timing(code, entry.lastVisitRho, entry.lastVisitRhoBy,
+      entry.lastVisitRhoInTime, entry.lastVisitRhoOutTime, entry.lastVisitRhoTime);
+    entry.lastVisitRhoInTime = rho.inTime;
+    entry.lastVisitRhoOutTime = rho.outTime;
+    entry.lastVisitRhoTime = rho.range;
   });
 }
 
@@ -1018,7 +1036,9 @@ async function loadDirectory() {
       name: o.outletName || "", zonal: o.zonalName || "", rho: o.rhoName || "",
       lastVisit: o.lastVisit || null,
       lastVisitZonal: o.lastVisitZonal || null, lastVisitZonalBy: o.lastVisitZonalBy || "", lastVisitZonalTime: o.lastVisitZonalTime || "",
+      lastVisitZonalInTime: o.lastVisitZonalInTime || "", lastVisitZonalOutTime: o.lastVisitZonalOutTime || "",
       lastVisitRho: o.lastVisitRho || null, lastVisitRhoBy: o.lastVisitRhoBy || "", lastVisitRhoTime: o.lastVisitRhoTime || "",
+      lastVisitRhoInTime: o.lastVisitRhoInTime || "", lastVisitRhoOutTime: o.lastVisitRhoOutTime || "",
     }]));
     if (!state.dir.size) state.dir = new Map(state.baseDir);
     else mergeDirectory(new Map(state.dir));
@@ -1026,7 +1046,11 @@ async function loadDirectory() {
     if (state.rows.length) render();
   } catch { /* directory is optional - codes still work on their own */ }
 }
-const EMPTY_META = { name: "", zonal: "", rho: "", lastVisit: null, lastVisitZonal: null, lastVisitRho: null, lastVisitZonalBy: "", lastVisitZonalTime: "", lastVisitRhoBy: "", lastVisitRhoTime: "" };
+const EMPTY_META = {
+  name: "", zonal: "", rho: "", lastVisit: null,
+  lastVisitZonal: null, lastVisitZonalBy: "", lastVisitZonalTime: "", lastVisitZonalInTime: "", lastVisitZonalOutTime: "",
+  lastVisitRho: null, lastVisitRhoBy: "", lastVisitRhoTime: "", lastVisitRhoInTime: "", lastVisitRhoOutTime: "",
+};
 // Codes are typed by hand, so "f245" has to find F245.
 const meta = (code) => {
   const key = String(code ?? "").trim();
@@ -1038,9 +1062,16 @@ const fmtVisit = (iso) => {
   return Number.isNaN(d.getTime()) ? String(iso)
     : d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
 };
-const fmtVisitWithTime = (iso, outletTime) => iso
-  ? `${fmtVisit(iso)} · ${outletTime || "Missing"}`
-  : "Not visited · Missing";
+function splitAttendanceTime(value) {
+  const match = String(value || "").match(/^\s*(.+?)\s+[-–—]\s+(.+?)\s*$/);
+  return match ? { inTime: match[1].trim(), outTime: match[2].trim() } : { inTime: "", outTime: "" };
+}
+const fmtVisitWithTime = (iso, inTime, outTime, legacyTime) => {
+  const legacy = splitAttendanceTime(legacyTime);
+  const shownIn = inTime || legacy.inTime || "Missing";
+  const shownOut = outTime || legacy.outTime || "Missing";
+  return `${iso ? fmtVisit(iso) : "Not visited"} · In time: ${shownIn} · Out time: ${shownOut}`;
+};
 
 // Zonal and Regional (RHO) are taken from the Zone Distribution workbook sitting
 // in the same folder — it is the authority for outlet ownership and is more
@@ -1542,9 +1573,9 @@ function render() {
         <div class="fact"><div class="n">${state.site ? questions.length : a.outlets.size.toLocaleString()}</div><div class="l">${state.site ? "Scored questions" : "Outlets covered"}</div></div>
         <div class="fact"><div class="n" style="color:${tone(overall)}">${(a.total[1] - a.total[0]).toLocaleString()}</div><div class="l">Points lost</div></div>
         ${state.site ? `
-        <div class="fact"><div class="n" style="font-size:13px;line-height:1.35">${esc(fmtVisitWithTime(drillMeta.lastVisitZonal, drillMeta.lastVisitZonalTime))}</div>
+        <div class="fact"><div class="n" style="font-size:13px;line-height:1.35">${esc(fmtVisitWithTime(drillMeta.lastVisitZonal, drillMeta.lastVisitZonalInTime, drillMeta.lastVisitZonalOutTime, drillMeta.lastVisitZonalTime))}</div>
           <div class="l">Last visit · Zonal${drillMeta.lastVisitZonalBy ? ` · ${esc(drillMeta.lastVisitZonalBy)}` : ""}</div></div>
-        <div class="fact"><div class="n" style="font-size:13px;line-height:1.35">${esc(fmtVisitWithTime(drillMeta.lastVisitRho, drillMeta.lastVisitRhoTime))}</div>
+        <div class="fact"><div class="n" style="font-size:13px;line-height:1.35">${esc(fmtVisitWithTime(drillMeta.lastVisitRho, drillMeta.lastVisitRhoInTime, drillMeta.lastVisitRhoOutTime, drillMeta.lastVisitRhoTime))}</div>
           <div class="l">Last visit · RHO${drillMeta.lastVisitRhoBy ? ` · ${esc(drillMeta.lastVisitRhoBy)}` : ""}</div></div>`
         : `
         <div class="fact"><div class="n">${questions.length}</div><div class="l">Scored questions</div></div>
@@ -1864,7 +1895,7 @@ function exportPdf({ share = false } = {}) {
     const code = state.site.toUpperCase();
     title(`Audit Quality — ${code}${d.name ? " · " + d.name : ""}`,
           `Zonal ${d.zonal || "—"}   ·   Regional (RHO) ${d.rho || "—"}   ·   `
-          + `Last visit by Zonal ${fmtVisitWithTime(d.lastVisitZonal, d.lastVisitZonalTime)}   ·   by RHO ${fmtVisitWithTime(d.lastVisitRho, d.lastVisitRhoTime)}   ·   Category A–Z, then lowest score`);
+          + `Last visit by Zonal ${fmtVisitWithTime(d.lastVisitZonal, d.lastVisitZonalInTime, d.lastVisitZonalOutTime, d.lastVisitZonalTime)}   ·   by RHO ${fmtVisitWithTime(d.lastVisitRho, d.lastVisitRhoInTime, d.lastVisitRhoOutTime, d.lastVisitRhoTime)}   ·   Category A–Z, then lowest score`);
 
     // compact headline band
     doc.setDrawColor(0); doc.setLineWidth(0.7); doc.rect(M, 62, W - 2 * M, 42);
@@ -1874,8 +1905,8 @@ function exportPdf({ share = false } = {}) {
     doc.text("OUTLET COMPLIANCE", M + 13, 99);
     [["Audits", v.audits], ["Questions", v.questions.length],
      ["Points lost", (v.total[1] - v.total[0]).toLocaleString()],
-     ["Last visit · Zonal", fmtVisitWithTime(d.lastVisitZonal, d.lastVisitZonalTime)],
-     ["Last visit · RHO", fmtVisitWithTime(d.lastVisitRho, d.lastVisitRhoTime)]].forEach(([l, n], i) => {
+     ["Last visit · Zonal", fmtVisitWithTime(d.lastVisitZonal, d.lastVisitZonalInTime, d.lastVisitZonalOutTime, d.lastVisitZonalTime)],
+     ["Last visit · RHO", fmtVisitWithTime(d.lastVisitRho, d.lastVisitRhoInTime, d.lastVisitRhoOutTime, d.lastVisitRhoTime)]].forEach(([l, n], i) => {
       const x = M + 128 + i * ((W - 2 * M - 138) / 5);
       doc.setFont("helvetica", "bold"); doc.setFontSize(String(n).length > 24 ? 6.4 : String(n).length > 8 ? 8.5 : 12);
       doc.setTextColor(20, 20, 20); doc.text(String(n), x, 86);
