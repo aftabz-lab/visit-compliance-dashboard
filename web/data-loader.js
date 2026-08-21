@@ -27,8 +27,9 @@ const OFFICER_ALIASES = [
 
 const PC_DB = "visit-compliance-pc-raw-data";
 const PC_DB_VERSION = 1;
-const PC_READER_VERSION = "pc-response-dashboard-plan-v12-supabase-auto-share";
+const PC_READER_VERSION = "pc-response-dashboard-plan-v13-attendance-times";
 const LEGACY_SHARED_SNAPSHOT_URL = "./data/shared_snapshot.json";
+const attendanceApi = () => globalThis.ShwapnoAttendance || null;
 
 const DEFAULT_DEFINITIONS = Object.freeze({
   fullMonth: "Total Planned Visits (Full Month) counts every scheduled assignment in the current visit plan (local Zonal/RHO workbook when present, otherwise the dashboard visit plan).",
@@ -277,6 +278,8 @@ async function readResponseWorkbookWithSheetJs(file) {
     const get = (header) => row[map.get(header)];
     const responseId = cleanText(get("Response ID"));
     const responseDate = parseDateOnly(get("Date"));
+    const responseTimeRaw = get("Time");
+    const responseTime = cleanText(responseTimeRaw);
     const siteCode = siteKey(get("Site Code"));
     const officer = cleanText(get("Created By User ID"));
     if (!responseId && !responseDate && !siteCode && !officer) continue;
@@ -292,6 +295,8 @@ async function readResponseWorkbookWithSheetJs(file) {
     accepted.push({
       responseId,
       responseDate,
+      responseTime,
+      responseTimeMinutes: attendanceApi()?.parseClockMinutes(responseTimeRaw) ?? null,
       siteCode,
       officer,
       officerNameKey: nameKey(officer),
@@ -684,6 +689,7 @@ async function parseFastResponseSummary(zip, sheetXml) {
   const wantedColumns = new Set([
     headerMap.get("Response ID"),
     headerMap.get("Date"),
+    headerMap.get("Time"),
     headerMap.get("Site Code"),
     headerMap.get("Created By User ID"),
   ]);
@@ -711,6 +717,8 @@ async function parseFastResponseSummary(zip, sheetXml) {
     const get = (header) => resolveToken(row.get(headerMap.get(header)), shared);
     const responseId = cleanText(get("Response ID"));
     const responseDate = parseDateOnly(get("Date"));
+    const responseTimeRaw = get("Time");
+    const responseTime = cleanText(responseTimeRaw);
     const siteCode = siteKey(get("Site Code"));
     const officer = cleanText(get("Created By User ID"));
     if (!responseId && !responseDate && !siteCode && !officer) continue;
@@ -726,6 +734,8 @@ async function parseFastResponseSummary(zip, sheetXml) {
     accepted.push({
       responseId,
       responseDate,
+      responseTime,
+      responseTimeMinutes: attendanceApi()?.parseClockMinutes(responseTimeRaw) ?? null,
       siteCode,
       officer,
       officerNameKey: nameKey(officer),
@@ -1072,10 +1082,17 @@ function dateLabel(iso) {
   return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" }).format(date);
 }
 
-function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFile, sourceMode) {
+function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFile, sourceMode, attendanceData = null) {
   const snapshotDate = parsedResponse.responses.reduce((latest, response) => response.responseDate > latest ? response.responseDate : latest, "0000-00-00");
   const resolved = resolveResponses(parsedResponse.responses, schedule.assignments);
-  const responses = resolved.responses.filter((response) => response.responseDate <= snapshotDate);
+  const attendanceMatch = attendanceApi()?.matchResponses(resolved.responses, attendanceData?.entries || []) || {
+    responses: resolved.responses,
+    matchedCount: 0,
+    missingCount: resolved.responses.length,
+    ambiguousCount: 0,
+    inferredOfficerCodes: 0,
+  };
+  const responses = attendanceMatch.responses.filter((response) => response.responseDate <= snapshotDate);
   const planKey = (assignment) => assignment.officerKey + "|" + assignment.siteCode + "|" + assignment.plannedDate;
   const responsePlanKey = (response) => response.officerKey + "|" + response.siteCode + "|" + response.responseDate;
   const fullPlanKeys = new Set(schedule.assignments.map(planKey));
@@ -1177,28 +1194,39 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
   Object.values(outlets).forEach((outlet) => {
     outlet.lastVisit = null;
     outlet.lastVisitBy = "";
+    outlet.lastVisitTime = "";
     outlet.lastVisitZonal = null;
     outlet.lastVisitZonalBy = "";
+    outlet.lastVisitZonalTime = "";
     outlet.lastVisitRho = null;
     outlet.lastVisitRhoBy = "";
+    outlet.lastVisitRhoTime = "";
   });
   responses.forEach((response) => {
     const outlet = outlets[response.siteCode] || {
       siteCode: response.siteCode, outletName: "", rhoName: "", zonalName: "", unscheduled: true,
-      lastVisit: null, lastVisitBy: "", lastVisitZonal: null, lastVisitZonalBy: "", lastVisitRho: null, lastVisitRhoBy: "",
+      lastVisit: null, lastVisitBy: "", lastVisitTime: "",
+      lastVisitZonal: null, lastVisitZonalBy: "", lastVisitZonalTime: "",
+      lastVisitRho: null, lastVisitRhoBy: "", lastVisitRhoTime: "",
     };
     const status = resolved.officers.get(response.officerKey)?.status || "";
-    if (!outlet.lastVisit || response.responseDate > outlet.lastVisit) {
+    if (!outlet.lastVisit || response.responseDate > outlet.lastVisit
+      || (response.responseDate === outlet.lastVisit && !outlet.lastVisitTime && response.outletTimeRange)) {
       outlet.lastVisit = response.responseDate;
       outlet.lastVisitBy = response.officer;
+      outlet.lastVisitTime = response.outletTimeRange || "";
     }
-    if (status === "Zonal" && (!outlet.lastVisitZonal || response.responseDate > outlet.lastVisitZonal)) {
+    if (status === "Zonal" && (!outlet.lastVisitZonal || response.responseDate > outlet.lastVisitZonal
+      || (response.responseDate === outlet.lastVisitZonal && !outlet.lastVisitZonalTime && response.outletTimeRange))) {
       outlet.lastVisitZonal = response.responseDate;
       outlet.lastVisitZonalBy = response.officer;
+      outlet.lastVisitZonalTime = response.outletTimeRange || "";
     }
-    if (status === "RHO" && (!outlet.lastVisitRho || response.responseDate > outlet.lastVisitRho)) {
+    if (status === "RHO" && (!outlet.lastVisitRho || response.responseDate > outlet.lastVisitRho
+      || (response.responseDate === outlet.lastVisitRho && !outlet.lastVisitRhoTime && response.outletTimeRange))) {
       outlet.lastVisitRho = response.responseDate;
       outlet.lastVisitRhoBy = response.officer;
+      outlet.lastVisitRhoTime = response.outletTimeRange || "";
     }
     outlets[response.siteCode] = outlet;
   });
@@ -1220,6 +1248,7 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
       scheduleSource: schedule.isRaw ? "selected PC raw-data folder" : "dashboard visit-plan snapshot",
       responseFile: responseFile.name,
       responseSheet: RESPONSE_SHEET,
+      attendanceFiles: attendanceData?.fileNames || [],
       supersededFiles: [],
       generatedAt: now,
       snapshotTakenAt: now,
@@ -1234,6 +1263,12 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
         rejectedResponseRows: parsedResponse.diagnostics.rejectedResponseRows,
         resolutionCounts: resolved.resolutionCounts,
         unmappedResponseNames: uniqueUnmapped,
+        attendanceSourceRows: Number(attendanceData?.sourceRows || 0),
+        attendanceOutletRanges: Number(attendanceData?.entries?.length || 0),
+        attendanceMatches: Number(attendanceMatch.matchedCount || 0),
+        attendanceMissing: Number(attendanceMatch.missingCount || 0),
+        attendanceAmbiguous: Number(attendanceMatch.ambiguousCount || 0),
+        attendanceOfficerCodesInferred: Number(attendanceMatch.inferredOfficerCodes || 0),
       },
     },
     officers,
@@ -1282,6 +1317,11 @@ function scheduleFilePriority(file) {
   if (/master.*compiled.*visit|compiled.*visit|visit.*schedule/.test(name)) return 0;
   if (/\bschedule\b|\bvisit\s*plan\b|\bplan\b/.test(name)) return 1;
   return 99;
+}
+
+function isAttendanceFilename(file) {
+  const name = String(file?.name || "");
+  return /attend(?:ance)?/i.test(name) && /\.(csv|xlsx|xlsm|xls)$/i.test(name) && !name.startsWith("~$");
 }
 
 function orderFilesByPriority(files, priority) {
@@ -1880,23 +1920,38 @@ class GoogleDriveRawDataSource {
     }
     try {
       if (!silent || !this.currentData) this.setStatus({ kind: "reading", message: `Checking Google Drive folder “${folder.name}”…` });
-      const metas = (await this.drive.listFolderFiles(folder.id))
-        .filter(meta => /\.(xlsx|xlsm|xls)$/i.test(meta.name || "") && !String(meta.name || "").startsWith("~$") && meta.capabilities?.canDownload !== false)
+      const folderMetas = (await this.drive.listFolderFiles(folder.id))
+        .filter(meta => /\.(csv|xlsx|xlsm|xls)$/i.test(meta.name || "") && !String(meta.name || "").startsWith("~$") && meta.capabilities?.canDownload !== false)
         .sort((a, b) => Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || "") || String(a.name).localeCompare(String(b.name)));
+      const metas = folderMetas.filter(meta => /\.(xlsx|xlsm|xls)$/i.test(meta.name || ""));
       const responseMeta = metas.filter(isTargetResponseFilename)[0];
       if (!responseMeta) throw new Error('No workbook named like “Store_Operations_Compliance_Audit_responses…xlsx” was found in the shared Drive folder.');
       const scheduleMetas = metas
         .filter(meta => meta !== responseMeta && scheduleFilePriority(meta) < 99)
         .sort((a, b) => scheduleFilePriority(a) - scheduleFilePriority(b) || Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || ""));
-      const signature = this.drive.remoteSignature(responseMeta) + "|" + (scheduleMetas.length ? scheduleMetas.map(meta => this.drive.remoteSignature(meta)).sort().join("||") : "dashboard-plan");
+      const attendanceMetas = folderMetas.filter(isAttendanceFilename).slice(0, 12);
+      const signature = [
+        this.drive.remoteSignature(responseMeta),
+        scheduleMetas.length ? scheduleMetas.map(meta => this.drive.remoteSignature(meta)).sort().join("||") : "dashboard-plan",
+        attendanceMetas.length ? attendanceMetas.map(meta => this.drive.remoteSignature(meta)).sort().join("||") : "no-attendance",
+      ].join("|");
       if (this.currentData && signature === this.currentSignature) {
-        if (!silent) this.setStatus({ kind: "live", message: `Live from Google Drive folder “${folder.name}”. Only Response Summary is read.` });
+        if (!silent) this.setStatus({ kind: "live", message: `Live from Google Drive folder “${folder.name}”. Response Summary and attendance Outlet Time Range are matched.` });
         this.startWatching();
         return;
       }
       this.setStatus({ kind: "reading", message: `Downloading ${responseMeta.name} from Google Drive…` });
       const responseFile = await this.drive.downloadFile(responseMeta);
       const parsedResponse = await readResponseWorkbook(responseFile);
+      let parsedAttendance = { entries: [], fileNames: [], sourceRows: 0, errors: [] };
+      if (attendanceMetas.length && attendanceApi()) {
+        const attendanceFiles = [];
+        for (const meta of attendanceMetas) {
+          this.setStatus({ kind: "reading", message: `Reading outlet In/Out times from ${meta.name}…` });
+          attendanceFiles.push(await this.drive.downloadFile(meta));
+        }
+        parsedAttendance = await attendanceApi().readAttendanceFiles(attendanceFiles);
+      }
       let scheduleFile = null;
       let parsedSchedule = null;
       for (const meta of scheduleMetas.slice(0, 4)) {
@@ -1909,7 +1964,7 @@ class GoogleDriveRawDataSource {
           break;
         } catch { /* Try the next clearly named visit-plan workbook. */ }
       }
-      await this.applyResponseFile(responseFile, scheduleFile, signature, parsedResponse, parsedSchedule, folder);
+      await this.applyResponseFile(responseFile, scheduleFile, signature, parsedResponse, parsedSchedule, parsedAttendance, folder);
       this.startWatching();
     } catch (error) {
       const message = error?.message || "Could not read Google Drive.";
@@ -1917,7 +1972,7 @@ class GoogleDriveRawDataSource {
     }
   }
 
-  async applyResponseFile(responseFile, scheduleFile, signature, parsedResponse, parsedSchedule, folder) {
+  async applyResponseFile(responseFile, scheduleFile, signature, parsedResponse, parsedSchedule, parsedAttendance, folder) {
     let schedule;
     if (scheduleFile && parsedSchedule) {
       schedule = parsedSchedule;
@@ -1927,14 +1982,14 @@ class GoogleDriveRawDataSource {
       schedule = retainedSchedule(this.scheduleBaseData || this.baseData);
       schedule.isRaw = false;
     }
-    this.setStatus({ kind: "reading", message: "Calculating Visit Compliance from Drive Response Summary…" });
+    this.setStatus({ kind: "reading", message: "Calculating Visit Compliance and matching outlet In/Out times…" });
     await browserYield();
-    const data = calculateLocalDashboard(this.currentData || this.baseData, schedule, parsedResponse, responseFile, "google-drive");
+    const data = calculateLocalDashboard(this.currentData || this.baseData, schedule, parsedResponse, responseFile, "google-drive", parsedAttendance);
     data.metadata.driveFolderName = folder.name;
     data.metadata.driveFolderId = folder.id;
     data.metadata.scheduleSource = schedule.isRaw ? "selected Google Drive folder" : "dashboard visit-plan snapshot";
     await this.saveLatest(data, signature);
-    this.sendData(data, "google-drive", false, { kind: "live", message: `Live from Google Drive folder “${folder.name}”. Only the Response Summary sheet is read.` });
+    this.sendData(data, "google-drive", false, { kind: "live", message: `Live from Google Drive folder “${folder.name}”. Response Summary and attendance Outlet Time Range are matched.` });
   }
 
   startWatching() {

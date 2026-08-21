@@ -268,13 +268,15 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="attendance-source.js?v=visit-attendance-v1"></script>
 <script src="google-drive-source.js?v=shared-drive-v1"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: "", rank: "all", latestRowsRef: null, latestResponseKeys: null };
+const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", attendanceEntries: [], attendanceSig: "", attendanceFiles: [], responseSummaries: [], avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: "", rank: "all", latestRowsRef: null, latestResponseKeys: null };
 const Drive = window.ShwapnoDrive;
+const Attendance = window.ShwapnoAttendance;
 const isDriveOwner = () => Boolean(window.DashboardDriveOwner?.isOwner?.());
 
 function formatSnapshotTime(value) {
@@ -587,6 +589,55 @@ async function isAuditWorkbook(file) {
 
 const signature = (f) => `${f.name}|${f.lastModified}|${f.size}`;
 
+function responseSummariesFromWorkbook(wb) {
+  const sheetName = wb.SheetNames.find(name => name.trim().toLowerCase() === "response summary");
+  if (!sheetName || !Attendance) return [];
+  const grid = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "", blankrows: false, raw: true });
+  if (!grid.length) return [];
+  const head = grid[0].map(value => String(value ?? "").trim().toLowerCase());
+  const at = {
+    id: head.indexOf("response id"), date: head.indexOf("date"), time: head.indexOf("time"),
+    site: head.indexOf("site code"), officer: head.indexOf("created by user id"),
+  };
+  if (at.date < 0 || at.time < 0 || at.site < 0 || at.officer < 0) return [];
+  return grid.slice(1).map((row, index) => {
+    const responseDate = Attendance.parseDate(row[at.date]);
+    const siteCode = Attendance.siteKey(row[at.site]);
+    const officer = Attendance.cleanText(row[at.officer]);
+    const responseTimeRaw = row[at.time];
+    const responseTime = Attendance.cleanText(responseTimeRaw);
+    if (!responseDate || !siteCode || !officer) return null;
+    return {
+      responseId: at.id >= 0 ? Attendance.cleanText(row[at.id]) : `audit-${index + 2}`,
+      responseDate, responseTime,
+      responseTimeMinutes: Attendance.parseClockMinutes(responseTimeRaw),
+      siteCode, officer,
+    };
+  }).filter(Boolean);
+}
+
+function refreshDirectoryAttendanceTimes() {
+  if (!Attendance || !state.responseSummaries.length || !state.attendanceEntries.length || !state.dir.size) return;
+  const matched = Attendance.matchResponses(state.responseSummaries, state.attendanceEntries).responses;
+  const exact = new Map();
+  matched.forEach((row) => {
+    if (!row.outletTimeRange) return;
+    const key = `${row.responseDate}|${Attendance.siteKey(row.siteCode)}|${Attendance.normalizeName(row.officer)}`;
+    if (!exact.has(key)) exact.set(key, []);
+    exact.get(key).push(row);
+  });
+  const timing = (code, date, who, current) => {
+    if (!date || !who) return current || "";
+    const rows = exact.get(`${date}|${Attendance.siteKey(code)}|${Attendance.normalizeName(who)}`) || [];
+    rows.sort((a, b) => Number(b.responseTimeMinutes ?? -1) - Number(a.responseTimeMinutes ?? -1));
+    return rows[0]?.outletTimeRange || current || "";
+  };
+  state.dir.forEach((entry, code) => {
+    entry.lastVisitZonalTime = timing(code, entry.lastVisitZonal, entry.lastVisitZonalBy, entry.lastVisitZonalTime);
+    entry.lastVisitRhoTime = timing(code, entry.lastVisitRho, entry.lastVisitRhoBy, entry.lastVisitRhoTime);
+  });
+}
+
 async function readWorkbook(file, { cache = true } = {}) {
   setState(`<span class="pill idle">reading</span><br>Parsing <b>${esc(file.name)}</b> (${(file.size/1048576).toFixed(1)} MB)…`);
   await new Promise(r => setTimeout(r, 30));
@@ -594,6 +645,7 @@ async function readWorkbook(file, { cache = true } = {}) {
   const sheet = wb.SheetNames.find(n => n.trim().toLowerCase() === "answer details") || wb.SheetNames[wb.SheetNames.length - 1];
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { defval: "" });
   if (!rows.length || !("Question Category" in rows[0])) throw new Error(`"${sheet}" is not the Answer Details sheet.`);
+  state.responseSummaries = responseSummariesFromWorkbook(wb);
   state.rows = rows; state.file = file.name; state.sig = signature(file); state.source = state.driveMode ? "gdrive" : "local"; state.stale = false;
   state.savedAt = Date.now();
   const packed = slim(rows);
@@ -601,6 +653,7 @@ async function readWorkbook(file, { cache = true } = {}) {
   // v12: after one source-PC login, every successful fresh Audit snapshot is
   // pushed to Supabase automatically. Local display never waits for the cloud.
   void autoPublishAuditSnapshot(packed, file.name, state.savedAt);
+  refreshDirectoryAttendanceTimes();
   showLoaded();
   render();
 }
@@ -657,6 +710,20 @@ async function syncFolder({ silent = true } = {}) {
     // removing stock_extraction_report*.csv does not blank the availability count.
     // A newer/replaced stock or criteria file automatically refreshes the snapshot.
     const all = await candidateFiles(state.dirHandle);
+    const attendanceFiles = all
+      .filter(file => /attend(?:ance)?/i.test(file.name) && /\.(csv|xlsx|xlsm|xls)$/i.test(file.name))
+      .slice(0, 12);
+    if (attendanceFiles.length && Attendance) {
+      const nextAttendanceSig = attendanceFiles.map(signature).sort().join("||");
+      if (nextAttendanceSig !== state.attendanceSig) {
+        setState(`<span class="pill idle">reading</span><br>Reading outlet In/Out times from ${attendanceFiles.length} attendance file${attendanceFiles.length === 1 ? "" : "s"}…`);
+        const parsedAttendance = await Attendance.readAttendanceFiles(attendanceFiles);
+        state.attendanceEntries = parsedAttendance.entries;
+        state.attendanceFiles = parsedAttendance.fileNames;
+        state.attendanceSig = nextAttendanceSig;
+      }
+      refreshDirectoryAttendanceTimes();
+    }
     const bookFiles = all.filter(file => /\.xlsx$|\.xlsm$/i.test(file.name));
     const criteriaNamed = bookFiles.filter(file => /product.*crit|avaiablity|availability/i.test(file.name));
     let criteriaFile = null;
@@ -755,7 +822,7 @@ async function syncFolder({ silent = true } = {}) {
     }
 
 
-    if (signature(chosen) !== state.sig) await readWorkbook(chosen);
+    if (signature(chosen) !== state.sig || !state.responseSummaries.length) await readWorkbook(chosen);
     else { showLoaded(); render(); }
   } catch (e) {
     if (!silent) setState(`<span class="pill idle">error</span><br>${esc(e.message)}`);
@@ -805,6 +872,7 @@ function driveFileScore(meta) {
   const name = String(meta?.name || "").toLowerCase();
   if (name.startsWith("~$")) return 99;
   if (/\.csv$/i.test(name) && /stock[ _-]*extraction[ _-]*report/.test(name)) return 0;
+  if (/\.(csv|xlsx|xlsm|xls)$/i.test(name) && /attend(?:ance)?/.test(name)) return 3;
   if (!/\.(xlsx|xlsm|xls)$/i.test(name)) return 99;
   if (/audit|response|survey|compliance/.test(name)) return 0;
   if (/zone|distribution/.test(name)) return 1;
@@ -949,15 +1017,16 @@ async function loadDirectory() {
     state.baseDir = new Map(Object.entries(outlets).map(([code, o]) => [code, {
       name: o.outletName || "", zonal: o.zonalName || "", rho: o.rhoName || "",
       lastVisit: o.lastVisit || null,
-      lastVisitZonal: o.lastVisitZonal || null, lastVisitZonalBy: o.lastVisitZonalBy || "",
-      lastVisitRho: o.lastVisitRho || null, lastVisitRhoBy: o.lastVisitRhoBy || "",
+      lastVisitZonal: o.lastVisitZonal || null, lastVisitZonalBy: o.lastVisitZonalBy || "", lastVisitZonalTime: o.lastVisitZonalTime || "",
+      lastVisitRho: o.lastVisitRho || null, lastVisitRhoBy: o.lastVisitRhoBy || "", lastVisitRhoTime: o.lastVisitRhoTime || "",
     }]));
     if (!state.dir.size) state.dir = new Map(state.baseDir);
     else mergeDirectory(new Map(state.dir));
+    refreshDirectoryAttendanceTimes();
     if (state.rows.length) render();
   } catch { /* directory is optional - codes still work on their own */ }
 }
-const EMPTY_META = { name: "", zonal: "", rho: "", lastVisit: null, lastVisitZonal: null, lastVisitRho: null, lastVisitZonalBy: "", lastVisitRhoBy: "" };
+const EMPTY_META = { name: "", zonal: "", rho: "", lastVisit: null, lastVisitZonal: null, lastVisitRho: null, lastVisitZonalBy: "", lastVisitZonalTime: "", lastVisitRhoBy: "", lastVisitRhoTime: "" };
 // Codes are typed by hand, so "f245" has to find F245.
 const meta = (code) => {
   const key = String(code ?? "").trim();
@@ -969,6 +1038,9 @@ const fmtVisit = (iso) => {
   return Number.isNaN(d.getTime()) ? String(iso)
     : d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
 };
+const fmtVisitWithTime = (iso, outletTime) => iso
+  ? `${fmtVisit(iso)} · ${outletTime || "Missing"}`
+  : "Not visited · Missing";
 
 // Zonal and Regional (RHO) are taken from the Zone Distribution workbook sitting
 // in the same folder — it is the authority for outlet ownership and is more
@@ -1029,6 +1101,7 @@ function mergeDirectory(zoneMap) {
     merged.set(code, { ...current, name: v.name || current.name, zonal: v.zonal || current.zonal, rho: v.rho || current.rho });
   });
   state.dir = merged;
+  refreshDirectoryAttendanceTimes();
 }
 
 // ── SKU availability ────────────────────────────────────────────────────
@@ -1469,9 +1542,9 @@ function render() {
         <div class="fact"><div class="n">${state.site ? questions.length : a.outlets.size.toLocaleString()}</div><div class="l">${state.site ? "Scored questions" : "Outlets covered"}</div></div>
         <div class="fact"><div class="n" style="color:${tone(overall)}">${(a.total[1] - a.total[0]).toLocaleString()}</div><div class="l">Points lost</div></div>
         ${state.site ? `
-        <div class="fact"><div class="n" style="font-size:15px">${esc(fmtVisit(drillMeta.lastVisitZonal))}</div>
+        <div class="fact"><div class="n" style="font-size:13px;line-height:1.35">${esc(fmtVisitWithTime(drillMeta.lastVisitZonal, drillMeta.lastVisitZonalTime))}</div>
           <div class="l">Last visit · Zonal${drillMeta.lastVisitZonalBy ? ` · ${esc(drillMeta.lastVisitZonalBy)}` : ""}</div></div>
-        <div class="fact"><div class="n" style="font-size:15px">${esc(fmtVisit(drillMeta.lastVisitRho))}</div>
+        <div class="fact"><div class="n" style="font-size:13px;line-height:1.35">${esc(fmtVisitWithTime(drillMeta.lastVisitRho, drillMeta.lastVisitRhoTime))}</div>
           <div class="l">Last visit · RHO${drillMeta.lastVisitRhoBy ? ` · ${esc(drillMeta.lastVisitRhoBy)}` : ""}</div></div>`
         : `
         <div class="fact"><div class="n">${questions.length}</div><div class="l">Scored questions</div></div>
@@ -1791,7 +1864,7 @@ function exportPdf({ share = false } = {}) {
     const code = state.site.toUpperCase();
     title(`Audit Quality — ${code}${d.name ? " · " + d.name : ""}`,
           `Zonal ${d.zonal || "—"}   ·   Regional (RHO) ${d.rho || "—"}   ·   `
-          + `Last visit by Zonal ${fmtVisit(d.lastVisitZonal)}   ·   by RHO ${fmtVisit(d.lastVisitRho)}   ·   Category A–Z, then lowest score`);
+          + `Last visit by Zonal ${fmtVisitWithTime(d.lastVisitZonal, d.lastVisitZonalTime)}   ·   by RHO ${fmtVisitWithTime(d.lastVisitRho, d.lastVisitRhoTime)}   ·   Category A–Z, then lowest score`);
 
     // compact headline band
     doc.setDrawColor(0); doc.setLineWidth(0.7); doc.rect(M, 62, W - 2 * M, 42);
@@ -1801,10 +1874,10 @@ function exportPdf({ share = false } = {}) {
     doc.text("OUTLET COMPLIANCE", M + 13, 99);
     [["Audits", v.audits], ["Questions", v.questions.length],
      ["Points lost", (v.total[1] - v.total[0]).toLocaleString()],
-     ["Last visit · Zonal", fmtVisit(d.lastVisitZonal)],
-     ["Last visit · RHO", fmtVisit(d.lastVisitRho)]].forEach(([l, n], i) => {
+     ["Last visit · Zonal", fmtVisitWithTime(d.lastVisitZonal, d.lastVisitZonalTime)],
+     ["Last visit · RHO", fmtVisitWithTime(d.lastVisitRho, d.lastVisitRhoTime)]].forEach(([l, n], i) => {
       const x = M + 128 + i * ((W - 2 * M - 138) / 5);
-      doc.setFont("helvetica", "bold"); doc.setFontSize(String(n).length > 8 ? 8.5 : 12);
+      doc.setFont("helvetica", "bold"); doc.setFontSize(String(n).length > 24 ? 6.4 : String(n).length > 8 ? 8.5 : 12);
       doc.setTextColor(20, 20, 20); doc.text(String(n), x, 86);
       doc.setFont("helvetica", "normal"); doc.setFontSize(6); doc.setTextColor(95, 110, 125);
       doc.text(String(l).toUpperCase(), x, 97);

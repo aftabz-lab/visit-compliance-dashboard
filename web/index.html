@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
   <title>Visit Compliance Dashboard</title>
-  <meta name="dashboard-theme-version" content="visit-complete-v15-outlet-theme" />
+  <meta name="dashboard-theme-version" content="visit-complete-v17-attendance-times" />
   <script>
   try { document.documentElement.dataset.theme = localStorage.getItem("visit-compliance-theme") || "dark"; }
   catch { document.documentElement.dataset.theme = "dark"; }
@@ -133,7 +133,8 @@
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="attendance-source.js?v=visit-attendance-v1"></script>
   <script src="google-drive-source.js?v=shared-drive-v1"></script>
-  <script type="module" src="app.js?v=visit-google-drive-v16-private-source"></script>
+  <script type="module" src="app.js?v=visit-google-drive-v17-attendance-times"></script>
 </body>
 </html>

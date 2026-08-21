@@ -1,4 +1,4 @@
-import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-google-drive-v15-private-source";
+import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-google-drive-v17-attendance-times";
 
 const columns = [
   ["status", "Status"],
@@ -142,7 +142,10 @@ function renderDataSource() {
   $("data-source-file").textContent = isWaiting
     ? "Connect the shared Google Drive folder"
     : m.responseFile || "Response workbook";
-  $("data-source-sheet").textContent = `Sheet: ${responseSheet} only`;
+  const attendanceFiles = Array.isArray(m.attendanceFiles) ? m.attendanceFiles.length : 0;
+  $("data-source-sheet").textContent = attendanceFiles
+    ? `Sheet: ${responseSheet} + ${attendanceFiles} attendance file${attendanceFiles === 1 ? "" : "s"}`
+    : `Sheet: ${responseSheet}; attendance not found`;
   $("data-source-count").textContent = isWaiting
     ? "Waiting for Google Drive connection"
     : Number.isFinite(acceptedResponses)
@@ -153,7 +156,7 @@ function renderDataSource() {
     : "Snapshot not yet taken";
   $("data-source-note").textContent = isPublishedShared
     ? `${localStatus.message || getDataStatus(dataLoad).text} Connect Drive to check the current workbook named like “Store_Operations_Compliance_Audit_responses…xlsx”.`
-    : `${localStatus.message || getDataStatus(dataLoad).text} Only “${responseSheet}” is read from the matching Drive workbook.`;
+    : `${localStatus.message || getDataStatus(dataLoad).text} “${responseSheet}” is matched with column H (Outlet Time Range) from attendance files in the same Drive folder.`;
   const grantButton = $("grant-folder");
   if (grantButton) grantButton.textContent = localStatus.kind === "reading" ? "Working…" : "Reconnect Google Drive";
 }
@@ -486,10 +489,12 @@ function renderOutletResults() {
     btn.addEventListener("click", () => selectOutlet(btn.dataset.code)));
 }
 
-function visitCell(label, iso, who) {
+function visitCell(label, iso, who, outletTime) {
+  const hasAttendanceField = outletTime !== undefined;
+  const timeText = hasAttendanceField ? ` · ${esc(outletTime || "Missing")}` : "";
   const value = iso
-    ? `${esc(fmtDate(iso))}${who ? `<span class="by">by ${esc(who)}</span>` : ""}`
-    : "Not visited yet";
+    ? `${esc(fmtDate(iso))}${timeText}${who ? `<span class="by">by ${esc(who)}</span>` : ""}`
+    : `Not visited yet${hasAttendanceField ? `<span class="by">In/Out: Missing</span>` : ""}`;
   return `<div class="outlet-cell"><dt>${esc(label)}</dt><dd class="${iso ? "" : "none"}">${value}</dd></div>`;
 }
 
@@ -511,8 +516,8 @@ function renderOutletCard() {
       <div class="outlet-cell"><dt>Zonal</dt><dd class="${outlet.zonalName ? "" : "none"}">${esc(outlet.zonalName || "Not assigned")}</dd></div>
       <div class="outlet-cell"><dt>Regional (RHO)</dt><dd class="${outlet.rhoName ? "" : "none"}">${esc(outlet.rhoName || "Not assigned")}</dd></div>
       ${visitCell("Last visit", outlet.lastVisit, outlet.lastVisitBy)}
-      ${visitCell("Last visit by Zonal", outlet.lastVisitZonal, outlet.lastVisitZonalBy)}
-      ${visitCell("Last visit by Regional (RHO)", outlet.lastVisitRho, outlet.lastVisitRhoBy)}
+      ${visitCell("Last visit by Zonal", outlet.lastVisitZonal, outlet.lastVisitZonalBy, outlet.lastVisitZonalTime || "")}
+      ${visitCell("Last visit by Regional (RHO)", outlet.lastVisitRho, outlet.lastVisitRhoBy, outlet.lastVisitRhoTime || "")}
     </dl>`;
   $("outlet-card-close").addEventListener("click", () => {
     state.selectedOutlet = null;
