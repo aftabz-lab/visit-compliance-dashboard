@@ -401,7 +401,9 @@ function renderDetails(rows) {
   const plannedResponses = d.plannedDateResponseList || [];
   const unplannedResponses = d.otherUnplannedResponseList || [];
 
+  const combined = combinedDetailRows(d);
   const tabs=[
+    ["combined",`Combined list (${combined.length})`],
     ["planned",`Planned outlets (${d.planned.length})`],
     ["remaining",`Remaining visits (${d.remaining.length})`],
     ["never",`Never visited outlets (${d.neverVisited.length})`],
@@ -410,17 +412,151 @@ function renderDetails(rows) {
   ];
 
   const tabMap = {
+    combined,
     planned: d.planned,
     remaining: d.remaining,
     never: d.neverVisited,
     plannedResponses,
     unplannedResponses
   };
-  const tabRows = tabMap[state.activeDetailTab] || d.planned;
+  const active = state.activeDetailTab || "combined";
+  const tabRows = tabMap[active] || d.planned;
 
-  target.innerHTML=`<div class="details-title">Officer outlet details — ${esc(row.status)} · ${esc(row.officer)}</div><div class="tabs">${tabs.map(([k,l])=>`<button class="tab-btn ${state.activeDetailTab===k?"active":""}" data-tab="${k}">${l}</button>`).join("")}</div><div id="detail-content">${detailTable(tabRows,state.activeDetailTab)}</div>`;
+  let content;
+  if (active === "combined") {
+    const shown = sortDetailRows(filteredDetailRows(combined));
+    state.detailExport = { officer: row, rows: shown };
+    content = detailToolbar(combined, shown) + combinedDetailTable(shown);
+  } else {
+    state.detailExport = null;
+    content = detailTable(tabRows, active);
+  }
+
+  target.innerHTML=`<div class="details-title">Officer outlet details — ${esc(row.status)} · ${esc(row.officer)}</div><div class="tabs">${tabs.map(([k,l])=>`<button class="tab-btn ${active===k?"active":""}" data-tab="${k}">${l}</button>`).join("")}</div><div id="detail-content">${content}</div>`;
   target.querySelectorAll(".tab-btn").forEach(b=>b.addEventListener("click",()=>{state.activeDetailTab=b.dataset.tab;renderDetails(rows);}));
+
+  const rerender = () => renderDetails(rows);
+  target.querySelectorAll("th.sortable-detail").forEach(th => th.addEventListener("click", () => {
+    const key = th.dataset.detailKey;
+    if ((state.detailSortKey || "date") === key) state.detailSortDir = (state.detailSortDir || 1) * -1;
+    else { state.detailSortKey = key; state.detailSortDir = 1; }
+    rerender();
+  }));
+  const bind = (id, prop, ev = "input") => {
+    const el = target.querySelector(`#${id}`);
+    if (el) el.addEventListener(ev, e => { state[prop] = e.target.value; rerender(); });
+  };
+  bind("detail-tag", "detailTag", "change");
+  bind("detail-from", "detailFrom", "change");
+  bind("detail-to", "detailTo", "change");
+  bind("detail-search", "detailSearch");
+  target.querySelector("#detail-reset")?.addEventListener("click", () => {
+    state.detailTag = ""; state.detailFrom = ""; state.detailTo = ""; state.detailSearch = "";
+    rerender();
+  });
 }
+
+/* ── Combined officer detail list ──────────────────────────────────────
+   The five drill-down tabs are also merged into one list, one row per
+   date + outlet, with a Remarks column naming every tab that row belongs
+   to. That is the shape operations works with in Excel, and it is what
+   the CSV export writes.                                                */
+const REMARK_ORDER = ["Planned", "Completed", "Remaining", "Never visited",
+                      "Planned-date response", "Unplanned", "Punch missing"];
+
+function combinedDetailRows(d) {
+  const byKey = new Map();
+  const touch = (date, siteCode, outletName, extra, tag) => {
+    const key = `${date || ""}|${String(siteCode || "").trim()}`;
+    const row = byKey.get(key) || {
+      date: date || "", siteCode: siteCode || "", outletName: outletName || "",
+      inTime: "", outTime: "", responseId: "", tags: new Set(),
+    };
+    if (!row.outletName && outletName) row.outletName = outletName;
+    if (extra?.inTime) row.inTime = extra.inTime;
+    if (extra?.outTime) row.outTime = extra.outTime;
+    if (extra?.responseId) row.responseId = extra.responseId;
+    row.tags.add(tag);
+    byKey.set(key, row);
+    return row;
+  };
+
+  (d.planned || []).forEach(r => touch(r.plannedDate, r.siteCode, r.outletName, r, "Planned"));
+  (d.completed || []).forEach(r => touch(r.plannedDate, r.siteCode, r.outletName, r, "Completed"));
+  (d.remaining || []).forEach(r => touch(r.plannedDate, r.siteCode, r.outletName, r, "Remaining"));
+  (d.neverVisited || []).forEach(r => touch("", r.siteCode, r.outletName, r, "Never visited"));
+  (d.plannedDateResponseList || []).forEach(r => touch(r.responseDate, r.siteCode, r.outletName, r, "Planned-date response"));
+  (d.otherUnplannedResponseList || []).forEach(r => touch(r.responseDate, r.siteCode, r.outletName, r, "Unplanned"));
+
+  return [...byKey.values()].map(row => {
+    // A visit with no punch recorded is worth calling out on its own.
+    if (!row.inTime && !row.outTime && row.tags.has("Planned")) row.tags.add("Punch missing");
+    const tags = REMARK_ORDER.filter(t => row.tags.has(t));
+    return { ...row, tags, remarks: tags.join(" · ") };
+  });
+}
+
+function filteredDetailRows(all) {
+  const term = (state.detailSearch || "").trim().toLowerCase();
+  const tag = state.detailTag || "";
+  return all.filter(r => {
+    if (tag && !r.tags.includes(tag)) return false;
+    if (state.detailFrom && r.date && r.date < state.detailFrom) return false;
+    if (state.detailTo && r.date && r.date > state.detailTo) return false;
+    if (!term) return true;
+    return String(r.siteCode).toLowerCase().includes(term)
+        || String(r.outletName).toLowerCase().includes(term)
+        || String(r.responseId).toLowerCase().includes(term);
+  });
+}
+
+const DETAIL_COLUMNS = [
+  ["date", "Date"], ["inTime", "In Time"], ["outTime", "Out Time"],
+  ["responseId", "Survey Response ID"], ["siteCode", "Outlet Code"],
+  ["outletName", "Outlet Name"], ["remarks", "Remarks"],
+];
+
+function sortDetailRows(rows) {
+  const key = state.detailSortKey || "date";
+  const dir = state.detailSortDir || 1;
+  return [...rows].sort((a, b) => {
+    const x = a[key] ?? "", y = b[key] ?? "";
+    if (x === y) return 0;
+    return (x > y ? 1 : -1) * dir;
+  });
+}
+
+function detailToolbar(all, shown) {
+  const tagCounts = new Map();
+  all.forEach(r => r.tags.forEach(t => tagCounts.set(t, (tagCounts.get(t) || 0) + 1)));
+  const options = REMARK_ORDER.filter(t => tagCounts.has(t))
+    .map(t => `<option value="${esc(t)}"${state.detailTag === t ? " selected" : ""}>${esc(t)} (${tagCounts.get(t)})</option>`).join("");
+  return `<div class="detail-toolbar">
+    <label>Remarks<select id="detail-tag"><option value="">All (${all.length})</option>${options}</select></label>
+    <label>From<input id="detail-from" type="date" value="${esc(state.detailFrom || "")}"></label>
+    <label>To<input id="detail-to" type="date" value="${esc(state.detailTo || "")}"></label>
+    <label>Search<input id="detail-search" type="search" placeholder="Outlet code, name or response ID" value="${esc(state.detailSearch || "")}"></label>
+    <span class="detail-count">${shown.length} of ${all.length} rows</span>
+    <button type="button" id="detail-reset" class="btn-ghost-sm">Reset</button>
+  </div>`;
+}
+
+function combinedDetailTable(rows) {
+  if (!rows.length) return `<div class="details-message">No rows match these filters.</div>`;
+  const head = DETAIL_COLUMNS.map(([k, label]) => {
+    const on = (state.detailSortKey || "date") === k;
+    const arrow = on ? ((state.detailSortDir || 1) === 1 ? "▲" : "▼") : "↕";
+    return `<th data-detail-key="${k}" class="sortable-detail">${esc(label)} <span class="sort">${arrow}</span></th>`;
+  }).join("");
+  const body = rows.map(r => `<tr>${DETAIL_COLUMNS.map(([k]) => {
+    if (k === "date") return `<td>${r.date ? fmtDate(r.date) : "—"}</td>`;
+    if (k === "inTime" || k === "outTime") return `<td>${esc(r[k] || "Missing")}</td>`;
+    if (k === "remarks") return `<td class="remarks-cell">${r.tags.map(t => `<span class="remark-tag remark-${t.replace(/[^a-z]/gi,"").toLowerCase()}">${esc(t)}</span>`).join("")}</td>`;
+    return `<td>${esc(r[k] || "")}</td>`;
+  }).join("")}</tr>`).join("");
+  return `<div class="detail-table-wrap"><table class="detail-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
 function renderDefinitions() {
   const d=state.data.definitions;
   $("definitions-text").textContent = `${d.fullMonth} ${d.remaining} ${d.neverVisited} ${d.completion}`;
@@ -443,11 +579,40 @@ function render() {
 }
 function csvEscape(v) { const s=String(v??""); return /[",\n]/.test(s)?`"${s.replaceAll('"','""')}"`:s; }
 function downloadCsv() {
+  // With an officer open on the combined list, the export mirrors what is on
+  // screen: a summary row for the officer, a blank line, then the detail rows.
+  const drill = state.detailExport;
+  if (drill) return downloadOfficerCsv(drill.officer, drill.rows);
+
   const rows=sortedRows(getFiltered());
   const lines=[columns.map(c=>csvEscape(c[1])).join(",")];
   for (const r of rows) lines.push(columns.map(([k])=>csvEscape(k==="completionPct"?pct(r[k]):r[k])).join(","));
+  saveCsv(lines, "visible_visit_compliance.csv");
+}
+
+function downloadOfficerCsv(officer, rows) {
+  const summaryHead = columns.map(c => c[1]);
+  const summaryRow = columns.map(([k]) => k === "completionPct" ? pct(officer[k]) : officer[k]);
+  const lines = [
+    summaryHead.map(csvEscape).join(","),
+    summaryRow.map(csvEscape).join(","),
+    "",
+    DETAIL_COLUMNS.map(c => csvEscape(c[1])).join(","),
+  ];
+  for (const r of rows) {
+    lines.push(DETAIL_COLUMNS.map(([k]) => {
+      if (k === "date") return csvEscape(r.date ? fmtDate(r.date) : "");
+      if (k === "inTime" || k === "outTime") return csvEscape(r[k] || "Missing");
+      return csvEscape(r[k] || "");
+    }).join(","));
+  }
+  const safe = String(officer.officer || "officer").replace(/[^a-z0-9]+/gi, "_");
+  saveCsv(lines, `${safe}_visit_details.csv`);
+}
+
+function saveCsv(lines, filename) {
   const blob=new Blob(["\ufeff"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="visible_visit_compliance.csv"; a.click(); URL.revokeObjectURL(a.href);
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename; a.click(); URL.revokeObjectURL(a.href);
 }
 /* ── Outlet lookup ──────────────────────────────────────────────────────
    Search by outlet name or code, then show one card with the seven fields
