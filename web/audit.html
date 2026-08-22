@@ -1787,6 +1787,18 @@ function finishPdf(doc, filename, share = false) {
 /* No outlet selected → two-page network summary.
    Outlet selected → one-page outlet summary whose questions are grouped by
    Category A–Z and then ordered from lowest to highest score. */
+// The PDF follows the question table exactly as it is on screen: same sort chain
+// and same category filter. state.view.questions is already ordered by render(),
+// so it is used as-is rather than re-sorted here.
+function questionOrderLabel() {
+  // SORT_LABELS is shared with the outlet table, where "name" is the outlet code;
+  // in the question table the same key is the question title.
+  const label = (key) => (key === "name" ? "Question" : SORT_LABELS[key] || key);
+  const chain = (state.qSort || []).map(c => `${label(c.key)} ${c.dir === "asc" ? "ascending" : "descending"}`);
+  const order = chain.length ? chain.join(", then ") : "score ascending";
+  return state.questionCat ? `${state.questionCat} only · ${order}` : order;
+}
+
 function exportPdf({ share = false } = {}) {
   const v = state.view; if (!v) return;
   const { jsPDF } = window.jspdf || {};
@@ -1953,13 +1965,13 @@ function exportPdf({ share = false } = {}) {
     const y0 = 118;
     table(M, y0, 232, catHead, [116, 40, 42, 34], catRowsAz, "Score by category — A to Z", 10.5);
 
-    const qAll = v.questions.slice().sort(categoryThenScore);
+    const qAll = v.questions.slice();   // already in the on-screen order
     const half = Math.ceil(qAll.length / 2);
     const qHead = ["Question", "Category", ">Score"];
     const qW = [116, 96, 38];
     const rowsOf = (list) => list.map(([k, [g, m, c]]) => [k, c || "", pct(g, m).toFixed(1) + "%"]);
     const rowH = Math.max(6.4, Math.min(10.5, (BOTTOM - y0 - 30) / Math.max(half, 1)));
-    table(M + 248, y0, 250, qHead, qW, rowsOf(qAll.slice(0, half)), `All ${qAll.length} · Category A-Z · lowest to highest`, rowH);
+    table(M + 248, y0, 250, qHead, qW, rowsOf(qAll.slice(0, half)), `${state.questionCat ? esc(state.questionCat) : "All"} ${qAll.length} questions · ${questionOrderLabel()}`, rowH);
     table(M + 512, y0, 250, qHead, qW, rowsOf(qAll.slice(half)), " ", rowH);
 
     // Availability Status sits under the category table, same page.
@@ -1979,13 +1991,13 @@ function exportPdf({ share = false } = {}) {
     doc.text("Page 1 of 1", W - M, H - 14, { align: "right" });
   } else {
     // ── whole network ────────────────────────────────────────────────
-    title("Audit Quality — Executive Summary", `${scopeLabel()}   ·   weakest first`);
+    title("Audit Quality — Executive Summary", `${scopeLabel()}   ·   questions: ${questionOrderLabel()}`);
     let y = headline(62, "OVERALL COMPLIANCE");
     table(M, y, 358, catHead, catW, catRowsByScore, "Score by category — lowest to highest");
     const qHead = ["Question", "Category", ">Score"];
     table(M + 420, y, 324, qHead, [150, 130, 44],
-          v.questions.slice().sort(worst).slice(0, 18).map(([k, [g, m, c]]) => [k, c || "", pct(g, m).toFixed(1) + "%"]),
-          "Weakest 18 questions");
+          v.questions.slice(0, 18).map(([k, [g, m, c]]) => [k, c || "", pct(g, m).toFixed(1) + "%"]),
+          `${v.questions.length <= 18 ? `All ${v.questions.length}` : "First 18"} questions · ${questionOrderLabel()}`);
     footer(1);
 
     doc.addPage("a4", "landscape");
