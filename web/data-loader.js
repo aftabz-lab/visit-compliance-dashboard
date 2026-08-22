@@ -2074,24 +2074,64 @@ async function loadPublishedScheduleBaseline() {
   return null;
 }
 
+function parsedSnapshotTime(value) {
+  const time = Date.parse(value || "");
+  return Number.isFinite(time) ? time : 0;
+}
+
+function newestVisitSnapshotTime(data, fallback) {
+  return Math.max(
+    parsedSnapshotTime(data?.metadata?.snapshotTakenAt),
+    parsedSnapshotTime(data?.metadata?.generatedAt),
+    parsedSnapshotTime(fallback),
+  );
+}
+
+// Exported only to keep the freshness rule independently testable. The shared
+// cloud copy wins ties because it is the version available to every device.
+export function shouldUseSharedVisitSnapshot(local, shared) {
+  if (!shared) return false;
+  if (!local) return true;
+  return newestVisitSnapshotTime(shared.data, shared.generatedAt)
+    >= newestVisitSnapshotTime(local.data, local.lastFetched);
+}
+
 export async function loadDashboardData() {
   const localSource = new GoogleDriveRawDataSource();
   // The published visit-plan skeleton is used only as a plan fallback when the
   // shared Drive folder does not contain a Zonal/RHO visit-plan workbook.
   localSource.scheduleBaseData = await loadPublishedScheduleBaseline();
 
-  // A Drive snapshot previously calculated on this browser has first priority.
-  const local = await localSource.initialize();
-  if (local) return local;
+  // Compare the retained browser copy with the shared cloud copy on every
+  // startup. The older implementation returned IndexedDB first and never
+  // checked Supabase, which could leave this browser showing an older response
+  // total and timestamp after the unattended worker had already published a
+  // newer snapshot for everyone else.
+  const [local, shared] = await Promise.all([
+    localSource.initialize(),
+    loadPublishedSharedDashboard(),
+  ]);
 
-  // On a different browser there may be no retained Drive snapshot. In that
-  // case use the deliberately published shared snapshot until Drive connects.
-  const shared = await loadPublishedSharedDashboard();
-  if (shared) {
+  if (shouldUseSharedVisitSnapshot(local, shared)) {
     // Keep the shared copy as the in-memory baseline while Drive reconnects.
     localSource.currentData = shared.data;
     localSource.currentSignature = "published-shared";
     localSource.savedAt = shared.generatedAt || null;
+
+    // Replace an older retained browser copy as well. If the cloud is briefly
+    // unavailable on a later visit, this browser will still retain the newest
+    // successfully published figures rather than reverting to stale data.
+    try {
+      await pcDbPut("snapshots", "google-drive-latest-v1", {
+        data: shared.data,
+        signature: "published-shared",
+        savedAt: shared.generatedAt || shared.data?.metadata?.snapshotTakenAt || null,
+        folder: localSource.drive?.getFolder?.() || null,
+      });
+    } catch {
+      // IndexedDB persistence is optional; the shared snapshot is still usable.
+    }
+
     return {
       data: shared.data,
       source: "published-shared",
@@ -2104,6 +2144,10 @@ export async function loadDashboardData() {
       localSource,
     };
   }
+
+  // Keep a genuinely newer local Drive read while its cloud publication is
+  // still completing. It will be published automatically by the source logic.
+  if (local) return local;
 
   return {
     data: emptyDashboardData(),

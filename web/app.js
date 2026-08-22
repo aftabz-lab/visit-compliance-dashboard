@@ -1,4 +1,4 @@
-import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-google-drive-v19-one-second-snapshot";
+import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-google-drive-v20-newest-cloud-snapshot";
 
 const columns = [
   ["status", "Status"],
@@ -123,7 +123,12 @@ function renderDataSource() {
   const isWaiting = source === "awaiting-drive" || source === "awaiting-local";
   const responseSheet = m.responseSheet || "Response Summary";
   const acceptedResponses = Number(m.diagnostics?.acceptedResponses);
-  const snapshotTakenAt = m.snapshotTakenAt || m.generatedAt || dataLoad.lastFetched;
+  // For a shared snapshot, use the authoritative Supabase publication time so
+  // this page matches the main portal exactly. Local/live reads continue to
+  // show their own calculation time until publication completes.
+  const snapshotTakenAt = isPublishedShared
+    ? dataLoad.lastFetched || m.snapshotTakenAt || m.generatedAt
+    : m.snapshotTakenAt || m.generatedAt || dataLoad.lastFetched;
   const publicSnapshot = $("public-snapshot-time");
   if (publicSnapshot) {
     publicSnapshot.textContent = state.data?.officers?.length
