@@ -1,4 +1,4 @@
-import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-google-drive-v20-newest-cloud-snapshot";
+import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-google-drive-v21-officer-detail-times";
 
 const columns = [
   ["status", "Status"],
@@ -366,15 +366,21 @@ function detailTable(rows, type) {
 
   let cols;
   if (type === "never") {
-    cols = [["siteCode","Outlet Code"],["outletName","Outlet Name"]];
+    cols = [["siteCode","Outlet Code"],["outletName","Outlet Name"],["inTime","In time"],["outTime","Out time"]];
   } else if (type === "plannedResponses" || type === "unplannedResponses") {
-    cols = [["responseDate","Response Date"],["siteCode","Outlet Code"],["outletName","Outlet Name"],["responseId","Response ID"]];
+    cols = [["responseDate","Response Date"],["inTime","In time"],["outTime","Out time"],["siteCode","Outlet Code"],["outletName","Outlet Name"],["responseId","Response ID"]];
   } else {
-    cols = [["plannedDate","Planned Date"],["siteCode","Outlet Code"],["outletName","Outlet Name"]];
+    cols = [["plannedDate","Planned Date"],["inTime","In time"],["outTime","Out time"],["siteCode","Outlet Code"],["outletName","Outlet Name"]];
   }
 
   const dateKeys = new Set(["plannedDate","responseDate"]);
-  return `<div class="detail-table-wrap"><table class="detail-table detail-table-${type}"><thead><tr>${cols.map(c=>`<th>${c[1]}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(([k])=>`<td>${dateKeys.has(k)&&r[k]?fmtDate(r[k]):esc(r[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  const timeKeys = new Set(["inTime","outTime"]);
+  const cellValue = (row, key) => {
+    if (dateKeys.has(key)) return row[key] ? fmtDate(row[key]) : "Missing";
+    if (timeKeys.has(key)) return esc(row[key] || "Missing");
+    return esc(row[key]);
+  };
+  return `<div class="detail-table-wrap"><table class="detail-table detail-table-${type}"><thead><tr>${cols.map(c=>`<th>${c[1]}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(([k])=>`<td>${cellValue(r,k)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 function renderDetails(rows) {
   const target=$("details-section");

@@ -27,7 +27,7 @@ const OFFICER_ALIASES = [
 
 const PC_DB = "visit-compliance-pc-raw-data";
 const PC_DB_VERSION = 1;
-const PC_READER_VERSION = "pc-response-dashboard-plan-v14-attendance-time-rebuild";
+const PC_READER_VERSION = "pc-response-dashboard-plan-v15-officer-detail-times";
 const DRIVE_WATCH_MS = 1000;
 const LEGACY_SHARED_SNAPSHOT_URL = "./data/shared_snapshot.json";
 const attendanceApi = () => globalThis.ShwapnoAttendance || null;
@@ -1165,17 +1165,45 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
     const full = assignmentsByOfficer.get(officerKey) || [];
     const dueOfficer = dueByOfficer.get(officerKey) || [];
     const officerResponses = responsesByOfficer.get(officerKey) || [];
-    const planned = full.map((assignment) => ({ plannedDate: assignment.plannedDate, siteCode: assignment.siteCode, outletName: assignment.outletName }));
-    const remaining = dueOfficer.filter((assignment) => !completedKeys.has(planKey(assignment))).map((assignment) => ({ plannedDate: assignment.plannedDate, siteCode: assignment.siteCode, outletName: assignment.outletName }));
-    const completed = dueOfficer.filter((assignment) => completedKeys.has(planKey(assignment))).map((assignment) => ({ plannedDate: assignment.plannedDate, siteCode: assignment.siteCode, outletName: assignment.outletName }));
+    const responsesByExactPlan = new Map();
+    officerResponses.forEach((response) => pushGrouped(responsesByExactPlan, responsePlanKey(response), response));
+    const attendanceForAssignment = (assignment) => {
+      const candidates = responsesByExactPlan.get(planKey(assignment)) || [];
+      const selected = candidates.find((response) => response.attendanceInTime || response.attendanceOutTime) || candidates[0] || null;
+      return {
+        inTime: selected?.attendanceInTime || "",
+        outTime: selected?.attendanceOutTime || "",
+      };
+    };
+    const planItem = (assignment) => ({
+      plannedDate: assignment.plannedDate,
+      siteCode: assignment.siteCode,
+      outletName: assignment.outletName,
+      ...attendanceForAssignment(assignment),
+    });
+    const planned = full.map(planItem);
+    const remaining = dueOfficer.filter((assignment) => !completedKeys.has(planKey(assignment))).map(planItem);
+    const completed = dueOfficer.filter((assignment) => completedKeys.has(planKey(assignment))).map(planItem);
     const neverMap = new Map();
     dueOfficer.forEach((assignment) => {
-      if (!visitedPairs.has(officerKey + "|" + assignment.siteCode)) neverMap.set(assignment.siteCode, { siteCode: assignment.siteCode, outletName: assignment.outletName });
+      if (!visitedPairs.has(officerKey + "|" + assignment.siteCode)) neverMap.set(assignment.siteCode, {
+        siteCode: assignment.siteCode,
+        outletName: assignment.outletName,
+        inTime: "",
+        outTime: "",
+      });
     });
     const plannedDateResponseList = [];
     const otherUnplannedResponseList = [];
     officerResponses.forEach((response) => {
-      const item = { responseDate: response.responseDate, siteCode: response.siteCode, outletName: outletNameBySite.get(response.siteCode) || "", responseId: response.responseId };
+      const item = {
+        responseDate: response.responseDate,
+        siteCode: response.siteCode,
+        outletName: outletNameBySite.get(response.siteCode) || "",
+        responseId: response.responseId,
+        inTime: response.attendanceInTime || "",
+        outTime: response.attendanceOutTime || "",
+      };
       if (fullPlanKeys.has(responsePlanKey(response))) plannedDateResponseList.push(item);
       else otherUnplannedResponseList.push(item);
     });
@@ -1336,7 +1364,13 @@ function scheduleFilePriority(file) {
 
 function isAttendanceFilename(file) {
   const name = String(file?.name || "");
-  return /attend(?:ance)?/i.test(name) && /\.(csv|xlsx|xlsm|xls)$/i.test(name) && !name.startsWith("~$");
+  if (!/\.(csv|xlsx|xlsm|xls)$/i.test(name) || name.startsWith("~$")) return false;
+  // Attendance CSV names can change with the reporting period. Treat every
+  // non-stock CSV as a candidate and let attendance-source.js validate the
+  // Date / Employee Code / Outlet Time Range headers. Excel candidates use
+  // common attendance/time-log words to avoid downloading unrelated workbooks.
+  if (/\.csv$/i.test(name)) return !/stock.*extraction.*report/i.test(name);
+  return /attend|punch|outlet[\s_-]*time|employee[\s_-]*(?:time|movement)|time[\s_-]*(?:log|range)/i.test(name);
 }
 
 function orderFilesByPriority(files, priority) {
