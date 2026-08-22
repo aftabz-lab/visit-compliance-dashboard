@@ -2001,13 +2001,23 @@ function exportPdf({ share = false } = {}) {
     footer(1);
 
     doc.addPage("a4", "landscape");
-    const flagged = v.outlets.slice().sort(worst).filter(([, [g, m]]) => pct(g, m) < 70);
-    title(`Outlets needing attention — ${flagged.length} below 70%`, "Weakest first");
-    const oHead = ["Outlet", "Outlet name", "Zonal", "RHO", ">Score"];
-    const oW = [40, 118, 92, 92, 40];
+    // Grouped for action: RHO A-Z, then Zonal A-Z, then weakest outlet first
+    // within each Zonal, so each manager's list reads as one block.
+    const byOwner = (a, b) => {
+      const A = meta(a[0]), B = meta(b[0]);
+      const rho = String(A.rho || "~").localeCompare(String(B.rho || "~"));
+      if (rho) return rho;
+      const zonal = String(A.zonal || "~").localeCompare(String(B.zonal || "~"));
+      if (zonal) return zonal;
+      return pct(a[1][0], a[1][1]) - pct(b[1][0], b[1][1]);
+    };
+    const flagged = v.outlets.filter(([, [g, m]]) => pct(g, m) < 70).sort(byOwner);
+    title(`Outlets needing attention — ${flagged.length} below 70%`, "Regional (RHO) A–Z, then Zonal A–Z, weakest outlet first within each Zonal");
+    const oHead = ["RHO", "Zonal", "Outlet", "Outlet name", ">Score"];
+    const oW = [88, 88, 38, 128, 40];
     const rowsOf = (list) => list.map(([code, [g, m]]) => {
       const d = meta(code);
-      return [code, d.name, d.zonal, d.rho, pct(g, m).toFixed(1) + "%"];
+      return [d.rho || "—", d.zonal || "—", code, d.name, pct(g, m).toFixed(1) + "%"];
     });
     // Two columns so the whole list lands on this one page.
     // Two pages is a hard promise, so if the list is longer than a page can hold
