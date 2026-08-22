@@ -69,6 +69,15 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
   .bar-row { display: grid; grid-template-columns: minmax(150px,210px) 1fr 56px; gap: 12px; align-items: center; padding: 9px 0; }
   .bar-row + .bar-row { border-top: 1px solid var(--line); }
   .bar-row .lbl { font-size: 12.5px; color: var(--white-text); font-weight: 600; }
+  .bar-link { background: none; border: 0; padding: 0; font: inherit; color: var(--white-text); cursor: pointer;
+    text-align: left; border-bottom: 1px dashed transparent; }
+  .bar-link:hover { color: var(--blue-2); border-bottom-color: var(--blue-2); }
+  .bar-link.on { color: var(--blue-2); border-bottom-color: var(--blue-2); }
+  .bar-row-on { background: rgba(45,143,194,.10); border-radius: 6px; }
+  .filter-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 10px; border-radius: 999px;
+    background: rgba(45,143,194,.2); border: 1px solid var(--blue); color: var(--white-text); font-weight: 700; }
+  .filter-chip button { background: none; border: 0; color: var(--blue-2); cursor: pointer; font-size: 13px; font-family: inherit; padding: 0 4px; }
+  .filter-chip button:hover { color: #fff; }
   .bar-track { display: block; height: 12px; border-radius: 999px; background: var(--dark-4); overflow: hidden; }
   .bar-fill { display: block; height: 100%; min-width: 2px; border-radius: 999px; }
   .bar-row .val { text-align: right; font-size: 12.5px; font-weight: 800; font-variant-numeric: tabular-nums; }
@@ -274,7 +283,7 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", attendanceEntries: [], attendanceSig: "", attendanceFiles: [], responseSummaries: [], avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: "", rank: "all", latestRowsRef: null, latestResponseKeys: null };
+const state = { rows: [], file: "", sig: "", questionCat: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", attendanceEntries: [], attendanceSig: "", attendanceFiles: [], responseSummaries: [], avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: "", rank: "all", latestRowsRef: null, latestResponseKeys: null };
 const Drive = window.ShwapnoDrive;
 const Attendance = window.ShwapnoAttendance;
 const isDriveOwner = () => Boolean(window.DashboardDriveOwner?.isOwner?.());
@@ -1384,11 +1393,17 @@ function aggregate() {
   return out;
 }
 
-function barRows(entries, limit) {
+function barRows(entries, limit, options = {}) {
   return entries.slice(0, limit).map(([label, [got, max, extra]]) => {
     const v = pct(got, max);
-    return `<div class="bar-row">
-      <span class="lbl">${esc(label)}${extra ? `<br><span style="font-size:10.5px;color:var(--muted-text)">${esc(extra)}</span>` : ""}</span>
+    // Category rows double as a filter for the question list below them.
+    const on = options.activeLabel === label;
+    const lbl = options.clickable
+      ? `<button type="button" class="bar-link ${on ? "on" : ""}" data-cat="${esc(label)}"
+           title="${on ? "Show every question again" : `Show only ${esc(label)} questions`}">${esc(label)}</button>`
+      : `${esc(label)}${extra ? `<br><span style="font-size:10.5px;color:var(--muted-text)">${esc(extra)}</span>` : ""}`;
+    return `<div class="bar-row${on ? " bar-row-on" : ""}">
+      <span class="lbl">${lbl}</span>
       <span class="bar-track"><span class="bar-fill" style="width:${v.toFixed(1)}%;background:${tone(v)}"></span></span>
       <span class="val" style="color:${tone(v)}">${v.toFixed(1)}%</span>
     </div>`;
@@ -1464,6 +1479,11 @@ function useCategoryScoreQuestionSort() {
 }
 
 function wireSortControls() {
+  document.querySelectorAll(".bar-link").forEach(el => el.addEventListener("click", () => {
+    state.questionCat = state.questionCat === el.dataset.cat ? "" : el.dataset.cat;
+    render();
+  }));
+  $("clear-qcat")?.addEventListener("click", () => { state.questionCat = ""; render(); });
   document.querySelectorAll("th.sortable").forEach(el => el.addEventListener("click", (ev) =>
     applySortClick(el.dataset.table, el.dataset.key, ev.shiftKey)));
   document.querySelectorAll(".sort-chips button").forEach(btn => btn.addEventListener("click", () => {
@@ -1507,7 +1527,10 @@ function render() {
   const a = aggregate();
   const overall = pct(a.total[0], a.total[1]);
   const cats = [...a.cats.entries()].sort((x, y) => pct(x[1][0], x[1][1]) - pct(y[1][0], y[1][1]));
-  const questions = sortRows([...a.questions.entries()], state.qSort);
+  const questionPool = state.questionCat
+    ? [...a.questions.entries()].filter(([, [, , cat]]) => cat === state.questionCat)
+    : [...a.questions.entries()];
+  const questions = sortRows(questionPool, state.qSort);
   const outlets = sortRows([...a.sites.entries()], state.oSort);
   const days = [...a.days.entries()].sort((x, y) => new Date(x[0]) - new Date(y[0]));
   const below = { s60: 0, s70: 0, s80: 0 };
@@ -1612,13 +1635,15 @@ function render() {
 
     <section class="panel">
       <div class="panel-head"><h2>Score by category</h2>
-        <p class="panel-caption">${cats.length} categories</p></div>
-      <div style="padding:8px 18px 16px">${barRows(cats, 20)}</div>
+        <p class="panel-caption">${cats.length} categories · click a name to filter the questions below</p></div>
+      <div style="padding:8px 18px 16px">${barRows(cats, 20, { clickable: true, activeLabel: state.questionCat })}</div>
     </section>
 
     <section class="panel">
       <div class="panel-head"><h2>Every scored question</h2>
-        <p class="panel-caption">${questions.length} questions · click a column to sort · shift-click to add a level</p></div>
+        <p class="panel-caption">${state.questionCat
+          ? `<span class="filter-chip">${esc(state.questionCat)}<button type="button" id="clear-qcat" title="Show every category">×</button></span> `
+          : ""}${questions.length} questions · click a column to sort · shift-click to add a level</p></div>
       ${sortChips(state.qSort, "q")}
       <div class="table-wrap"><table>
         <thead><tr>${th("Question","name",state.qSort,"q")}${th("Category","cat",state.qSort,"q")}
@@ -2062,7 +2087,7 @@ function setMobileRail(open) {
   mobileRailToggle.textContent = open ? "Hide filters & export" : "Show filters & export";
 }
 mobileRailToggle.addEventListener("click", () => setMobileRail(!mobileRail.classList.contains("open")));
-$("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; state.rank = "all";
+$("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; state.questionCat = ""; state.rank = "all";
   $("f-cat").value = ""; $("f-site").value = ""; $("f-rank").value = "all"; render(); });
 
 (async () => {
