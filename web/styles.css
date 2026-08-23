@@ -155,6 +155,7 @@ select option { background: var(--surface); color: var(--text); }
 .error-box { white-space: pre-wrap; padding: 18px; background: #fff2f2; color: #7d2525; border: 1px solid #e1a5a5; border-radius: 14px; }
 html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border-color: #6d363e; }
 .drive-modal-backdrop { position: fixed; inset: 0; background: rgba(4,8,12,.62); display: grid; place-items: center; padding: 24px; z-index: 1200; }
+.drive-modal-backdrop[hidden] { display: none !important; }
 .drive-modal { width: min(760px, 100%); background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow); padding: 22px; }
 .drive-modal-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
 .drive-modal-head h2 { margin: 0; font-size: 28px; }
