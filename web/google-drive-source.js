@@ -214,13 +214,7 @@
         view.setIncludeFolders(true);
         view.setSelectFolderEnabled(true);
         view.setMimeTypes("application/vnd.google-apps.folder");
-        let picker = null;
-        const finishPicker = () => {
-          try { picker?.setVisible(false); } catch (e) {}
-          try { picker?.dispose?.(); } catch (e) {}
-          picker = null;
-        };
-        picker = new global.google.picker.PickerBuilder()
+        const picker = new global.google.picker.PickerBuilder()
           .setDeveloperKey(config.apiKey)
           .setAppId(config.appId)
           .setOAuthToken(token)
@@ -232,11 +226,14 @@
               const doc = data[global.google.picker.Response.DOCUMENTS]?.[0];
               const id = doc?.[global.google.picker.Document.ID] || doc?.id;
               const name = doc?.[global.google.picker.Document.NAME] || doc?.name || "Google Drive folder";
-              finishPicker();
-              if (id) resolve(saveFolder({ id, name }));
+              if (id) {
+                resolve(saveFolder({ id, name }));
+                setTimeout(() => {
+                  document.querySelectorAll("#drive-modal").forEach(el => el.hidden = true);
+                }, 0);
+              }
               else reject(new Error("No Google Drive folder was selected."));
             } else if (data.action === global.google.picker.Action.CANCEL) {
-              finishPicker();
               resolve(null);
             }
           })

@@ -1896,6 +1896,8 @@ class GoogleDriveRawDataSource {
           appId: document.getElementById("google-app-id").value,
         });
         this.closeSetup();
+        const modal = document.getElementById("drive-modal");
+        if (modal) modal.hidden = true;
         setTimeout(() => this.connectDrive({ pickFolder: true }), 0);
       } catch (error) { alert(error.message); }
     });
@@ -1934,7 +1936,8 @@ class GoogleDriveRawDataSource {
       this.currentSignature = "";
       await this.refreshDrive({ silent: false });
       this.closeSetup();
-      document.getElementById("drive-modal")?.setAttribute("hidden", "true");
+      const modal = document.getElementById("drive-modal");
+      if (modal) modal.hidden = true;
       this.startWatching();
     } catch (error) {
       if (error?.name === "AbortError") return;
