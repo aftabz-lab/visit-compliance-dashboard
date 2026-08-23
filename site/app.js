@@ -1,57 +1,145 @@
-import { attachPcRawDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=pc-raw-folder-v7";
+import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-top-management-v1";
 
-const columns = [
-  ["status", "Status"],
+const ALL_OFFICERS = "__ALL_OFFICERS__";
+const THEME_KEY = "visit-compliance-theme";
+const TABLE_COLUMNS = [
   ["officer", "Officer"],
-  ["totalPlannedFullMonth", "Total Planned Visits (Full Month)"],
-  ["totalPlannedTillDate", "Total Planned Visits (Till Date)"],
-  ["acceptedResponses", "Accepted Responses"],
-  ["plannedDateResponses", "Planned-Date Responses"],
-  ["otherUnplannedResponses", "Other / Unplanned Responses"],
-  ["distinctPlannedVisitsCompleted", "Distinct Planned Visits Completed"],
-  ["remainingVisits", "Remaining Visits (No Response)"],
-  ["neverVisitedOutlets", "Never Visited Outlets (Till Date)"],
+  ["planned", "Planned (Till)"],
+  ["completed", "Completed"],
+  ["pending", "Pending"],
   ["completionPct", "Completion %"]
 ];
-const ALL_OFFICERS = "__ALL_OFFICERS__";
-const state = { data: null, dataLoad: null, outletSearch: "", selectedOutlet: null, status: "All statuses", officerKey: ALL_OFFICERS, search: "", sortKey: "status", sortDir: 1, activeDetailTab: "planned", activeKpi: null, drillSortKey: null, drillSortDir: 1 };
+const state = {
+  data: null,
+  dataLoad: null,
+  outletSearch: "",
+  selectedOutlet: null,
+  status: "All statuses",
+  officerKey: ALL_OFFICERS,
+  search: "",
+  sortKey: "completionPct",
+  sortDir: -1,
+  activeView: null,
+};
 const $ = id => document.getElementById(id);
 const numberFmt = new Intl.NumberFormat("en-US");
-function fmtDate(iso) { return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day:"2-digit", month:"short", year:"numeric", timeZone:"UTC" }); }
+
+function applyTheme(theme) {
+  const next = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  document.documentElement.style.colorScheme = next;
+  const btn = $("theme-toggle");
+  if (btn) btn.textContent = next === "dark" ? "Light theme" : "Dark theme";
+}
+let savedTheme = "light";
+try { savedTheme = localStorage.getItem(THEME_KEY) || "light"; } catch {}
+applyTheme(savedTheme);
+
+function fmtDate(iso) {
+  if (!iso) return "—";
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit", timeZone: "UTC" });
+}
 function fmtSnapshotTimestamp(value) {
-  const timestamp = value ? new Date(value) : null;
-  if (!timestamp || Number.isNaN(timestamp.getTime())) return "not available";
-  return timestamp.toLocaleString("en-US", {
+  const ts = value ? new Date(value) : null;
+  if (!ts || Number.isNaN(ts.getTime())) return "Not available";
+  return ts.toLocaleString("en-US", {
     day: "numeric", month: "short", year: "numeric",
     hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
-    timeZone: "Asia/Dhaka",
+    timeZone: "Asia/Dhaka"
   });
 }
-function esc(v) { return String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+function esc(v) { return String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function pct(v) { return v == null || Number.isNaN(Number(v)) ? "—" : `${Number(v).toFixed(1)}%`; }
-function getFiltered() {
+function lower(v) { return String(v ?? "").toLowerCase(); }
+
+function getOfficerRowsFiltered() {
   const q = state.search.trim().toLowerCase();
   return state.data.officers.filter(r => {
     if (state.status !== "All statuses" && r.status !== state.status) return false;
     if (state.officerKey !== ALL_OFFICERS && r.officerKey !== state.officerKey) return false;
-    if (q && !r.officer.toLowerCase().includes(q)) return false;
+    if (q && !lower(r.officer).includes(q)) return false;
     return true;
   });
 }
-function sortedRows(rows) {
-  const key = state.sortKey, dir = state.sortDir;
-  return [...rows].sort((a,b) => {
-    const av=a[key], bv=b[key];
-    if (av == null && bv == null) return 0; if (av == null) return 1; if (bv == null) return -1;
-    if (typeof av === "number" || typeof bv === "number") return (Number(av)-Number(bv))*dir;
-    return String(av).localeCompare(String(bv), undefined, { sensitivity:"base" })*dir;
+
+function distinctNeverOutlets(rows) {
+  const set = new Set();
+  rows.forEach(r => (state.data.details[r.officerKey]?.neverVisited || []).forEach(x => set.add(x.siteCode)));
+  return set.size;
+}
+
+function total(rows, key) { return rows.reduce((t, r) => t + (Number(r[key]) || 0), 0); }
+function totalCompleted(rows) { return rows.reduce((t, r) => t + ((Number(r.distinctPlannedVisitsCompleted) || 0) + (Number(r.otherUnplannedResponses) || 0)), 0); }
+
+function rowsWithDerived(rows) {
+  return rows.map(r => ({
+    ...r,
+    planned: Number(r.totalPlannedTillDate) || 0,
+    completed: (Number(r.distinctPlannedVisitsCompleted) || 0) + (Number(r.otherUnplannedResponses) || 0),
+    pending: Number(r.remainingVisits) || 0,
+  }));
+}
+
+function sortedOfficerRows(rows) {
+  const withDerived = rowsWithDerived(rows);
+  const key = state.sortKey;
+  const dir = state.sortDir;
+  return [...withDerived].sort((a, b) => {
+    const av = a[key], bv = b[key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === "number" || typeof bv === "number") return (Number(av) - Number(bv)) * dir;
+    return String(av).localeCompare(String(bv), undefined, { sensitivity: "base" }) * dir;
   });
 }
+
+function renderHeader() {
+  const m = state.data.metadata;
+  document.title = m.title || "Visit Compliance Dashboard";
+  $("page-title").textContent = "Visit Compliance";
+  $("subtitle").textContent = "Management view · plan, execution and exceptions";
+  const snapshot = m.snapshotDate ? fmtDate(m.snapshotDate) : "Not available";
+  $("snapshot-line").textContent = `Latest response snapshot: ${snapshot}`;
+  $("snapshot-note").textContent = "Planned Visits (Till Date) means all scheduled visits due up to the snapshot date. Completion % = (Completed planned visits + extra / unplanned responses) ÷ Planned Visits (Till Date).";
+  renderDataSource();
+
+  const statuses = ["All statuses", ...new Set(state.data.officers.map(r => r.status))];
+  $("status-filter").innerHTML = statuses.map(v => `<option>${esc(v)}</option>`).join("");
+  updateOfficerOptions();
+}
+
+function renderDataSource() {
+  const m = state.data.metadata || {};
+  const dataLoad = state.dataLoad || {};
+  const source = dataLoad.source || "awaiting-drive";
+  const localStatus = dataLoad.localStatus || {};
+  const isDrive = source === "google-drive";
+  const isSaved = source === "local-cache" || source === "published-shared";
+  const sourceBadge = $("data-source-badge");
+  const publicSnapshot = $("public-snapshot-time");
+  const snapshotTakenAt = source === "published-shared"
+    ? (dataLoad.lastFetched || m.snapshotTakenAt || m.generatedAt)
+    : (m.snapshotTakenAt || m.generatedAt || dataLoad.lastFetched);
+  if (publicSnapshot) publicSnapshot.textContent = `Last snapshot: ${state.data?.officers?.length ? fmtSnapshotTimestamp(snapshotTakenAt) : "Not published yet"}`;
+  if (sourceBadge) {
+    sourceBadge.textContent = isDrive ? "Google Drive Live" : isSaved ? "Saved snapshot" : "Google Drive required";
+    sourceBadge.className = `status-pill${isDrive ? " live" : isSaved ? " secondary" : " warning"}`;
+  }
+  $("data-source-file").textContent = m.responseFile || "Response workbook";
+  $("data-source-sheet").textContent = `Sheet: ${m.responseSheet || "Response Summary"}`;
+  $("data-source-count").textContent = Number.isFinite(Number(m.diagnostics?.acceptedResponses)) ? `${numberFmt.format(Number(m.diagnostics.acceptedResponses))} accepted responses` : "Accepted responses unavailable";
+  $("data-source-taken").textContent = fmtSnapshotTimestamp(snapshotTakenAt);
+  $("data-source-note").textContent = `${localStatus.message || getDataStatus(dataLoad).text} Attendance punch data is matched from the attendance workbook when available.`;
+  const grant = $("grant-folder");
+  if (grant) grant.textContent = localStatus.kind === "reading" ? "Working…" : "Reconnect Google Drive";
+}
+
 function updateOfficerOptions() {
   const previous = state.officerKey;
   const source = state.data.officers
     .filter(r => state.status === "All statuses" || r.status === state.status)
-    .sort((a,b) => a.officer.localeCompare(b.officer, undefined, { sensitivity:"base" }) || a.status.localeCompare(b.status));
+    .sort((a, b) => a.officer.localeCompare(b.officer, undefined, { sensitivity: "base" }));
   const nameCounts = new Map();
   source.forEach(r => nameCounts.set(r.officer, (nameCounts.get(r.officer) || 0) + 1));
   const options = [`<option value="${ALL_OFFICERS}">All officers</option>`].concat(source.map(r => {
@@ -66,384 +154,385 @@ function updateOfficerOptions() {
     $("officer-filter").value = ALL_OFFICERS;
   }
 }
-function scrollToDetails() {
-  requestAnimationFrame(() => $("details-section")?.scrollIntoView({ behavior:"smooth", block:"start" }));
-}
-function selectOfficer(officerKey, scroll = true) {
-  state.officerKey = officerKey || ALL_OFFICERS;
-  state.activeDetailTab = "planned";
-  updateOfficerOptions();
-  $("officer-filter").value = state.officerKey;
-  render();
-  if (scroll && state.officerKey !== ALL_OFFICERS) scrollToDetails();
-}
-function renderHeader() {
-  const m = state.data.metadata;
-  document.title = m.title;
-  $("page-title").textContent = m.title;
-  $("subtitle").textContent = m.subtitle;
-  const hasLocalSnapshot = Boolean(m.snapshotDate && state.data.officers.length);
-  $("snapshot-line").textContent = hasLocalSnapshot
-    ? `Response snapshot through ${fmtDate(m.snapshotDate)}`
-    : "PC raw-data folder required";
-  $("snapshot-note").textContent = hasLocalSnapshot
-    ? `Till-date plans are due through this date; full-month plans cover all of ${m.reportMonth}.`
-    : "Choose the PC raw-data folder containing Store_Operations_Compliance_Audit_responses and the Visit Schedule workbook.";
-  renderDataSource();
-  const statuses = ["All statuses", ...new Set(state.data.officers.map(r=>r.status))];
-  $("status-filter").innerHTML = statuses.map(v=>`<option>${esc(v)}</option>`).join("");
-  updateOfficerOptions();
-}
 
-function renderDataSource() {
-  const m = state.data.metadata || {};
-  const dataLoad = state.dataLoad || {};
-  const source = dataLoad.source || "awaiting-local";
-  const localStatus = dataLoad.localStatus || {};
-  const isPcFolder = source === "pc-folder";
-  const isPcFolderSelection = source === "pc-folder-selection";
-  const isPcFile = source === "pc-file";
-  const isSavedCopy = source === "local-cache";
-  const isWaiting = source === "awaiting-local";
-  const responseSheet = m.responseSheet || "Response Summary";
-  const acceptedResponses = Number(m.diagnostics?.acceptedResponses);
-  const snapshotTakenAt = m.snapshotTakenAt || m.generatedAt || dataLoad.lastFetched;
-
-  $("data-source-badge").textContent = isPcFolder
-    ? "PC FOLDER — LIVE"
-    : isPcFolderSelection
-      ? "PC FOLDER — LOADED"
-      : isPcFile
-        ? "PC FILE — LIVE"
-        : isSavedCopy
-          ? "SAVED COPY"
-          : "PC FOLDER REQUIRED";
-  $("data-source-badge").classList.toggle("is-saved-copy", isSavedCopy);
-  $("data-source-file").textContent = isWaiting
-    ? "Choose your PC raw-data folder"
-    : m.responseFile || "Response workbook";
-  $("data-source-sheet").textContent = `Sheet: ${responseSheet} only`;
-  $("data-source-count").textContent = isWaiting
-    ? "Waiting for selected PC raw-data folder"
-    : Number.isFinite(acceptedResponses)
-    ? `${numberFmt.format(acceptedResponses)} accepted responses`
-    : "Accepted response total unavailable";
-  $("data-source-taken").textContent = snapshotTakenAt && !isWaiting
-    ? `Snapshot taken ${fmtSnapshotTimestamp(snapshotTakenAt)}`
-    : "Snapshot not yet taken";
-  $("data-source-note").textContent = `${localStatus.message || getDataStatus(dataLoad).text} The response source must be a local file named like “Store_Operations_Compliance_Audit_responses…xlsx”; only “${responseSheet}” is read.`;
-  const grantButton = $("grant-folder");
-  if (grantButton) grantButton.hidden = localStatus.kind !== "needs-grant";
-  const fallbackButton = $("pick-folder-fallback-btn");
-  if (fallbackButton && localStatus.kind === "needs-folder-fallback") fallbackButton.hidden = false;
-}
-function distinctNeverOutlets(rows) {
-  const set = new Set();
-  rows.forEach(r => (state.data.details[r.officerKey]?.neverVisited || []).forEach(x => set.add(x.siteCode)));
-  return set.size;
-}
 function renderKpis(rows) {
-  const visibleOfficers = rows.filter(r => state.data.metadata.includeUnmappedInVisibleOfficerKpi || r.status !== "Unmapped").length;
-  const total = key => rows.reduce((t,r)=>t+(Number(r[key])||0),0);
-  const till = total("totalPlannedTillDate");
-  const completed = total("distinctPlannedVisitsCompleted");
-  const otherUnplanned = total("otherUnplannedResponses");
-  const remaining = total("remainingVisits");
-  const neverDistinct = distinctNeverOutlets(rows);
-  const remainingPct = till ? (remaining / till * 100) : null;
-  const completionPct = till ? ((completed + otherUnplanned) / till * 100) : null;
+  const planned = total(rows, "totalPlannedTillDate");
+  const completed = totalCompleted(rows);
+  const pending = total(rows, "remainingVisits");
+  const never = distinctNeverOutlets(rows);
+  const completion = planned ? (completed / planned) * 100 : null;
 
   const cards = [
-    ["visibleOfficers", "Visible Officers", visibleOfficers, ""],
-    ["fullMonth", "Total Planned Visits<br>(Full Month)", total("totalPlannedFullMonth"), ""],
-    ["tillDate", "Planned Visits<br>Till Date", till, ""],
-    ["accepted", "Accepted<br>Responses", total("acceptedResponses"), ""],
-    ["completed", "Planned Visits<br>Completed", completed, ""],
-    ["remaining", "Remaining Visits<br>(No Response)", remaining, remainingPct === null ? "" : `${remainingPct.toFixed(1)}%`],
-    ["never", "Never Visited<br>Outlets Till Date", neverDistinct, ""],
-    ["otherUnplanned", "Other / Unplanned<br>Response List (Till Date)", otherUnplanned, ""],
-    ["completion", "Completion<br>%", completionPct === null ? "—" : `${completionPct.toFixed(1)}%`, ""]
+    { id: "completion", tone: "success", label: "Visit Completion %", value: completion == null ? "—" : `${completion.toFixed(1)}%`, meta: "Completed visits ÷ planned visits (till date)" },
+    { id: "pending", tone: "danger", label: "Pending Visits", value: numberFmt.format(pending), meta: "No response yet" },
+    { id: "never", tone: "warning", label: "Never Visited Outlets", value: numberFmt.format(never), meta: "Till date" },
+    { id: "planned", tone: "info", label: "Planned Visits (Till Date)", value: numberFmt.format(planned), meta: "Visits scheduled up to the snapshot date" },
+    { id: "completed", tone: "success", label: "Completed Visits (Till Date)", value: numberFmt.format(completed), meta: "Completed planned visits + extra / unplanned responses" }
   ];
 
-  $("kpis").innerHTML = cards.map(([id,label,value,smallPct]) => {
-    const mainValue = typeof value === "number" ? numberFmt.format(value) : value;
-    const pctHtml = smallPct
-      ? `<span class="kpi-inline-pct" title="Remaining Visits as % of Planned Visits Till Date">(${smallPct})</span>`
-      : "";
-    const active = state.activeKpi === id ? " kpi-link-active" : "";
-    return `<div class="kpi-card"><div class="kpi-label">${label}</div><div class="kpi-value"><button type="button" class="kpi-link${active}" data-kpi="${id}" title="Click to list outlet code, outlet name, RHO name and zonal name">${mainValue}</button>${pctHtml}</div></div>`;
-  }).join("");
-  $("kpis").querySelectorAll(".kpi-link").forEach(btn => btn.addEventListener("click", () => showKpiDrill(btn.dataset.kpi)));
+  $("kpis").innerHTML = cards.map(card => `
+    <div class="kpi-card" data-tone="${card.tone}">
+      <div class="kpi-label">${card.label}</div>
+      <button type="button" class="kpi-action" data-kpi="${card.id}">${card.value}</button>
+      <div class="kpi-meta">${card.meta}</div>
+    </div>`).join("");
+
+  $("kpis").querySelectorAll(".kpi-action").forEach(btn => btn.addEventListener("click", () => showView({ type: "aggregate", metric: btn.dataset.kpi })));
 }
 
-const KPI_TITLES = {
-  visibleOfficers: "Visible Officers",
-  fullMonth: "Total Planned Visits (Full Month)",
-  tillDate: "Planned Visits Till Date",
-  accepted: "Accepted Responses",
-  completed: "Planned Visits Completed",
-  remaining: "Remaining Visits (No Response)",
-  never: "Never Visited Outlets (Till Date)",
-  otherUnplanned: "Other / Unplanned Response List (Till Date)",
-  completion: "Completion basis — Planned Visits Completed + Other / Unplanned Responses"
-};
-const DRILL_COLUMNS = [["siteCode","Outlet Code"],["outletName","Outlet Name"],["rhoName","RHO Name"],["zonalName","Zonal Name"]];
-function outletMeta(siteCode, fallbackName) {
-  const o = (state.data.outlets && state.data.outlets[siteCode]) || {};
-  return {
-    siteCode: siteCode || "",
-    outletName: fallbackName || o.outletName || "",
-    rhoName: o.rhoName || "",
-    zonalName: o.zonalName || ""
-  };
+function scoreClass(v) {
+  const n = Number(v) || 0;
+  if (n >= 80) return "good";
+  if (n >= 50) return "mid";
+  return "bad";
 }
-function kpiOutletRecords(kpiId, rows) {
-  const snapshot = state.data.metadata.snapshotDate;
-  const det = k => state.data.details[k] || {};
-  const keys = rows.map(r => r.officerKey);
-  const collect = picker => keys.flatMap(k => picker(det(k)) || []);
-  const toOutlet = list => list.map(x => outletMeta(x.siteCode, x.outletName));
-  switch (kpiId) {
-    case "fullMonth": return toOutlet(collect(d => d.planned));
-    case "tillDate": return toOutlet(collect(d => (d.planned || []).filter(p => p.plannedDate <= snapshot)));
-    case "completed": return toOutlet(collect(d => d.completed));
-    case "remaining": return toOutlet(collect(d => d.remaining));
-    case "never": {
-      const seen = new Set();
-      const uniq = [];
-      for (const x of collect(d => d.neverVisited)) {
-        if (!seen.has(x.siteCode)) { seen.add(x.siteCode); uniq.push(x); }
-      }
-      return toOutlet(uniq);
-    }
-    case "accepted": return toOutlet(collect(d => [...(d.plannedDateResponseList || []), ...(d.otherUnplannedResponseList || [])]));
-    case "otherUnplanned": return toOutlet(collect(d => d.otherUnplannedResponseList));
-    case "completion": return toOutlet([...collect(d => d.completed), ...collect(d => d.otherUnplannedResponseList)]);
-    default: return [];
-  }
-}
-function showKpiDrill(kpiId) {
-  state.activeKpi = kpiId;
-  state.drillSortKey = null;
-  state.drillSortDir = 1;
-  render();
-  requestAnimationFrame(() => $("kpi-drill-section")?.scrollIntoView({ behavior:"smooth", block:"start" }));
-}
-function drillDataset(kpiId, rows) {
-  if (kpiId === "visibleOfficers") {
-    const inc = state.data.metadata.includeUnmappedInVisibleOfficerKpi;
-    return {
-      cols: [["status","Status"],["officer","Officer"],["totalPlannedTillDate","Planned Visits Till Date","num"],["completionPct","Completion %","pct"]],
-      records: rows.filter(r => inc || r.status !== "Unmapped"),
-      extraClass: "kpi-drill-officers"
-    };
-  }
-  return { cols: DRILL_COLUMNS, records: kpiOutletRecords(kpiId, rows), extraClass: "" };
-}
-function sortDrillRows(records, cols) {
-  const key = state.drillSortKey;
-  if (!key) return records;
-  const col = cols.find(c => c[0] === key);
-  const numeric = !!(col && col[2] === "num");
-  const dir = state.drillSortDir;
-  return [...records].sort((a,b) => {
-    let av = a[key], bv = b[key];
-    if (numeric || (col && col[2] === "pct")) {
-      av = (av == null || av === "") ? null : Number(av);
-      bv = (bv == null || bv === "") ? null : Number(bv);
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      return (av - bv) * dir;
-    }
-    return String(av ?? "").localeCompare(String(bv ?? ""), undefined, { numeric:true, sensitivity:"base" }) * dir;
-  });
-}
-function drillTableHtml(cols, records, extraClass) {
-  const sorted = sortDrillRows(records, cols);
-  const headRow = cols.map(([k,label]) => {
-    const ind = state.drillSortKey === k ? (state.drillSortDir === 1 ? "▲" : "▼") : "↕";
-    return `<th data-sort-key="${esc(k)}" title="Sort by ${esc(label)}">${esc(label)} <span class="sort">${ind}</span></th>`;
-  }).join("");
-  const bodyRows = sorted.map(r => `<tr>${cols.map(([k,,type]) => {
-    let cell;
-    if (type === "pct") cell = pct(r[k]);
-    else if (type === "num") cell = numberFmt.format(Number(r[k]) || 0);
-    else cell = esc(r[k]);
-    return `<td>${cell}</td>`;
-  }).join("")}</tr>`).join("");
-  return `<div class="detail-table-wrap"><table class="detail-table kpi-drill-table ${extraClass}"><thead><tr>${headRow}</tr></thead><tbody>${bodyRows}</tbody></table></div>`;
-}
-function renderKpiDrill(rows) {
-  const target = $("kpi-drill-section");
-  if (!target) return;
-  const kpiId = state.activeKpi;
-  if (!kpiId) { target.innerHTML = ""; return; }
-  const title = KPI_TITLES[kpiId] || "Details";
-  const head = `<div class="details-title kpi-drill-title"><span>Selected metric — ${esc(title)}</span><div class="kpi-drill-actions"><button type="button" id="kpi-drill-csv" class="btn secondary">Download this list</button><button type="button" id="kpi-drill-close" class="btn secondary">Close list</button></div></div>`;
 
-  const { cols, records, extraClass } = drillDataset(kpiId, rows);
-  const caption = kpiId === "visibleOfficers"
-    ? `${records.length} officer(s) in view · click a column header to sort. Outlet-level columns (Outlet Code / Outlet Name / RHO Name / Zonal Name) appear for the outlet-based metrics.`
-    : `${numberFmt.format(records.length)} row(s) listed · click a column header to sort.`;
-  const body = records.length
-    ? drillTableHtml(cols, records, extraClass)
-    : `<div class="details-message">No records for this metric in the current selection.</div>`;
-  target.innerHTML = `${head}<div class="kpi-drill-caption">${caption}</div>${body}`;
-
-  target.querySelectorAll(".kpi-drill-table th[data-sort-key]").forEach(th => th.addEventListener("click", () => {
-    const k = th.dataset.sortKey;
-    if (state.drillSortKey === k) state.drillSortDir *= -1;
-    else { state.drillSortKey = k; state.drillSortDir = 1; }
-    renderKpiDrill(getFiltered());
-  }));
-  wireKpiDrillButtons(kpiId, rows);
-}
-function wireKpiDrillButtons(kpiId, rows) {
-  $("kpi-drill-close")?.addEventListener("click", () => { state.activeKpi = null; render(); });
-  $("kpi-drill-csv")?.addEventListener("click", () => downloadKpiDrillCsv(kpiId, rows));
-}
-function downloadKpiDrillCsv(kpiId, rows) {
-  const { cols, records } = drillDataset(kpiId, rows);
-  const sorted = sortDrillRows(records, cols);
-  const header = cols.map(c => c[1]);
-  const lines = sorted.map(r => cols.map(([k,,type]) => type === "pct" ? pct(r[k]) : (r[k] ?? "")));
-  const out = [header.map(csvEscape).join(",")].concat(lines.map(row => row.map(csvEscape).join(",")));
-  const blob = new Blob(["\ufeff"+out.join("\r\n")], { type:"text/csv;charset=utf-8" });
-  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-  a.download = `${kpiId}_outlet_list.csv`; a.click(); URL.revokeObjectURL(a.href);
-}
 function renderTable(rows) {
   const head = $("performance-head");
-  head.innerHTML = columns.map(([key,label]) => `<th data-key="${key}">${esc(label)} <span class="sort">${state.sortKey===key ? (state.sortDir===1?"▲":"▼") : "↕"}</span></th>`).join("");
+  head.innerHTML = TABLE_COLUMNS.map(([key, label]) => {
+    const indicator = state.sortKey === key ? (state.sortDir === 1 ? "▲" : "▼") : "↕";
+    return `<th data-key="${key}">${esc(label)} <span class="sort">${indicator}</span></th>`;
+  }).join("");
   head.querySelectorAll("th").forEach(th => th.addEventListener("click", () => {
-    const key=th.dataset.key; if (state.sortKey===key) state.sortDir*=-1; else { state.sortKey=key; state.sortDir=1; } render();
+    const key = th.dataset.key;
+    if (state.sortKey === key) state.sortDir *= -1;
+    else {
+      state.sortKey = key;
+      state.sortDir = key === "completionPct" ? -1 : -1;
+    }
+    render();
   }));
-  const sorted = sortedRows(rows);
-  $("performance-body").innerHTML = sorted.map(r => `<tr class="${state.officerKey===r.officerKey?"selected-row":""}">${columns.map(([key]) => {
-    const val=r[key];
-    if (key==="officer") return `<td class="officer-cell"><button type="button" class="officer-link" data-officer-key="${esc(r.officerKey)}" title="Show outlet details for ${esc(r.officer)}">${esc(val)}</button></td>`;
-    if (key==="completionPct") return `<td>${pct(val)}</td>`;
-    if (typeof val === "number") return `<td>${numberFmt.format(val)}</td>`;
-    return `<td>${esc(val)}</td>`;
-  }).join("")}</tr>`).join("");
-  $("performance-body").querySelectorAll(".officer-link").forEach(btn => btn.addEventListener("click", () => {
-    selectOfficer(btn.dataset.officerKey, true);
-  }));
-  const total = key => rows.reduce((t,r)=>t+(Number(r[key])||0),0);
-  $("summary-caption").textContent = `${rows.length} displayed rows · ${numberFmt.format(total("totalPlannedFullMonth"))} planned visits full month · ${numberFmt.format(total("totalPlannedTillDate"))} planned visits till date · ${numberFmt.format(total("remainingVisits"))} remaining with no response · ${numberFmt.format(distinctNeverOutlets(rows))} distinct never visited outlets`;
-}
-function detailTable(rows, type) {
-  if (!rows.length) return `<div class="details-message">No records in this section.</div>`;
 
-  let cols;
-  if (type === "never") {
-    cols = [["siteCode","Outlet Code"],["outletName","Outlet Name"]];
-  } else if (type === "plannedResponses" || type === "unplannedResponses") {
-    cols = [["responseDate","Response Date"],["siteCode","Outlet Code"],["outletName","Outlet Name"],["responseId","Response ID"]];
+  const sorted = sortedOfficerRows(rows);
+  $("performance-body").innerHTML = sorted.map(r => {
+    const completionLabel = pct(r.completionPct);
+    return `<tr class="${state.activeView?.officerKey === r.officerKey ? "selected-row" : ""}">
+      <td><button type="button" class="officer-link" data-officer="${esc(r.officerKey)}">${esc(r.officer)}</button></td>
+      <td><button type="button" class="metric-btn" data-metric="planned" data-officer="${esc(r.officerKey)}">${numberFmt.format(r.planned)}</button></td>
+      <td><button type="button" class="metric-btn" data-metric="completed" data-officer="${esc(r.officerKey)}">${numberFmt.format(r.completed)}</button></td>
+      <td><button type="button" class="metric-btn" data-metric="pending" data-officer="${esc(r.officerKey)}">${numberFmt.format(r.pending)}</button></td>
+      <td><button type="button" class="metric-btn metric-chip ${scoreClass(r.completionPct)}" data-metric="completion" data-officer="${esc(r.officerKey)}">${completionLabel}</button></td>
+    </tr>`;
+  }).join("");
+
+  $("performance-body").querySelectorAll(".officer-link").forEach(btn => btn.addEventListener("click", () => showView({ type: "officer", officerKey: btn.dataset.officer, metric: "all" })));
+  $("performance-body").querySelectorAll(".metric-btn").forEach(btn => btn.addEventListener("click", () => showView({ type: "officer", officerKey: btn.dataset.officer, metric: btn.dataset.metric })));
+
+  const planned = total(rows, "totalPlannedTillDate");
+  const completed = totalCompleted(rows);
+  const pending = total(rows, "remainingVisits");
+  $("summary-caption").textContent = `${rows.length} officer rows in view · Planned (Till Date): ${numberFmt.format(planned)} · Completed: ${numberFmt.format(completed)} · Pending: ${numberFmt.format(pending)} · Click any metric to drill down`;
+}
+
+function getOutletMeta(siteCode) {
+  return (state.data.outlets && state.data.outlets[siteCode]) || {};
+}
+
+function parseTime(value) {
+  if (!value) return null;
+  const str = String(value).trim();
+  const m = str.match(/^(\d{1,2}):(\d{2})(?:\s*([AP]M))?$/i);
+  if (!m) return null;
+  let h = Number(m[1]);
+  const mins = Number(m[2]);
+  const mer = m[3] ? m[3].toUpperCase() : null;
+  if (mer === "PM" && h < 12) h += 12;
+  if (mer === "AM" && h === 12) h = 0;
+  return h * 60 + mins;
+}
+function durationLabel(inTime, outTime) {
+  const start = parseTime(inTime);
+  const end = parseTime(outTime);
+  if (start == null || end == null || end < start) return "—";
+  const mins = end - start;
+  return `${mins} min`;
+}
+function timeFlag(inTime, outTime) {
+  if (!inTime || !outTime || inTime === "—" || outTime === "—") return "flag-missing";
+  const start = parseTime(inTime), end = parseTime(outTime);
+  if (start == null || end == null || end < start) return "flag-missing";
+  if ((end - start) < 5) return "flag-short";
+  return "flag-ok";
+}
+function statusClass(status) {
+  const s = String(status || "").toLowerCase();
+  if (s.includes("extra")) return "status-extra";
+  if (s.includes("never")) return "status-never";
+  if (s.includes("pending")) return "status-pending";
+  return "status-completed";
+}
+
+function plannedMap(detail) {
+  const map = new Map();
+  (detail.plannedDateResponseList || []).forEach(r => map.set(`${r.siteCode}|${r.responseDate}`, r));
+  return map;
+}
+function findPlanDateForSite(detail, siteCode) {
+  const due = (detail.planned || []).filter(p => p.plannedDate <= state.data.metadata.snapshotDate && p.siteCode === siteCode);
+  if (!due.length) return "";
+  due.sort((a, b) => String(a.plannedDate).localeCompare(String(b.plannedDate)));
+  return due[0].plannedDate;
+}
+
+function buildOfficerRows(officerRow, metric = "all") {
+  const detail = state.data.details[officerRow.officerKey] || { planned: [], plannedDateResponseList: [], otherUnplannedResponseList: [], neverVisited: [] };
+  const duePlans = (detail.planned || []).filter(p => !state.data.metadata.snapshotDate || p.plannedDate <= state.data.metadata.snapshotDate);
+  const respMap = plannedMap(detail);
+
+  const plannedRows = duePlans.map(p => {
+    const match = respMap.get(`${p.siteCode}|${p.plannedDate}`);
+    const inTime = match?.inTime || "—";
+    const outTime = match?.outTime || "—";
+    return {
+      officerKey: officerRow.officerKey,
+      officer: officerRow.officer,
+      outletCode: p.siteCode,
+      outletName: p.outletName || getOutletMeta(p.siteCode).outletName || "",
+      plannedVisitDate: p.plannedDate,
+      visitStatus: match ? "Completed" : "Pending",
+      inTime,
+      outTime,
+      visitDuration: durationLabel(inTime, outTime),
+      actualVisitDate: match?.responseDate || "",
+      responseId: match?.responseId || "",
+      remarks: match ? "Planned-date response" : "Pending visit"
+    };
+  });
+
+  const extraRows = (detail.otherUnplannedResponseList || []).map(r => {
+    const inTime = r.inTime || "—";
+    const outTime = r.outTime || "—";
+    return {
+      officerKey: officerRow.officerKey,
+      officer: officerRow.officer,
+      outletCode: r.siteCode,
+      outletName: r.outletName || getOutletMeta(r.siteCode).outletName || "",
+      plannedVisitDate: "",
+      visitStatus: "Completed (Extra)",
+      inTime,
+      outTime,
+      visitDuration: durationLabel(inTime, outTime),
+      actualVisitDate: r.responseDate || "",
+      responseId: r.responseId || "",
+      remarks: "Other / unplanned response"
+    };
+  });
+
+  const neverRows = (detail.neverVisited || []).map(r => ({
+    officerKey: officerRow.officerKey,
+    officer: officerRow.officer,
+    outletCode: r.siteCode,
+    outletName: r.outletName || getOutletMeta(r.siteCode).outletName || "",
+    plannedVisitDate: findPlanDateForSite(detail, r.siteCode),
+    visitStatus: "Never Visited",
+    inTime: "—",
+    outTime: "—",
+    visitDuration: "—",
+    actualVisitDate: "",
+    responseId: "",
+    remarks: "No visit record till date"
+  }));
+
+  switch (metric) {
+    case "planned": return plannedRows;
+    case "completed": return [...plannedRows.filter(r => r.visitStatus === "Completed"), ...extraRows];
+    case "pending": return plannedRows.filter(r => r.visitStatus === "Pending");
+    case "completion": return [...plannedRows, ...extraRows];
+    case "never": return neverRows;
+    case "all":
+    default: return [...plannedRows, ...extraRows];
+  }
+}
+
+function aggregateRows(metric, rows) {
+  let list = [];
+  rows.forEach(r => { list = list.concat(buildOfficerRows(r, metric === "never" ? "never" : metric)); });
+  return list;
+}
+
+function metricTitle(metric) {
+  return ({
+    planned: "Planned Visits (Till Date)",
+    completed: "Completed Visits (Till Date)",
+    pending: "Pending Visits",
+    never: "Never Visited Outlets",
+    completion: "Visit Completion %",
+    all: "Officer Performance"
+  }[metric] || "Visit Details");
+}
+
+function showView(view) {
+  state.activeView = view;
+  render();
+  requestAnimationFrame(() => $("details-section")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+}
+
+function summaryPills(rows, metric) {
+  const planned = rows.filter(r => r.visitStatus !== "Completed (Extra)" && r.visitStatus !== "Never Visited").length;
+  const completed = rows.filter(r => r.visitStatus === "Completed" || r.visitStatus === "Completed (Extra)").length;
+  const pending = rows.filter(r => r.visitStatus === "Pending").length;
+  const completion = planned ? ((completed / planned) * 100) : null;
+  const pills = [];
+  if (metric !== "never") pills.push(`Planned Visits (Till Date): ${numberFmt.format(planned)}`);
+  pills.push(`Completed: ${numberFmt.format(completed)}`);
+  if (metric !== "completed") pills.push(`Pending: ${numberFmt.format(pending)}`);
+  if (metric === "never") pills.push(`Never Visited: ${numberFmt.format(rows.length)}`);
+  if (metric === "completion" || metric === "all" || metric === "planned") pills.push(`Completion: ${completion == null ? "—" : `${completion.toFixed(1)}%`}`);
+  return pills;
+}
+
+function renderDetails(currentRows) {
+  const target = $("details-section");
+  if (!state.activeView) {
+    target.innerHTML = `<div class="details-message">Click a headline KPI, officer name, or officer metric to see the management drill-down with In Time, Out Time, Visit Duration, Actual Visit Date, Response ID and Remarks.</div>`;
+    return;
+  }
+
+  let title = "";
+  let rows = [];
+  let metric = state.activeView.metric || "all";
+  if (state.activeView.type === "aggregate") {
+    rows = aggregateRows(metric, currentRows);
+    title = metricTitle(metric);
   } else {
-    cols = [["plannedDate","Planned Date"],["siteCode","Outlet Code"],["outletName","Outlet Name"]];
+    const officer = state.data.officers.find(r => r.officerKey === state.activeView.officerKey);
+    if (!officer) {
+      target.innerHTML = `<div class="details-message">Officer not found in the current filtered set.</div>`;
+      return;
+    }
+    rows = buildOfficerRows(officer, metric);
+    title = metric === "all" ? `${officer.officer} Performance` : `${officer.officer} — ${metricTitle(metric)}`;
   }
 
-  const dateKeys = new Set(["plannedDate","responseDate"]);
-  return `<div class="detail-table-wrap"><table class="detail-table detail-table-${type}"><thead><tr>${cols.map(c=>`<th>${c[1]}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(([k])=>`<td>${dateKeys.has(k)&&r[k]?fmtDate(r[k]):esc(r[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  const summary = summaryPills(rows, metric);
+  target.innerHTML = `
+    <div class="details-header">
+      <div class="details-title">
+        <div>
+          <h2>${esc(title)}</h2>
+          <p class="panel-caption">Outlet-level drill-down with attendance timing. Missing punches are highlighted in red; very short visits are highlighted in amber.</p>
+        </div>
+        <div class="details-actions">
+          <button type="button" id="details-download" class="btn secondary">Download this detail</button>
+          <button type="button" id="details-close" class="btn secondary">Close details</button>
+        </div>
+      </div>
+      <div class="details-summary">${summary.map(s => `<span class="summary-pill">${esc(s)}</span>`).join("")}</div>
+    </div>
+    ${renderDetailTable(rows)}`;
+
+  $("details-close").addEventListener("click", () => { state.activeView = null; render(); });
+  $("details-download").addEventListener("click", () => downloadDetailCsv(rows, title));
 }
-function renderDetails(rows) {
-  const target=$("details-section");
-  if (rows.length!==1) {
-    target.innerHTML=`<div class="details-message"><strong>Officer outlet details:</strong> Select an officer, or search until only one officer remains, to see planned outlets, remaining visits, never-visited outlets, planned-date response rows, and other/unplanned response rows through the snapshot.</div>`;
-    return;
-  }
 
-  const row=rows[0];
-  const d=state.data.details[row.officerKey] || {
-    planned:[],
-    remaining:[],
-    neverVisited:[],
-    plannedDateResponseList:[],
-    otherUnplannedResponseList:[]
-  };
+function renderDetailTable(rows) {
+  if (!rows.length) return `<div class="details-message">No records found for this drill-down in the current selection.</div>`;
+  const body = rows.map(r => {
+    const flag = timeFlag(r.inTime, r.outTime);
+    return `<tr>
+      <td>${esc(r.outletCode)}</td>
+      <td>${esc(r.outletName)}</td>
+      <td>${esc(r.officer)}</td>
+      <td>${r.plannedVisitDate ? esc(fmtDate(r.plannedVisitDate)) : "—"}</td>
+      <td><span class="visit-status ${statusClass(r.visitStatus)}">${esc(r.visitStatus)}</span></td>
+      <td class="${flag}">${esc(r.inTime || "—")}</td>
+      <td class="${flag}">${esc(r.outTime || "—")}</td>
+      <td class="${flag}">${esc(r.visitDuration || "—")}</td>
+      <td>${r.actualVisitDate ? esc(fmtDate(r.actualVisitDate)) : "—"}</td>
+      <td>${esc(r.responseId || "—")}</td>
+      <td>${esc(r.remarks || "")}</td>
+    </tr>`;
+  }).join("");
 
-  const plannedResponses = d.plannedDateResponseList || [];
-  const unplannedResponses = d.otherUnplannedResponseList || [];
-
-  const tabs=[
-    ["planned",`Planned outlets (${d.planned.length})`],
-    ["remaining",`Remaining visits (${d.remaining.length})`],
-    ["never",`Never visited outlets (${d.neverVisited.length})`],
-    ["plannedResponses",`Planned-date response list (${plannedResponses.length})`],
-    ["unplannedResponses",`Other / unplanned response list (${unplannedResponses.length})`]
-  ];
-
-  const tabMap = {
-    planned: d.planned,
-    remaining: d.remaining,
-    never: d.neverVisited,
-    plannedResponses,
-    unplannedResponses
-  };
-  const tabRows = tabMap[state.activeDetailTab] || d.planned;
-
-  target.innerHTML=`<div class="details-title">Officer outlet details — ${esc(row.status)} · ${esc(row.officer)}</div><div class="tabs">${tabs.map(([k,l])=>`<button class="tab-btn ${state.activeDetailTab===k?"active":""}" data-tab="${k}">${l}</button>`).join("")}</div><div id="detail-content">${detailTable(tabRows,state.activeDetailTab)}</div>`;
-  target.querySelectorAll(".tab-btn").forEach(b=>b.addEventListener("click",()=>{state.activeDetailTab=b.dataset.tab;renderDetails(rows);}));
+  return `<div class="detail-table-wrap"><table class="detail-table"><thead><tr>
+      <th>Outlet Code</th>
+      <th>Outlet Name</th>
+      <th>Officer</th>
+      <th>Planned Visit Date</th>
+      <th>Visit Status</th>
+      <th>In Time</th>
+      <th>Out Time</th>
+      <th>Visit Duration</th>
+      <th>Actual Visit Date</th>
+      <th>Response ID</th>
+      <th>Remarks</th>
+    </tr></thead><tbody>${body}</tbody></table></div>`;
 }
+
 function renderDefinitions() {
-  const d=state.data.definitions;
-  $("definitions-text").textContent = `${d.fullMonth} ${d.remaining} ${d.neverVisited} ${d.completion}`;
-  const m=state.data.metadata;
-  const unmapped=m.diagnostics.unmappedResponseNames?.length ? ` · Unmapped response names: ${m.diagnostics.unmappedResponseNames.join(", ")}` : "";
-  const superseded = Array.isArray(m.supersededFiles) && m.supersededFiles.length
-    ? ` · Ignoring older upload${m.supersededFiles.length > 1 ? "s" : ""}: ${m.supersededFiles.join(", ")}`
-    : "";
-  const dataStatus = state.dataLoad ? ` · ${getDataStatus(state.dataLoad).text}` : "";
+  const d = state.data.definitions;
+  const parts = [
+    `<strong>Planned Visits (Till Date):</strong> ${esc(d.tillDate)}`,
+    `<strong>Completed Visits (Till Date):</strong> ${esc(d.completed)} ${esc(d.other || "")}`,
+    `<strong>Pending Visits:</strong> ${esc(d.remaining)}`,
+    `<strong>Never Visited Outlets:</strong> ${esc(d.neverVisited)}`,
+    `<strong>Visit Completion %:</strong> ${esc(d.completion)}`
+  ];
+  $("definitions-text").innerHTML = parts.map(p => `<p>${p}</p>`).join("");
+  const m = state.data.metadata;
   const surveyFooter = m.surveyReportUrl ? ` · <a href="${esc(m.surveyReportUrl)}" target="_blank" rel="noopener noreferrer">Survey reports</a>` : "";
-  if (state.dataLoad?.source === "awaiting-local") {
-    $("source-footer").textContent = "Data source: waiting for a PC raw-data folder. Repository dashboard data is not used.";
-    return;
-  }
-  $("source-footer").innerHTML=`Data source: ${esc(m.scheduleFile)} + ${esc(m.responseFile)} · Generated ${esc(new Date(m.generatedAt).toLocaleString())}${esc(unmapped)}${esc(superseded)}${esc(dataStatus)}${surveyFooter}`;
+  $("source-footer").innerHTML = `Data source: ${esc(m.scheduleFile)} + ${esc(m.responseFile)} · Generated ${esc(new Date(m.generatedAt).toLocaleString())}${surveyFooter}`;
 }
-function render() {
-  const rows=getFiltered();
-  renderKpis(rows); renderTable(rows); renderDetails(rows); renderKpiDrill(rows);
-}
-function csvEscape(v) { const s=String(v??""); return /[",\n]/.test(s)?`"${s.replaceAll('"','""')}"`:s; }
+
+function csvEscape(v) { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s; }
 function downloadCsv() {
-  const rows=sortedRows(getFiltered());
-  const lines=[columns.map(c=>csvEscape(c[1])).join(",")];
-  for (const r of rows) lines.push(columns.map(([k])=>csvEscape(k==="completionPct"?pct(r[k]):r[k])).join(","));
-  const blob=new Blob(["\ufeff"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="visible_visit_compliance.csv"; a.click(); URL.revokeObjectURL(a.href);
+  const rows = sortedOfficerRows(getOfficerRowsFiltered());
+  const header = ["Officer", "Status", "Planned Visits (Till Date)", "Completed Visits (Till Date)", "Pending Visits", "Visit Completion %"];
+  const lines = [header.map(csvEscape).join(",")];
+  rows.forEach(r => {
+    lines.push([
+      r.officer,
+      r.status,
+      r.planned,
+      r.completed,
+      r.pending,
+      pct(r.completionPct)
+    ].map(csvEscape).join(","));
+  });
+  saveCsv(lines, "visible_visit_compliance.csv");
 }
-/* ── Outlet lookup ──────────────────────────────────────────────────────
-   Search by outlet name or code, then show one card with the seven fields
-   operations actually asks for: who owns the outlet and when it was last
-   seen, split by Zonal and RHO. Data comes from data.outlets, built in
-   scripts/build.py.                                                      */
+function downloadDetailCsv(rows, title) {
+  const header = ["Outlet Code", "Outlet Name", "Officer", "Planned Visit Date", "Visit Status", "In Time", "Out Time", "Visit Duration", "Actual Visit Date", "Response ID", "Remarks"];
+  const lines = [header.map(csvEscape).join(",")];
+  rows.forEach(r => lines.push([
+    r.outletCode,
+    r.outletName,
+    r.officer,
+    r.plannedVisitDate ? fmtDate(r.plannedVisitDate) : "",
+    r.visitStatus,
+    r.inTime,
+    r.outTime,
+    r.visitDuration,
+    r.actualVisitDate ? fmtDate(r.actualVisitDate) : "",
+    r.responseId,
+    r.remarks
+  ].map(csvEscape).join(",")));
+  const safe = title.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase();
+  saveCsv(lines, `${safe || 'visit_detail'}.csv`);
+}
+function saveCsv(lines, filename) {
+  const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 const OUTLET_LIMIT = 40;
-
-function outletList() {
-  const outlets = state.data?.outlets;
-  if (!outlets) return [];
-  return Object.values(outlets);
-}
-
+function outletList() { return state.data?.outlets ? Object.values(state.data.outlets) : []; }
 function matchingOutlets(term) {
   const q = term.trim().toLowerCase();
   if (!q) return [];
-  const hits = outletList().filter(o =>
-    String(o.siteCode || "").toLowerCase().includes(q) ||
-    String(o.outletName || "").toLowerCase().includes(q));
-  // Code matches first, then name, both alphabetical - predictable ordering.
+  const hits = outletList().filter(o => lower(o.siteCode).includes(q) || lower(o.outletName).includes(q));
   hits.sort((a, b) => {
-    const ac = String(a.siteCode || "").toLowerCase().startsWith(q) ? 0 : 1;
-    const bc = String(b.siteCode || "").toLowerCase().startsWith(q) ? 0 : 1;
+    const ac = lower(a.siteCode).startsWith(q) ? 0 : 1;
+    const bc = lower(b.siteCode).startsWith(q) ? 0 : 1;
     if (ac !== bc) return ac - bc;
     return String(a.outletName || a.siteCode).localeCompare(String(b.outletName || b.siteCode));
   });
   return hits;
 }
-
 function renderOutletResults() {
   const box = $("outlet-results");
   if (!box) return;
@@ -451,47 +540,35 @@ function renderOutletResults() {
   if (!term.trim()) { box.innerHTML = ""; return; }
   const hits = matchingOutlets(term);
   if (!hits.length) {
-    box.innerHTML = `<p class="outlet-empty">No outlet matches “${esc(term)}”. Try a code such as D062, or part of the name.</p>`;
+    box.innerHTML = `<div class="outlet-empty">No outlet matches “${esc(term)}”. Try a code such as D062 or part of the outlet name.</div>`;
     return;
   }
-  box.innerHTML = hits.slice(0, OUTLET_LIMIT).map(o => `
-    <button class="outlet-hit" type="button" role="option"
-            aria-selected="${state.selectedOutlet === o.siteCode ? "true" : "false"}"
-            data-code="${esc(o.siteCode)}">
-      <span class="hit-name">${esc(o.outletName || "(name not in schedule)")}</span>
-      <span class="hit-code">${esc(o.siteCode)}</span>
-    </button>`).join("") +
-    (hits.length > OUTLET_LIMIT ? `<p class="outlet-empty">${hits.length - OUTLET_LIMIT} more match — keep typing to narrow.</p>` : "");
-  box.querySelectorAll(".outlet-hit").forEach(btn =>
-    btn.addEventListener("click", () => selectOutlet(btn.dataset.code)));
+  box.innerHTML = hits.slice(0, OUTLET_LIMIT).map(o => `<button class="outlet-hit" type="button" data-code="${esc(o.siteCode)}"><span class="hit-name">${esc(o.outletName || '(name not in schedule)')}</span><span class="hit-code">${esc(o.siteCode)}</span></button>`).join("");
+  box.querySelectorAll(".outlet-hit").forEach(btn => btn.addEventListener("click", () => selectOutlet(btn.dataset.code)));
 }
-
-function visitCell(label, iso, who) {
-  const value = iso
-    ? `${esc(fmtDate(iso))}${who ? `<span class="by">by ${esc(who)}</span>` : ""}`
-    : "Not visited yet";
-  return `<div class="outlet-cell"><dt>${esc(label)}</dt><dd class="${iso ? "" : "none"}">${value}</dd></div>`;
+function visitCell(label, iso, who, inTime, outTime) {
+  const value = iso ? `${esc(fmtDate(iso))}${who ? `<span class="by">by ${esc(who)}</span>` : ""}${inTime || outTime ? `<span class="by">In time: ${esc(inTime || 'Missing')} · Out time: ${esc(outTime || 'Missing')}</span>` : ""}` : `Not visited yet`;
+  return `<div class="outlet-cell"><dt>${esc(label)}</dt><dd class="${iso ? '' : 'none'}">${value}</dd></div>`;
 }
-
 function renderOutletCard() {
   const card = $("outlet-card");
-  if (!card) return;
   const outlet = state.selectedOutlet ? state.data.outlets?.[state.selectedOutlet] : null;
+  if (!card) return;
   if (!outlet) { card.hidden = true; card.innerHTML = ""; return; }
   card.hidden = false;
   card.innerHTML = `
     <div class="outlet-card-head">
-      <h2>${esc(outlet.outletName || "Outlet")} <span class="code-chip">${esc(outlet.siteCode)}</span></h2>
+      <h2>${esc(outlet.outletName || 'Outlet')} <span class="code-chip">${esc(outlet.siteCode)}</span></h2>
       <button class="outlet-card-close" type="button" id="outlet-card-close">Clear</button>
     </div>
     <dl class="outlet-grid">
       <div class="outlet-cell"><dt>Outlet code</dt><dd>${esc(outlet.siteCode)}</dd></div>
-      <div class="outlet-cell"><dt>Outlet name</dt><dd class="${outlet.outletName ? "" : "none"}">${esc(outlet.outletName || "Not in schedule")}</dd></div>
-      <div class="outlet-cell"><dt>Zonal</dt><dd class="${outlet.zonalName ? "" : "none"}">${esc(outlet.zonalName || "Not assigned")}</dd></div>
-      <div class="outlet-cell"><dt>Regional (RHO)</dt><dd class="${outlet.rhoName ? "" : "none"}">${esc(outlet.rhoName || "Not assigned")}</dd></div>
-      ${visitCell("Last visit", outlet.lastVisit, outlet.lastVisitBy)}
-      ${visitCell("Last visit by Zonal", outlet.lastVisitZonal, outlet.lastVisitZonalBy)}
-      ${visitCell("Last visit by Regional (RHO)", outlet.lastVisitRho, outlet.lastVisitRhoBy)}
+      <div class="outlet-cell"><dt>Outlet name</dt><dd class="${outlet.outletName ? '' : 'none'}">${esc(outlet.outletName || 'Not in schedule')}</dd></div>
+      <div class="outlet-cell"><dt>Zonal</dt><dd class="${outlet.zonalName ? '' : 'none'}">${esc(outlet.zonalName || 'Not assigned')}</dd></div>
+      <div class="outlet-cell"><dt>Regional (RHO)</dt><dd class="${outlet.rhoName ? '' : 'none'}">${esc(outlet.rhoName || 'Not assigned')}</dd></div>
+      ${visitCell('Last visit', outlet.lastVisit, outlet.lastVisitBy)}
+      ${visitCell('Last visit by Zonal', outlet.lastVisitZonal, outlet.lastVisitZonalBy, outlet.lastVisitZonalInTime, outlet.lastVisitZonalOutTime)}
+      ${visitCell('Last visit by Regional (RHO)', outlet.lastVisitRho, outlet.lastVisitRhoBy, outlet.lastVisitRhoInTime, outlet.lastVisitRhoOutTime)}
     </dl>`;
   $("outlet-card-close").addEventListener("click", () => {
     state.selectedOutlet = null;
@@ -499,7 +576,6 @@ function renderOutletCard() {
     renderOutletResults();
   });
 }
-
 function selectOutlet(code) {
   state.selectedOutlet = code;
   renderOutletCard();
@@ -507,47 +583,79 @@ function selectOutlet(code) {
   $("outlet-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function render() {
+  const rows = getOfficerRowsFiltered();
+  renderKpis(rows);
+  renderTable(rows);
+  renderDetails(rows);
+  renderOutletResults();
+  renderOutletCard();
+}
+
 function applyDataLoad(nextLoad) {
   state.dataLoad = nextLoad;
   state.data = nextLoad.data;
-  const statuses = new Set(["All statuses", ...state.data.officers.map(row => row.status)]);
+  const statuses = new Set(["All statuses", ...state.data.officers.map(r => r.status)]);
   if (!statuses.has(state.status)) state.status = "All statuses";
-  if (!state.data.officers.some(row => row.officerKey === state.officerKey)) state.officerKey = ALL_OFFICERS;
+  if (!state.data.officers.some(r => r.officerKey === state.officerKey)) state.officerKey = ALL_OFFICERS;
   if (state.selectedOutlet && !state.data.outlets?.[state.selectedOutlet]) state.selectedOutlet = null;
   renderHeader();
   $("status-filter").value = state.status;
   renderDefinitions();
   render();
-  renderOutletResults();
-  renderOutletCard();
 }
 
 async function init() {
   try {
-    state.dataLoad=await loadDashboardData();
-    state.data=state.dataLoad.data;
-    renderHeader(); renderDefinitions(); render();
-    $("status-filter").addEventListener("change",e=>{state.status=e.target.value;updateOfficerOptions();render();});
-    $("officer-filter").addEventListener("change",e=>selectOfficer(e.target.value, true));
-    $("officer-search").addEventListener("input",e=>{state.search=e.target.value;render();});
-    $("reset-btn").addEventListener("click",()=>{state.status="All statuses";state.officerKey=ALL_OFFICERS;state.search="";state.activeDetailTab="planned";state.activeKpi=null;$("status-filter").value=state.status;$("officer-search").value="";state.outletSearch="";state.selectedOutlet=null;$("outlet-search").value="";renderOutletResults();renderOutletCard();updateOfficerOptions();render();});
-    $("download-btn").addEventListener("click",downloadCsv);
-    $("outlet-search").addEventListener("input", e => { state.outletSearch = e.target.value; renderOutletResults(); });
-    const rail = document.querySelector(".rail");
-    $("rail-toggle").addEventListener("click", () => {
-      const open = rail.classList.toggle("open");
-      $("rail-toggle").setAttribute("aria-expanded", String(open));
+    state.dataLoad = await loadDashboardData();
+    state.data = state.dataLoad.data;
+    renderHeader();
+    renderDefinitions();
+    render();
+
+    $("status-filter").addEventListener("change", e => { state.status = e.target.value; updateOfficerOptions(); render(); });
+    $("officer-filter").addEventListener("change", e => { state.officerKey = e.target.value; render(); });
+    $("officer-search").addEventListener("input", e => { state.search = e.target.value; render(); });
+    $("reset-btn").addEventListener("click", () => {
+      state.status = "All statuses";
+      state.officerKey = ALL_OFFICERS;
+      state.search = "";
+      state.activeView = null;
+      state.outletSearch = "";
+      state.selectedOutlet = null;
+      $("status-filter").value = state.status;
+      $("officer-search").value = "";
+      $("outlet-search").value = "";
+      updateOfficerOptions();
+      render();
     });
-    attachPcRawDataSource(state.dataLoad.localSource, {
+    $("download-btn").addEventListener("click", downloadCsv);
+    $("theme-toggle").addEventListener("click", () => {
+      const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+      try { localStorage.setItem(THEME_KEY, next); } catch {}
+      applyTheme(next);
+    });
+    $("outlet-search").addEventListener("input", e => { state.outletSearch = e.target.value; renderOutletResults(); });
+    document.querySelectorAll(".view-tab").forEach(btn => btn.addEventListener("click", () => {
+      document.querySelectorAll(".view-tab").forEach(x => x.classList.remove("is-active"));
+      btn.classList.add("is-active");
+      const target = document.querySelector(btn.dataset.scroll);
+      target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }));
+
+    attachGoogleDriveDataSource(state.dataLoad.localSource, {
       baseData: state.data,
       onData: applyDataLoad,
-      onStatus: (localStatus) => {
+      onStatus: localStatus => {
         state.dataLoad = { ...state.dataLoad, localStatus };
         renderDataSource();
       },
     });
-  } catch(err) {
-    document.querySelector("main").innerHTML=`<div class="error-box"><strong>Dashboard could not load.</strong>\n${esc(err.message)}\n\nUse Chrome or Edge, then choose the PC raw-data folder that contains the visit schedule and response workbooks.</div>`;
+  } catch (err) {
+    const owner = window.DashboardDriveOwner?.isOwner?.();
+    const detail = owner ? err.message : "The latest published dashboard data could not be loaded.";
+    const guidance = owner ? "Use Drive setup to connect the shared Google Drive folder containing Store_Operations_Compliance_Audit_responses." : "No published snapshot is currently available.";
+    $("main-content").innerHTML = `<div class="error-box"><strong>Dashboard could not load.</strong>\n${esc(detail)}\n\n${esc(guidance)}</div>`;
   }
 }
 init();

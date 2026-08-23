@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="color-scheme" content="dark light" />
-<title>Audit Quality Dashboard</title>
+<title>Audit Command Center</title>
 <script>
 try { document.documentElement.dataset.theme = localStorage.getItem("audit-quality-theme") || "dark"; }
 catch { document.documentElement.dataset.theme = "dark"; }
@@ -116,13 +116,75 @@ catch { document.documentElement.dataset.theme = "dark"; }
   html[data-theme="light"] .drill { background: #eaf5fb !important; color: #17384a !important; }
   html[data-theme="light"] .drill button { color: #506978 !important; border-color: #b9cbd5 !important; }
   html[data-theme="light"] .empty-state h2 { color: #102a3a !important; }
+
+
+  /* v15 — Top-management command-center layout */
+  .topbar {
+    max-width: 1440px; margin: 18px auto 0; border-radius: 22px;
+    padding: 22px 24px !important; box-shadow: 0 10px 28px rgba(0,0,0,.22);
+  }
+  .topbar h1 { font-size: 28px !important; }
+  .topbar .subtitle { font-size: 14px; max-width: 980px; }
+  .topbar-actions { gap: 10px; }
+  .audit-layout { max-width: 1440px; margin: 0 auto; grid-template-columns: 1fr; gap: 18px; padding: 18px; }
+  .rail {
+    position: static; width: 100%; max-height: none; border-right: 0; border-radius: 22px;
+    padding: 18px; box-shadow: 0 10px 28px rgba(0,0,0,.18);
+  }
+  .rail-toggle { display: none !important; }
+  .rail-body { display: grid !important; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; padding-top: 0 !important; }
+  .rail-group {
+    background: var(--dark-2); border: 1px solid var(--line); border-radius: 18px;
+    padding: 16px !important; margin-bottom: 0 !important; border-bottom: 1px solid var(--line) !important;
+  }
+  .rail-group .btn { width: 100%; }
+  .audit-main {
+    padding: 0 0 40px !important; display: grid; gap: 18px;
+  }
+  .score-hero { border-radius: 18px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+  .hero-cell { padding: 22px 24px; }
+  .hero-score .big { font-size: 64px; }
+  .hero-score .cap { font-size: 12px; }
+  .fact .n { font-size: 28px; }
+  .panel { border-radius: 18px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+  .panel-head { padding: 14px 18px !important; }
+  .panel-head h2 { font-size: 18px !important; }
+  .panel-caption { font-size: 12px !important; }
+  .split { grid-template-columns: 1.1fr .9fr; }
+  .sort-chips { padding: 11px 18px; }
+  .drill { border-radius: 14px; }
+  .exports { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .exports .btn { width: 100%; }
+  .source-box .btn + .btn { margin-top: 8px; }
+  .rail-heading { font-size: 11px; letter-spacing: .12em; margin-bottom: 10px; }
+  .definitions-text { font-size: 12.5px; line-height: 1.7; }
+  .threshold-outlet-panel .table-wrap { max-height: 74vh; }
+  html[data-theme="light"] .topbar,
+  html[data-theme="light"] .rail,
+  html[data-theme="light"] .rail-group,
+  html[data-theme="light"] .panel,
+  html[data-theme="light"] .score-hero { box-shadow: 0 10px 24px rgba(24,58,78,.10) !important; }
+  @media (max-width: 1180px) {
+    .rail-body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .split { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 900px) {
+    .topbar { margin: 12px; border-radius: 18px; }
+    .audit-layout { padding: 12px; }
+    .rail-body { grid-template-columns: 1fr; }
+    .exports { grid-template-columns: 1fr; }
+    .topbar h1 { font-size: 24px !important; }
+    .topbar-actions { width: 100%; align-items: stretch; }
+    .topbar-actions .btn, .topbar-actions .link-btn { width: 100%; justify-content: center; }
+  }
+
 </style>
 </head>
 <body>
 <header class="topbar">
   <div class="topbar-identity">
-    <h1>Audit Quality Dashboard</h1>
-    <p class="subtitle" id="sub">Store Operations Compliance Audit — answer-level scoring · latest audit per outlet</p>
+    <h1>Audit Command Center</h1>
+    <p class="subtitle" id="sub">Top-management view · audit quality, category gaps and exceptions</p>
   </div>
   <div class="topbar-actions">
     <button id="theme-toggle" class="btn secondary theme-toggle" type="button" aria-label="Switch dashboard theme">Light theme</button>
