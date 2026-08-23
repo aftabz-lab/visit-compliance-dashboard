@@ -2,6 +2,7 @@ import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from ".
 
 const ALL_OFFICERS = "__ALL_OFFICERS__";
 const ALL_REMARKS = "__ALL_REMARKS__";
+const NEVER_VISITED_REMARK = "Never visited outlet";
 const THEME_KEY = "visit-compliance-theme";
 const TABLE_COLUMNS = [
   ["officer", "Officer"],
@@ -180,7 +181,7 @@ function updateOfficerOptions() {
   }
 }
 
-function renderKpis(rows) {
+function renderKpis(rows, officerKey = null) {
   const planned = total(rows, "totalPlannedTillDate");
   const completed = totalCompleted(rows);
   const pending = total(rows, "remainingVisits");
@@ -202,7 +203,11 @@ function renderKpis(rows) {
       <div class="kpi-meta">${card.meta}</div>
     </div>`).join("");
 
-  $("kpis").querySelectorAll(".kpi-action").forEach(btn => btn.addEventListener("click", () => showView({ type: "aggregate", metric: btn.dataset.kpi })));
+  $("kpis").querySelectorAll(".kpi-action").forEach(btn => btn.addEventListener("click", () => {
+    showView(officerKey
+      ? { type: "officer", officerKey, metric: btn.dataset.kpi }
+      : { type: "aggregate", metric: btn.dataset.kpi });
+  }));
 }
 
 function scoreClass(v) {
@@ -355,7 +360,7 @@ function buildOfficerRows(officerRow, metric = "all") {
     visitDuration: "—",
     actualVisitDate: "",
     responseId: "",
-    remarks: "No visit record till date"
+    remarks: NEVER_VISITED_REMARK
   }));
 
   switch (metric) {
@@ -419,10 +424,12 @@ function renderDetails(currentRows) {
 
   let title = "";
   let rows = [];
+  let neverVisitedRows = [];
   let summaryOfficerRows = currentRows;
   let metric = state.activeView.metric || "all";
   if (state.activeView.type === "aggregate") {
     rows = aggregateRows(metric, currentRows);
+    neverVisitedRows = aggregateRows("never", currentRows);
     title = metricTitle(metric);
   } else {
     const officer = currentRows.find(r => r.officerKey === state.activeView.officerKey);
@@ -431,19 +438,25 @@ function renderDetails(currentRows) {
       return;
     }
     rows = buildOfficerRows(officer, metric);
+    neverVisitedRows = buildOfficerRows(officer, "never");
     summaryOfficerRows = [officer];
     title = metric === "all" ? `${officer.officer} Performance` : `${officer.officer} — ${metricTitle(metric)}`;
   }
 
   const summary = summaryPills(summaryOfficerRows, metric);
-  const remarkOptions = [...new Set(rows.map(row => row.remarks || "No remarks"))]
+  const remarkOptions = [...new Set([
+    ...rows.map(row => row.remarks || "No remarks"),
+    NEVER_VISITED_REMARK,
+  ])]
     .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
   if (state.detailRemark !== ALL_REMARKS && !remarkOptions.includes(state.detailRemark)) {
     state.detailRemark = ALL_REMARKS;
   }
   const visibleRows = state.detailRemark === ALL_REMARKS
     ? rows
-    : rows.filter(row => (row.remarks || "No remarks") === state.detailRemark);
+    : state.detailRemark === NEVER_VISITED_REMARK
+      ? neverVisitedRows
+      : rows.filter(row => (row.remarks || "No remarks") === state.detailRemark);
   target.innerHTML = `
     <div class="details-header">
       <div class="details-title">
@@ -469,7 +482,12 @@ function renderDetails(currentRows) {
   }));
   $("detail-remarks-filter")?.addEventListener("change", event => {
     state.detailRemark = event.target.value;
-    renderDetails(currentRows);
+    if (state.detailRemark === NEVER_VISITED_REMARK) {
+      state.activeView = { ...state.activeView, metric: "never" };
+      render();
+    } else {
+      renderDetails(currentRows);
+    }
   });
 }
 
@@ -656,10 +674,16 @@ function reconcileActiveView(rows) {
   state.detailRemark = ALL_REMARKS;
 }
 
+function activeOfficerRow(rows) {
+  if (state.activeView?.type !== "officer") return null;
+  return rows.find(row => row.officerKey === state.activeView.officerKey) || null;
+}
+
 function render() {
   const rows = getOfficerRowsFiltered();
   reconcileActiveView(rows);
-  renderKpis(rows);
+  const activeOfficer = activeOfficerRow(rows);
+  renderKpis(activeOfficer ? [activeOfficer] : rows, activeOfficer?.officerKey || null);
   renderTable(rows);
   renderDetails(rows);
   renderOutletResults();
