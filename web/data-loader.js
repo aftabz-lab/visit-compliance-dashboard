@@ -1934,6 +1934,7 @@ class GoogleDriveRawDataSource {
       this.currentSignature = "";
       await this.refreshDrive({ silent: false });
       this.closeSetup();
+      document.getElementById("drive-modal")?.setAttribute("hidden", "true");
       this.startWatching();
     } catch (error) {
       if (error?.name === "AbortError") return;
