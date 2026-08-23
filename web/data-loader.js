@@ -1933,6 +1933,7 @@ class GoogleDriveRawDataSource {
       }
       this.currentSignature = "";
       await this.refreshDrive({ silent: false });
+      this.closeSetup();
       this.startWatching();
     } catch (error) {
       if (error?.name === "AbortError") return;
