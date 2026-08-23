@@ -1,6 +1,7 @@
-import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-top-management-v1";
+import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-interactions-v2";
 
 const ALL_OFFICERS = "__ALL_OFFICERS__";
+const ALL_REMARKS = "__ALL_REMARKS__";
 const THEME_KEY = "visit-compliance-theme";
 const TABLE_COLUMNS = [
   ["officer", "Officer"],
@@ -20,6 +21,7 @@ const state = {
   sortKey: "completionPct",
   sortDir: -1,
   activeView: null,
+  detailRemark: ALL_REMARKS,
 };
 const $ = id => document.getElementById(id);
 const numberFmt = new Intl.NumberFormat("en-US");
@@ -52,9 +54,32 @@ function esc(v) { return String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;",
 function pct(v) { return v == null || Number.isNaN(Number(v)) ? "—" : `${Number(v).toFixed(1)}%`; }
 function lower(v) { return String(v ?? "").toLowerCase(); }
 
+function normalizedOfficerName(value) {
+  return lower(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\b(?:mr|mrs|ms)\.?\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function selectedOutletOfficerNames() {
+  const outlet = state.selectedOutlet ? state.data?.outlets?.[state.selectedOutlet] : null;
+  if (!outlet) return null;
+  return new Set([outlet.zonalName, outlet.rhoName]
+    .map(normalizedOfficerName)
+    .filter(Boolean));
+}
+
+function officerRowsForSelectedOutlet() {
+  const names = selectedOutletOfficerNames();
+  if (!names) return state.data.officers;
+  return state.data.officers.filter(row => names.has(normalizedOfficerName(row.officer)));
+}
+
 function getOfficerRowsFiltered() {
   const q = state.search.trim().toLowerCase();
-  return state.data.officers.filter(r => {
+  return officerRowsForSelectedOutlet().filter(r => {
     if (state.status !== "All statuses" && r.status !== state.status) return false;
     if (state.officerKey !== ALL_OFFICERS && r.officerKey !== state.officerKey) return false;
     if (q && !lower(r.officer).includes(q)) return false;
@@ -137,7 +162,7 @@ function renderDataSource() {
 
 function updateOfficerOptions() {
   const previous = state.officerKey;
-  const source = state.data.officers
+  const source = officerRowsForSelectedOutlet()
     .filter(r => state.status === "All statuses" || r.status === state.status)
     .sort((a, b) => a.officer.localeCompare(b.officer, undefined, { sensitivity: "base" }));
   const nameCounts = new Map();
@@ -363,21 +388,25 @@ function metricTitle(metric) {
 
 function showView(view) {
   state.activeView = view;
+  state.detailRemark = ALL_REMARKS;
   render();
   requestAnimationFrame(() => $("details-section")?.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
 
-function summaryPills(rows, metric) {
-  const planned = rows.filter(r => r.visitStatus !== "Completed (Extra)" && r.visitStatus !== "Never Visited").length;
-  const completed = rows.filter(r => r.visitStatus === "Completed" || r.visitStatus === "Completed (Extra)").length;
-  const pending = rows.filter(r => r.visitStatus === "Pending").length;
+function summaryPills(officerRows, metric) {
+  const planned = total(officerRows, "totalPlannedTillDate");
+  const completed = totalCompleted(officerRows);
+  const pending = total(officerRows, "remainingVisits");
   const completion = planned ? ((completed / planned) * 100) : null;
-  const pills = [];
-  if (metric !== "never") pills.push(`Planned Visits (Till Date): ${numberFmt.format(planned)}`);
-  pills.push(`Completed: ${numberFmt.format(completed)}`);
-  if (metric !== "completed") pills.push(`Pending: ${numberFmt.format(pending)}`);
-  if (metric === "never") pills.push(`Never Visited: ${numberFmt.format(rows.length)}`);
-  if (metric === "completion" || metric === "all" || metric === "planned") pills.push(`Completion: ${completion == null ? "—" : `${completion.toFixed(1)}%`}`);
+  const pills = [
+    { metric: "planned", label: "Planned Visits (Till Date)", value: numberFmt.format(planned) },
+    { metric: "completed", label: "Completed", value: numberFmt.format(completed) },
+    { metric: "pending", label: "Pending", value: numberFmt.format(pending) },
+    { metric: "completion", label: "Completion", value: completion == null ? "—" : `${completion.toFixed(1)}%` },
+  ];
+  if (metric === "never") {
+    pills.unshift({ metric: "never", label: "Never Visited", value: numberFmt.format(distinctNeverOutlets(officerRows)) });
+  }
   return pills;
 }
 
@@ -390,21 +419,31 @@ function renderDetails(currentRows) {
 
   let title = "";
   let rows = [];
+  let summaryOfficerRows = currentRows;
   let metric = state.activeView.metric || "all";
   if (state.activeView.type === "aggregate") {
     rows = aggregateRows(metric, currentRows);
     title = metricTitle(metric);
   } else {
-    const officer = state.data.officers.find(r => r.officerKey === state.activeView.officerKey);
+    const officer = currentRows.find(r => r.officerKey === state.activeView.officerKey);
     if (!officer) {
       target.innerHTML = `<div class="details-message">Officer not found in the current filtered set.</div>`;
       return;
     }
     rows = buildOfficerRows(officer, metric);
+    summaryOfficerRows = [officer];
     title = metric === "all" ? `${officer.officer} Performance` : `${officer.officer} — ${metricTitle(metric)}`;
   }
 
-  const summary = summaryPills(rows, metric);
+  const summary = summaryPills(summaryOfficerRows, metric);
+  const remarkOptions = [...new Set(rows.map(row => row.remarks || "No remarks"))]
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  if (state.detailRemark !== ALL_REMARKS && !remarkOptions.includes(state.detailRemark)) {
+    state.detailRemark = ALL_REMARKS;
+  }
+  const visibleRows = state.detailRemark === ALL_REMARKS
+    ? rows
+    : rows.filter(row => (row.remarks || "No remarks") === state.detailRemark);
   target.innerHTML = `
     <div class="details-header">
       <div class="details-title">
@@ -417,16 +456,25 @@ function renderDetails(currentRows) {
           <button type="button" id="details-close" class="btn secondary">Close details</button>
         </div>
       </div>
-      <div class="details-summary">${summary.map(s => `<span class="summary-pill">${esc(s)}</span>`).join("")}</div>
+      <div class="details-summary" aria-label="Choose detail section">${summary.map(item => `<button type="button" class="summary-pill${metric === item.metric ? " is-active" : ""}" data-detail-metric="${esc(item.metric)}" aria-pressed="${metric === item.metric ? "true" : "false"}">${esc(item.label)}: ${esc(item.value)}</button>`).join("")}</div>
     </div>
-    ${renderDetailTable(rows)}`;
+    ${renderDetailTable(visibleRows, remarkOptions)}`;
 
-  $("details-close").addEventListener("click", () => { state.activeView = null; render(); });
-  $("details-download").addEventListener("click", () => downloadDetailCsv(rows, title));
+  $("details-close").addEventListener("click", () => { state.activeView = null; state.detailRemark = ALL_REMARKS; render(); });
+  $("details-download").addEventListener("click", () => downloadDetailCsv(visibleRows, title));
+  target.querySelectorAll("[data-detail-metric]").forEach(button => button.addEventListener("click", () => {
+    state.activeView = { ...state.activeView, metric: button.dataset.detailMetric };
+    state.detailRemark = ALL_REMARKS;
+    render();
+  }));
+  $("detail-remarks-filter")?.addEventListener("change", event => {
+    state.detailRemark = event.target.value;
+    renderDetails(currentRows);
+  });
 }
 
-function renderDetailTable(rows) {
-  if (!rows.length) return `<div class="details-message">No records found for this drill-down in the current selection.</div>`;
+function renderDetailTable(rows, remarkOptions = []) {
+  if (!rows.length && !remarkOptions.length) return `<div class="details-message">No records found for this drill-down in the current selection.</div>`;
   const body = rows.map(r => {
     const flag = timeFlag(r.inTime, r.outTime);
     return `<tr>
@@ -455,8 +503,8 @@ function renderDetailTable(rows) {
       <th>Visit Duration</th>
       <th>Actual Visit Date</th>
       <th>Response ID</th>
-      <th>Remarks</th>
-    </tr></thead><tbody>${body}</tbody></table></div>`;
+      <th><label class="remarks-heading"><span>Remarks</span><select id="detail-remarks-filter" aria-label="Filter detail rows by remarks"><option value="${ALL_REMARKS}">All remarks</option>${remarkOptions.map(remark => `<option value="${esc(remark)}"${state.detailRemark === remark ? " selected" : ""}>${esc(remark)}</option>`).join("")}</select></label></th>
+    </tr></thead><tbody>${body || `<tr><td colspan="11" class="detail-empty-row">No records match this remark.</td></tr>`}</tbody></table></div>`;
 }
 
 function renderDefinitions() {
@@ -537,7 +585,8 @@ function renderOutletResults() {
   const box = $("outlet-results");
   if (!box) return;
   const term = state.outletSearch || "";
-  if (!term.trim()) { box.innerHTML = ""; return; }
+  if (state.selectedOutlet || !term.trim()) { box.innerHTML = ""; box.hidden = true; return; }
+  box.hidden = false;
   const hits = matchingOutlets(term);
   if (!hits.length) {
     box.innerHTML = `<div class="outlet-empty">No outlet matches “${esc(term)}”. Try a code such as D062 or part of the outlet name.</div>`;
@@ -572,19 +621,44 @@ function renderOutletCard() {
     </dl>`;
   $("outlet-card-close").addEventListener("click", () => {
     state.selectedOutlet = null;
-    renderOutletCard();
-    renderOutletResults();
+    state.outletSearch = "";
+    state.officerKey = ALL_OFFICERS;
+    state.activeView = null;
+    state.detailRemark = ALL_REMARKS;
+    $("outlet-search").value = "";
+    updateOfficerOptions();
+    render();
+    $("outlet-search")?.focus();
   });
 }
 function selectOutlet(code) {
+  const outlet = state.data.outlets?.[code];
+  if (!outlet) return;
   state.selectedOutlet = code;
-  renderOutletCard();
-  renderOutletResults();
-  $("outlet-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  state.outletSearch = `${outlet.outletName || "Outlet"} (${outlet.siteCode})`;
+  state.status = "All statuses";
+  state.officerKey = ALL_OFFICERS;
+  state.search = "";
+  state.activeView = null;
+  state.detailRemark = ALL_REMARKS;
+  $("outlet-search").value = state.outletSearch;
+  $("status-filter").value = state.status;
+  $("officer-search").value = "";
+  updateOfficerOptions();
+  render();
+  requestAnimationFrame(() => $("outlet-card")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+}
+
+function reconcileActiveView(rows) {
+  if (!state.activeView || state.activeView.type !== "officer") return;
+  if (rows.some(row => row.officerKey === state.activeView.officerKey)) return;
+  state.activeView = null;
+  state.detailRemark = ALL_REMARKS;
 }
 
 function render() {
   const rows = getOfficerRowsFiltered();
+  reconcileActiveView(rows);
   renderKpis(rows);
   renderTable(rows);
   renderDetails(rows);
@@ -676,14 +750,33 @@ async function init() {
     renderDefinitions();
     render();
 
-    $("status-filter").addEventListener("change", e => { state.status = e.target.value; updateOfficerOptions(); render(); });
-    $("officer-filter").addEventListener("change", e => { state.officerKey = e.target.value; render(); });
-    $("officer-search").addEventListener("input", e => { state.search = e.target.value; render(); });
+    $("status-filter").addEventListener("change", e => {
+      state.status = e.target.value;
+      state.activeView = null;
+      state.detailRemark = ALL_REMARKS;
+      updateOfficerOptions();
+      render();
+    });
+    $("officer-filter").addEventListener("change", e => {
+      state.officerKey = e.target.value;
+      state.detailRemark = ALL_REMARKS;
+      state.activeView = state.officerKey === ALL_OFFICERS
+        ? null
+        : { type: "officer", officerKey: state.officerKey, metric: "all" };
+      render();
+    });
+    $("officer-search").addEventListener("input", e => {
+      state.search = e.target.value;
+      state.activeView = null;
+      state.detailRemark = ALL_REMARKS;
+      render();
+    });
     $("reset-btn").addEventListener("click", () => {
       state.status = "All statuses";
       state.officerKey = ALL_OFFICERS;
       state.search = "";
       state.activeView = null;
+      state.detailRemark = ALL_REMARKS;
       state.outletSearch = "";
       state.selectedOutlet = null;
       $("status-filter").value = state.status;
@@ -698,7 +791,18 @@ async function init() {
       try { localStorage.setItem(THEME_KEY, next); } catch {}
       applyTheme(next);
     });
-    $("outlet-search").addEventListener("input", e => { state.outletSearch = e.target.value; renderOutletResults(); });
+    $("outlet-search").addEventListener("input", e => {
+      const nextSearch = e.target.value;
+      if (state.selectedOutlet && nextSearch !== state.outletSearch) {
+        state.selectedOutlet = null;
+        state.officerKey = ALL_OFFICERS;
+        state.activeView = null;
+        state.detailRemark = ALL_REMARKS;
+        updateOfficerOptions();
+      }
+      state.outletSearch = nextSearch;
+      render();
+    });
     document.querySelectorAll(".view-tab").forEach(btn => btn.addEventListener("click", () => {
       document.querySelectorAll(".view-tab").forEach(x => x.classList.remove("is-active"));
       btn.classList.add("is-active");
