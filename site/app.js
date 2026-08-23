@@ -605,7 +605,70 @@ function applyDataLoad(nextLoad) {
   render();
 }
 
+
+function bindDriveSetupModalFix() {
+  const modal = document.getElementById("drive-modal");
+  const openBtn = document.getElementById("drive-setup");
+  const closeBtn = document.getElementById("drive-modal-close");
+  const clearBtn = document.getElementById("drive-clear");
+  const saveBtn = document.getElementById("drive-save");
+
+  const hideModal = () => {
+    if (modal) modal.hidden = true;
+  };
+  const showModal = () => {
+    if (modal) modal.hidden = false;
+    try {
+      const c = window.ShwapnoDrive?.getConfig?.() || {};
+      const folder = window.ShwapnoDrive?.getFolder?.() || {};
+      const client = document.getElementById("google-client-id");
+      const key = document.getElementById("google-api-key");
+      const app = document.getElementById("google-app-id");
+      if (client) client.value = c.clientId || "";
+      if (key) key.value = c.apiKey || "";
+      if (app) app.value = c.appId || "";
+    } catch {}
+  };
+
+  openBtn?.addEventListener("click", showModal);
+  closeBtn?.addEventListener("click", hideModal);
+
+  saveBtn?.addEventListener("click", async () => {
+    try {
+      saveBtn.disabled = true;
+      const config = {
+        clientId: document.getElementById("google-client-id")?.value.trim() || "",
+        apiKey: document.getElementById("google-api-key")?.value.trim() || "",
+        appId: document.getElementById("google-app-id")?.value.trim() || ""
+      };
+      if (!window.ShwapnoDrive) throw new Error("Google Drive module is not loaded.");
+      window.ShwapnoDrive.saveConfig(config);
+      const result = await window.ShwapnoDrive.connect({
+        pickFolder: true,
+        title: "Select shared Shwapno dashboard data folder"
+      });
+      if (result?.folder) {
+        window.ShwapnoDrive.saveFolder(result.folder);
+        hideModal();
+        window.dispatchEvent(new CustomEvent("shwapno-drive-connected", {detail: result.folder}));
+        location.reload();
+      }
+    } catch (err) {
+      alert(err.message || "Google Drive setup failed.");
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  clearBtn?.addEventListener("click", () => {
+    window.ShwapnoDrive?.clearSetup?.();
+    hideModal();
+    location.reload();
+  });
+}
+
 async function init() {
+  bindDriveSetupModalFix();
   try {
     state.dataLoad = await loadDashboardData();
     state.data = state.dataLoad.data;
