@@ -11,71 +11,9 @@ catch { document.documentElement.dataset.theme = "dark"; }
 </script>
 <style>
 html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
-
-
-  /* v15 — Top-management command-center layout */
-  .topbar {
-    max-width: 1440px; margin: 18px auto 0; border-radius: 22px;
-    padding: 22px 24px !important; box-shadow: 0 10px 28px rgba(0,0,0,.22);
-  }
-  .topbar h1 { font-size: 28px !important; }
-  .topbar .subtitle { font-size: 14px; max-width: 980px; }
-  .topbar-actions { gap: 10px; }
-  .audit-layout { max-width: 1440px; margin: 0 auto; grid-template-columns: 1fr; gap: 18px; padding: 18px; }
-  .rail {
-    position: static; width: 100%; max-height: none; border-right: 0; border-radius: 22px;
-    padding: 18px; box-shadow: 0 10px 28px rgba(0,0,0,.18);
-  }
-  .rail-toggle { display: none !important; }
-  .rail-body { display: grid !important; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; padding-top: 0 !important; }
-  .rail-group {
-    background: var(--dark-2); border: 1px solid var(--line); border-radius: 18px;
-    padding: 16px !important; margin-bottom: 0 !important; border-bottom: 1px solid var(--line) !important;
-  }
-  .rail-group .btn { width: 100%; }
-  .audit-main {
-    padding: 0 0 40px !important; display: grid; gap: 18px;
-  }
-  .score-hero { border-radius: 18px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
-  .hero-cell { padding: 22px 24px; }
-  .hero-score .big { font-size: 64px; }
-  .hero-score .cap { font-size: 12px; }
-  .fact .n { font-size: 28px; }
-  .panel { border-radius: 18px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
-  .panel-head { padding: 14px 18px !important; }
-  .panel-head h2 { font-size: 18px !important; }
-  .panel-caption { font-size: 12px !important; }
-  .split { grid-template-columns: 1.1fr .9fr; }
-  .sort-chips { padding: 11px 18px; }
-  .drill { border-radius: 14px; }
-  .exports { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .exports .btn { width: 100%; }
-  .source-box .btn + .btn { margin-top: 8px; }
-  .rail-heading { font-size: 11px; letter-spacing: .12em; margin-bottom: 10px; }
-  .definitions-text { font-size: 12.5px; line-height: 1.7; }
-  .threshold-outlet-panel .table-wrap { max-height: 74vh; }
-  html[data-theme="light"] .topbar,
-  html[data-theme="light"] .rail,
-  html[data-theme="light"] .rail-group,
-  html[data-theme="light"] .panel,
-  html[data-theme="light"] .score-hero { box-shadow: 0 10px 24px rgba(24,58,78,.10) !important; }
-  @media (max-width: 1180px) {
-    .rail-body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .split { grid-template-columns: 1fr; }
-  }
-  @media (max-width: 900px) {
-    .topbar { margin: 12px; border-radius: 18px; }
-    .audit-layout { padding: 12px; }
-    .rail-body { grid-template-columns: 1fr; }
-    .exports { grid-template-columns: 1fr; }
-    .topbar h1 { font-size: 24px !important; }
-    .topbar-actions { width: 100%; align-items: stretch; }
-    .topbar-actions .btn, .topbar-actions .link-btn { width: 100%; justify-content: center; }
-  }
-
 </style>
 <script src="drive-owner-mode.js?v=owner-device-v1"></script>
-<link rel="stylesheet" href="styles.css?v=visit-audit-private-source-v14" />
+<link rel="stylesheet" href="styles.css?v=drive-modal-hidden-v2" />
 <style>
   body { background: var(--dark-1); }
   .audit-layout { display: grid; grid-template-columns: 288px minmax(0,1fr); align-items: start; }
@@ -236,6 +174,148 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
     .hero-facts { grid-template-columns: repeat(2,minmax(0,1fr)); }
     .share-apps { grid-template-columns: 1fr; }
     .split { grid-template-columns: minmax(0,1fr); }
+  }
+
+  /* v16 — Audit-only foundations.  The Visit page now has its own management
+     stylesheet, so Audit explicitly owns its structural classes and tables. */
+  :root {
+    --dark-0: var(--bg);
+    --dark-1: var(--bg);
+    --dark-2: var(--surface);
+    --dark-3: var(--surface-2);
+    --dark-4: var(--surface-3);
+    --line: var(--border);
+    --blue: var(--accent-2);
+    --blue-2: var(--accent-2);
+    --white-text: var(--text);
+    --muted-text: var(--muted);
+  }
+  body { background: var(--dark-1); color: var(--white-text); }
+  .topbar {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 24px; flex-wrap: wrap; background: var(--dark-2); color: var(--white-text);
+    border: 1px solid var(--line);
+  }
+  .topbar h1 { margin: 0; color: var(--white-text); }
+  .topbar .subtitle { margin: 6px 0 0; color: var(--muted-text); }
+  .topbar-actions { display: flex; align-items: center; gap: 10px; }
+  .link-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    min-height: 44px; padding: 0 16px; border-radius: 14px; text-decoration: none;
+    background: var(--dark-3); color: var(--blue-2); border: 1px solid var(--blue);
+    font-size: 12px; font-weight: 700;
+  }
+  .link-btn::after { content: "\2197"; font-size: 13px; }
+  .link-btn:hover { background: var(--dark-4); color: var(--white-text); }
+  .rail { background: var(--dark-2); border: 1px solid var(--line); color: var(--white-text); }
+  .rail-group:last-child { margin-bottom: 0 !important; }
+  .rail-heading {
+    margin: 0 0 12px; color: var(--blue-2); font-weight: 800;
+    text-transform: uppercase;
+  }
+  .rail-field { display: grid; gap: 7px; margin-bottom: 12px; min-width: 0; }
+  .rail-field > span { color: var(--muted-text); font-size: 12px; font-weight: 700; }
+  .rail-field select, .rail-field input {
+    width: 100%; min-width: 0; min-height: 42px; height: 42px;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--dark-3); color: var(--white-text); padding: 0 12px;
+  }
+  .rail-field select:focus, .rail-field input:focus {
+    border-color: var(--blue); box-shadow: 0 0 0 3px rgba(14,149,184,.18);
+  }
+  .definitions-text { color: var(--muted-text); }
+  .definitions-text b { color: var(--white-text); }
+  .panel {
+    min-width: 0; overflow: hidden; background: var(--dark-2);
+    border: 1px solid var(--line); color: var(--white-text);
+  }
+  .panel-head {
+    display: flex; justify-content: space-between; align-items: center; gap: 16px;
+    flex-wrap: wrap; margin: 0; background: var(--dark-3); border-bottom: 1px solid var(--line);
+  }
+  .panel-head h2 { margin: 0; color: var(--white-text); }
+  .panel-caption { margin: 0; color: var(--muted-text); }
+  .table-wrap { width: 100%; overflow: auto; }
+  .panel .table-wrap { max-height: 62vh; }
+  table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 11.5px; }
+  th {
+    position: sticky; top: 0; z-index: 2; padding: 10px;
+    background: var(--dark-3); color: var(--white-text); border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle;
+  }
+  td {
+    padding: 9px 10px; color: var(--white-text); border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line); vertical-align: middle;
+  }
+  tbody tr:nth-child(odd) { background: var(--dark-2); }
+  tbody tr:nth-child(even) { background: var(--dark-3); }
+  tbody tr:hover { background: var(--dark-4); }
+  .drive-modal-backdrop[hidden] { display: none !important; }
+
+  /* v16 — Keep the management controls above the dashboard.  This block must
+     remain after the base Audit styles so the old 288px sidebar cannot squeeze
+     the four control cards into narrow columns. */
+  .topbar {
+    max-width: 1440px; margin: 18px auto 0; border-radius: 22px;
+    padding: 22px 24px !important; box-shadow: 0 10px 28px rgba(0,0,0,.22);
+  }
+  .topbar h1 { font-size: 28px !important; }
+  .topbar .subtitle { font-size: 14px; max-width: 980px; }
+  .topbar-actions { gap: 10px; }
+  .audit-layout {
+    max-width: 1440px; margin: 0 auto; grid-template-columns: minmax(0,1fr);
+    gap: 18px; padding: 18px; align-items: start;
+  }
+  .rail {
+    position: static; width: 100%; max-height: none; border-right: 0; border-radius: 22px;
+    padding: 18px; box-shadow: 0 10px 28px rgba(0,0,0,.18);
+  }
+  .rail-toggle { display: none !important; }
+  .rail-body {
+    display: grid !important; grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px; padding-top: 0 !important;
+  }
+  .rail-group {
+    min-width: 0; background: var(--dark-2); border: 1px solid var(--line); border-radius: 18px;
+    padding: 16px !important; margin-bottom: 0 !important; border-bottom: 1px solid var(--line) !important;
+  }
+  .rail-group .btn { width: 100%; }
+  .audit-main { padding: 0 0 40px !important; display: grid; gap: 18px; }
+  .score-hero { border-radius: 18px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+  .hero-cell { padding: 22px 24px; }
+  .hero-score .big { font-size: 64px; }
+  .hero-score .cap { font-size: 12px; }
+  .fact .n { font-size: 28px; }
+  .panel { border-radius: 18px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+  .panel-head { padding: 14px 18px !important; }
+  .panel-head h2 { font-size: 18px !important; }
+  .panel-caption { font-size: 12px !important; }
+  .split { grid-template-columns: 1.1fr .9fr; }
+  .sort-chips { padding: 11px 18px; }
+  .drill { border-radius: 14px; }
+  .exports { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .exports .btn { width: 100%; }
+  .source-box .btn + .btn { margin-top: 8px; }
+  .rail-heading { font-size: 11px; letter-spacing: .12em; margin-bottom: 10px; }
+  .definitions-text { font-size: 12.5px; line-height: 1.7; }
+  .threshold-outlet-panel .table-wrap { max-height: 74vh; }
+  html[data-theme="light"] .topbar,
+  html[data-theme="light"] .rail,
+  html[data-theme="light"] .rail-group,
+  html[data-theme="light"] .panel,
+  html[data-theme="light"] .score-hero { box-shadow: 0 10px 24px rgba(24,58,78,.10) !important; }
+  @media (max-width: 1180px) {
+    .rail-body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .split { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 900px) {
+    .topbar { margin: 12px; border-radius: 18px; }
+    .audit-layout { padding: 12px; }
+    .rail-body { grid-template-columns: minmax(0,1fr); }
+    .exports { grid-template-columns: minmax(0,1fr); }
+    .topbar h1 { font-size: 24px !important; }
+    .topbar-actions { width: 100%; align-items: stretch; }
+    .topbar-actions .btn, .topbar-actions .link-btn { width: 100%; justify-content: center; }
   }
 </style>
 </head>
