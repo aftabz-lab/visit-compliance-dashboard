@@ -415,6 +415,19 @@ function summaryPills(officerRows, metric) {
   return pills;
 }
 
+function detailRemarkOptions(rows) {
+  return [...new Set([
+    ...rows.map(row => row.remarks || "No remarks"),
+    NEVER_VISITED_REMARK,
+  ])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+}
+
+function rowsForDetailRemark(rows, neverVisitedRows, remark) {
+  if (remark === ALL_REMARKS) return rows;
+  if (remark === NEVER_VISITED_REMARK) return neverVisitedRows;
+  return rows.filter(row => (row.remarks || "No remarks") === remark);
+}
+
 function renderDetails(currentRows) {
   const target = $("details-section");
   if (!state.activeView) {
@@ -444,24 +457,19 @@ function renderDetails(currentRows) {
   }
 
   const summary = summaryPills(summaryOfficerRows, metric);
-  const remarkOptions = [...new Set([
-    ...rows.map(row => row.remarks || "No remarks"),
-    NEVER_VISITED_REMARK,
-  ])]
-    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  const remarkOptions = detailRemarkOptions(rows);
   if (state.detailRemark !== ALL_REMARKS && !remarkOptions.includes(state.detailRemark)) {
     state.detailRemark = ALL_REMARKS;
   }
-  const visibleRows = state.detailRemark === ALL_REMARKS
-    ? rows
-    : state.detailRemark === NEVER_VISITED_REMARK
-      ? neverVisitedRows
-      : rows.filter(row => (row.remarks || "No remarks") === state.detailRemark);
+  const visibleRows = rowsForDetailRemark(rows, neverVisitedRows, state.detailRemark);
+  const visibleTitle = state.detailRemark === NEVER_VISITED_REMARK && metric !== "never"
+    ? `${title} — Never Visited Outlets`
+    : title;
   target.innerHTML = `
     <div class="details-header">
       <div class="details-title">
         <div>
-          <h2>${esc(title)}</h2>
+          <h2>${esc(visibleTitle)}</h2>
           <p class="panel-caption">Outlet-level drill-down with attendance timing. Missing punches are highlighted in red; very short visits are highlighted in amber.</p>
         </div>
         <div class="details-actions">
@@ -474,7 +482,7 @@ function renderDetails(currentRows) {
     ${renderDetailTable(visibleRows, remarkOptions)}`;
 
   $("details-close").addEventListener("click", () => { state.activeView = null; state.detailRemark = ALL_REMARKS; render(); });
-  $("details-download").addEventListener("click", () => downloadDetailCsv(visibleRows, title));
+  $("details-download").addEventListener("click", () => downloadDetailCsv(visibleRows, visibleTitle));
   target.querySelectorAll("[data-detail-metric]").forEach(button => button.addEventListener("click", () => {
     state.activeView = { ...state.activeView, metric: button.dataset.detailMetric };
     state.detailRemark = ALL_REMARKS;
@@ -482,12 +490,7 @@ function renderDetails(currentRows) {
   }));
   $("detail-remarks-filter")?.addEventListener("change", event => {
     state.detailRemark = event.target.value;
-    if (state.detailRemark === NEVER_VISITED_REMARK) {
-      state.activeView = { ...state.activeView, metric: "never" };
-      render();
-    } else {
-      renderDetails(currentRows);
-    }
+    renderDetails(currentRows);
   });
 }
 
@@ -679,10 +682,21 @@ function activeOfficerRow(rows) {
   return rows.find(row => row.officerKey === state.activeView.officerKey) || null;
 }
 
+function clearOfficerSelection() {
+  state.officerKey = ALL_OFFICERS;
+  state.activeView = null;
+  state.detailRemark = ALL_REMARKS;
+  const officerFilter = $("officer-filter");
+  if (officerFilter) officerFilter.value = ALL_OFFICERS;
+  render();
+}
+
 function render() {
   const rows = getOfficerRowsFiltered();
   reconcileActiveView(rows);
   const activeOfficer = activeOfficerRow(rows);
+  const clearOfficer = $("clear-officer-selection");
+  if (clearOfficer) clearOfficer.hidden = !activeOfficer && state.officerKey === ALL_OFFICERS;
   renderKpis(activeOfficer ? [activeOfficer] : rows, activeOfficer?.officerKey || null);
   renderTable(rows);
   renderDetails(rows);
@@ -810,6 +824,7 @@ async function init() {
       render();
     });
     $("download-btn").addEventListener("click", downloadCsv);
+    $("clear-officer-selection").addEventListener("click", clearOfficerSelection);
     $("theme-toggle").addEventListener("click", () => {
       const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
       try { localStorage.setItem(THEME_KEY, next); } catch {}

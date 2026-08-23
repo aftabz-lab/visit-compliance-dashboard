@@ -37,15 +37,47 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
   .hero-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px,1fr)); gap: 16px; align-content: center; }
   .fact .n { font-size: 24px; font-weight: 800; color: var(--white-text); }
   .fact .l { font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted-text); margin-top: 3px; }
-  .band-link {
-    appearance: none; border: 0; background: transparent; padding: 0; margin: 0;
-    color: var(--white-text); font-family: inherit; cursor: pointer;
-    text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px;
-    text-decoration-color: rgba(91,182,226,.72);
+  .management-actions {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px;
   }
-  .band-link:hover, .band-link:focus-visible { color: var(--blue-2); text-decoration-color: var(--blue-2); }
-  .band-link:focus-visible { outline: 2px solid var(--blue-2); outline-offset: 4px; border-radius: 3px; }
-  .band-link.active { color: var(--blue-2); text-decoration-thickness: 2px; }
+  .management-action {
+    appearance: none; width: 100%; min-width: 0; display: grid;
+    grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 18px;
+    padding: 20px 22px; text-align: left; font-family: inherit; cursor: pointer;
+    color: var(--white-text); background: linear-gradient(135deg, var(--dark-2), var(--dark-3));
+    border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 8px 24px rgba(0,0,0,.14);
+  }
+  .management-action:hover, .management-action:focus-visible {
+    border-color: var(--blue); transform: translateY(-1px); box-shadow: 0 12px 28px rgba(0,0,0,.2);
+  }
+  .management-action:focus-visible { outline: 3px solid rgba(45,143,194,.28); outline-offset: 3px; }
+  .management-action-copy { min-width: 0; display: grid; gap: 7px; }
+  .management-action-title { color: var(--blue-2); font-size: 15px; font-weight: 800; }
+  .management-action-note { color: var(--muted-text); font-size: 11.5px; line-height: 1.5; }
+  .management-action-count { min-width: 112px; text-align: right; }
+  .management-action-count strong { display: block; color: var(--white-text); font-size: 34px; line-height: 1; font-variant-numeric: tabular-nums; }
+  .management-action-count span { display: block; margin-top: 6px; color: var(--muted-text); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+  .management-view-head {
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+    flex-wrap: wrap; padding: 18px 20px; background: var(--dark-3); border-bottom: 1px solid var(--line);
+  }
+  .management-view-head h2 { margin: 0; color: var(--white-text); font-size: 21px; }
+  .management-view-head p { margin: 7px 0 0; color: var(--muted-text); font-size: 12px; line-height: 1.55; }
+  .management-back {
+    min-height: 38px; padding: 0 14px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--dark-2); color: var(--white-text); font: inherit; font-size: 11.5px; font-weight: 800; cursor: pointer;
+  }
+  .management-back:hover, .management-back:focus-visible { border-color: var(--blue); color: var(--blue-2); }
+  .management-category-row { cursor: pointer; }
+  .management-category-row:hover td, .management-category-row.on td { background: rgba(45,143,194,.16); }
+  .management-category-link {
+    border: 0; padding: 0; background: transparent; color: var(--blue-2);
+    font: inherit; font-weight: 800; text-align: left; text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+  }
+  .management-detail-table { min-width: 1320px; }
+  .management-summary-table { min-width: 820px; }
+  .management-kicker { color: var(--blue-2); font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+  .management-empty { padding: 36px 22px; color: var(--muted-text); text-align: center; }
   .threshold-outlet-panel .table-wrap { max-height: calc(100vh - 185px); }
   .threshold-outlet-table { table-layout: fixed; }
   .threshold-outlet-table th:nth-child(1), .threshold-outlet-table td:nth-child(1) { width: 14%; }
@@ -143,9 +175,12 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
   html[data-theme="light"] .score-hero { background: #c5d3dc !important; border-color: #c5d3dc !important; }
   html[data-theme="light"] .hero-cell, html[data-theme="light"] .panel { background: #ffffff !important; }
   html[data-theme="light"] .fact .n, html[data-theme="light"] .bar-row .lbl, html[data-theme="light"] .panel-head h2 { color: #102a3a !important; }
-  html[data-theme="light"] .band-link { color: #102a3a !important; text-decoration-color: #5f9dbb !important; }
-  html[data-theme="light"] .band-link:hover, html[data-theme="light"] .band-link:focus-visible,
-  html[data-theme="light"] .band-link.active { color: #0d6f9f !important; text-decoration-color: #0d6f9f !important; }
+  html[data-theme="light"] .management-action { background: linear-gradient(135deg, #ffffff, #edf4f7) !important; border-color: #c5d3dc !important; box-shadow: 0 10px 24px rgba(24,58,78,.10) !important; }
+  html[data-theme="light"] .management-action:hover, html[data-theme="light"] .management-action:focus-visible { border-color: #0d6f9f !important; }
+  html[data-theme="light"] .management-action-count strong, html[data-theme="light"] .management-view-head h2 { color: #102a3a !important; }
+  html[data-theme="light"] .management-view-head { background: #f0f5f8 !important; border-color: #c5d3dc !important; }
+  html[data-theme="light"] .management-back { background: #ffffff !important; color: #17384a !important; border-color: #b9cbd5 !important; }
+  html[data-theme="light"] .management-category-row:hover td, html[data-theme="light"] .management-category-row.on td { background: #d8edf7 !important; }
   html[data-theme="light"] .outlet-detail-link { color: #0d6f9f !important; }
   html[data-theme="light"] .outlet-detail-link:hover, html[data-theme="light"] .outlet-detail-link:focus-visible { color: #064f72 !important; }
   html[data-theme="light"] .share-file-note b { color: #102a3a !important; }
@@ -169,11 +204,14 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
     .audit-main { padding: 14px 12px 40px; }
     .rail { width: 100%; }
     .score-hero { grid-template-columns: 1fr; }
+    .management-actions { grid-template-columns: 1fr; }
   }
   @media (max-width: 520px) {
     .hero-facts { grid-template-columns: repeat(2,minmax(0,1fr)); }
     .share-apps { grid-template-columns: 1fr; }
     .split { grid-template-columns: minmax(0,1fr); }
+    .management-action { grid-template-columns: minmax(0,1fr); }
+    .management-action-count { text-align: left; }
   }
 
   /* v16 — Audit-only foundations.  The Visit page now has its own management
@@ -214,7 +252,7 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
     text-transform: uppercase;
   }
   .rail-field { display: grid; gap: 7px; margin-bottom: 12px; min-width: 0; }
-  .rail-field > span { color: var(--muted-text); font-size: 12px; font-weight: 700; }
+  .rail-field > span, .rail-field > label { color: var(--muted-text); font-size: 12px; font-weight: 700; }
   .rail-field select, .rail-field input {
     width: 100%; min-width: 0; min-height: 42px; height: 42px;
     border: 1px solid var(--line); border-radius: 10px;
@@ -251,6 +289,50 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
   tbody tr:nth-child(even) { background: var(--dark-3); }
   tbody tr:hover { background: var(--dark-4); }
   .drive-modal-backdrop[hidden] { display: none !important; }
+  .outlet-suggestions {
+    display: grid; gap: 5px; max-height: 230px; overflow: auto; padding: 6px;
+    background: var(--dark-3); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 10px 24px rgba(0,0,0,.2); z-index: 20;
+  }
+  .outlet-suggestions[hidden] { display: none !important; }
+  .outlet-suggestion {
+    display: grid; gap: 3px; width: 100%; padding: 9px 10px; text-align: left;
+    border: 1px solid var(--line); border-radius: 9px; background: var(--dark-2);
+    color: var(--white-text); cursor: pointer;
+  }
+  .outlet-suggestion:hover, .outlet-suggestion:focus-visible { border-color: var(--blue); background: var(--dark-4); }
+  .outlet-suggestion b { color: var(--white-text); font-size: 12px; }
+  .outlet-suggestion span, .outlet-suggestion-empty { color: var(--muted-text); font-size: 10.5px; line-height: 1.4; }
+  .outlet-suggestion-empty { padding: 10px; }
+  .availability-click-row { cursor: pointer; }
+  .availability-click-row:hover td, .availability-click-row:focus-visible td { background: rgba(45,143,194,.16); }
+  .availability-status-link {
+    border: 0; padding: 0; background: transparent; color: var(--blue-2);
+    font: inherit; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+  }
+  .availability-modal-backdrop {
+    position: fixed; inset: 0; z-index: 1300; display: grid; place-items: center;
+    padding: 24px; background: rgba(4,8,12,.7);
+  }
+  .availability-modal-backdrop[hidden] { display: none !important; }
+  .availability-modal {
+    width: min(1180px, 100%); max-height: min(88vh, 820px); display: grid;
+    grid-template-rows: auto minmax(0,1fr); overflow: hidden; background: var(--dark-2);
+    color: var(--white-text); border: 1px solid var(--line); border-radius: 20px;
+    box-shadow: 0 22px 60px rgba(0,0,0,.42);
+  }
+  .availability-modal-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+    padding: 18px 20px; background: var(--dark-3); border-bottom: 1px solid var(--line);
+  }
+  .availability-modal-head h2 { margin: 0; font-size: 22px; color: var(--white-text); }
+  .availability-modal-head p { margin: 6px 0 0; color: var(--muted-text); font-size: 12px; }
+  .availability-modal-close {
+    border: 1px solid var(--line); border-radius: 10px; background: var(--dark-2);
+    color: var(--white-text); min-width: 40px; min-height: 40px; cursor: pointer; font-size: 24px;
+  }
+  .availability-modal .table-wrap { max-height: none; overflow: auto; }
+  .availability-modal table { min-width: 980px; }
 
   /* v16 — Keep the management controls above the dashboard.  This block must
      remain after the base Audit styles so the old 288px sidebar cannot squeeze
@@ -350,19 +432,20 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
       <section class="rail-group">
         <h2 class="rail-heading">Filter</h2>
         <label class="rail-field"><span>Category</span><select id="f-cat"></select></label>
-        <label class="rail-field"><span>Outlet code or name</span><input id="f-site" type="search" placeholder="e.g. F327 or Gulshan" autocomplete="off" /></label>
+        <div class="rail-field outlet-filter-field"><label for="f-site">Outlet code or name</label><input id="f-site" type="search" placeholder="e.g. F327 or Gulshan" autocomplete="off" aria-autocomplete="list" aria-controls="f-site-suggestions" aria-expanded="false" /><div id="f-site-suggestions" class="outlet-suggestions" role="listbox" aria-label="Matching outlets" hidden></div></div>
         <label class="rail-field"><span>Show outlets</span><select id="f-rank">
           <option value="all">All outlets</option>
-          <option value="10">Below 10%</option>
-          <option value="20">Below 20%</option>
-          <option value="30">Below 30%</option>
-          <option value="40">Below 40%</option>
-          <option value="50">Below 50%</option>
-          <option value="60">Below 60%</option>
-          <option value="70">Below 70%</option>
-          <option value="80">Below 80%</option>
-          <option value="90">Below 90%</option>
-          <option value="100">Below 100%</option>
+          <option value="100plus">100% &amp; above</option>
+          <option value="90-99">90% to 99%</option>
+          <option value="80-89">80% to 89%</option>
+          <option value="70-79">70% to 79%</option>
+          <option value="60-69">60% to 69%</option>
+          <option value="50-59">50% to 59%</option>
+          <option value="40-49">40% to 49%</option>
+          <option value="30-39">30% to 39%</option>
+          <option value="20-29">20% to 29%</option>
+          <option value="10-19">10% to 19%</option>
+          <option value="0-9">0% to 9%</option>
         </select></label>
         <button id="reset" class="btn secondary" type="button" style="width:100%">Reset filters</button>
       </section>
@@ -417,6 +500,19 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
   </section>
 </div>
 
+<div id="availability-modal" class="availability-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="availability-modal-title" hidden>
+  <section class="availability-modal">
+    <div class="availability-modal-head">
+      <div><h2 id="availability-modal-title">Availability outlet details</h2><p id="availability-modal-caption"></p></div>
+      <button id="availability-modal-close" class="availability-modal-close" type="button" aria-label="Close availability details">×</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Outlet Code</th><th>Outlet Name</th><th>Zonal</th><th>Regional (RHO)</th><th class="num">Meets Minimum</th><th class="num">Has Stock</th><th class="num">Eligible SKUs</th><th class="num">Availability %</th></tr></thead>
+      <tbody id="availability-modal-body"></tbody>
+    </table></div>
+  </section>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="attendance-source.js?v=visit-attendance-v2-time-fix"></script>
@@ -425,7 +521,8 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", questionCat: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", attendanceEntries: [], attendanceSig: "", attendanceFiles: [], responseSummaries: [], avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: "", rank: "all", latestRowsRef: null, latestResponseKeys: null };
+const state = { rows: [], file: "", sig: "", questionCat: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", attendanceEntries: [], attendanceSig: "", attendanceFiles: [], responseSummaries: [], avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: "", siteQuery: "", rank: "all", managementView: "", managementCategory: "", latestRowsRef: null, latestResponseKeys: null };
+const ATTENTION_SCORE = 70; // existing management attention rule; audit score calculations are unchanged
 const Drive = window.ShwapnoDrive;
 const Attendance = window.ShwapnoAttendance;
 const isDriveOwner = () => Boolean(window.DashboardDriveOwner?.isOwner?.());
@@ -1462,6 +1559,57 @@ function allOutletAvailability() {
   return outletCount ? { outletCount, values } : null;
 }
 
+function availabilityOutletRows(label) {
+  const selected = String(state.site || "").trim().toUpperCase();
+  const rows = [];
+  for (const [rawCode, entry] of state.avail.entries()) {
+    const code = String(rawCode || "").trim().toUpperCase();
+    if (selected && code !== selected) continue;
+    const cell = entry?.[label];
+    if (!cell) continue;
+    const detail = meta(code);
+    rows.push({
+      code,
+      name: detail.name || "",
+      zonal: detail.zonal || "",
+      rho: detail.rho || "",
+      ok: Number(cell.ok || 0),
+      actual: Number(cell.actual || 0),
+      total: Number(cell.total || 0),
+      pct: Number(cell.pct || 0),
+    });
+  }
+  return rows.sort((a, b) => a.pct - b.pct || a.code.localeCompare(b.code, undefined, { sensitivity: "base" }));
+}
+
+function closeAvailabilityModal() {
+  const modal = $("availability-modal");
+  if (modal) modal.hidden = true;
+}
+
+function openAvailabilityModal(label) {
+  const rows = availabilityOutletRows(label);
+  $("availability-modal-title").textContent = `${label} — Outlet details`;
+  $("availability-modal-caption").textContent = state.site
+    ? `${rows.length.toLocaleString()} selected outlet · stock meeting the minimum quantity` 
+    : `${rows.length.toLocaleString()} outlets · weakest availability first · stock meeting the minimum quantity`;
+  $("availability-modal-body").innerHTML = rows.length
+    ? rows.map((row, index) => `<tr><td>${index + 1}</td><td><b>${esc(row.code)}</b></td><td>${esc(row.name || "—")}</td><td>${esc(row.zonal || "—")}</td><td>${esc(row.rho || "—")}</td><td class="num">${row.ok.toLocaleString()}</td><td class="num">${row.actual.toLocaleString()}</td><td class="num">${row.total.toLocaleString()}</td><td class="num">${scoreCell(row.pct)}</td></tr>`).join("")
+    : `<tr><td colspan="9" class="empty-state">No outlet availability records were found for ${esc(label)}.</td></tr>`;
+  $("availability-modal").hidden = false;
+  $("availability-modal-close").focus();
+}
+
+function wireAvailabilityStatusRows() {
+  document.querySelectorAll("[data-availability-label]").forEach(row => {
+    const open = () => openAvailabilityModal(row.dataset.availabilityLabel);
+    row.addEventListener("click", open);
+    row.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
+    });
+  });
+}
+
 /* ── aggregation ─────────────────────────────────────────────────────── */
 // v13 scoring rule: one audit per outlet. Determine the newest Response ID for
 // every Site Code first, then keep answer-level scoring exactly as before inside
@@ -1533,6 +1681,96 @@ function aggregate() {
     if (day) add(out.days, day);
   }
   return out;
+}
+
+// Builds management drill-down data from the same latest-response rows used by
+// aggregate().  No audit score is recalculated with a different denominator.
+function latestOutletBreakdowns() {
+  const num = value => {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const latestKeys = latestResponseKeys();
+  const outlets = new Map();
+  for (const row of state.rows) {
+    const code = String(row["Site Code"] || "").trim();
+    const responseId = String(row["Response ID"] ?? "").trim();
+    if (!code || !latestKeys.has(`${code}\u0000${responseId}`)) continue;
+    const category = row["Question Category"] || "Uncategorised";
+    if (state.cat && category !== state.cat) continue;
+    const max = num(row["Question Max Score"]), got = num(row["Answer Score"]);
+    if (max === null || max <= 0 || got === null) continue;
+    const record = outlets.get(code) || {
+      code, responseId, date: row["Date"], got: 0, max: 0, cats: new Map(),
+    };
+    record.responseId = responseId || record.responseId;
+    record.date = row["Date"] || record.date;
+    record.got += got;
+    record.max += max;
+    const categoryScore = record.cats.get(category) || [0, 0];
+    categoryScore[0] += got;
+    categoryScore[1] += max;
+    record.cats.set(category, categoryScore);
+    outlets.set(code, record);
+  }
+  return outlets;
+}
+
+function formatAuditDate(value) {
+  if (value == null || value === "") return "—";
+  const text = String(value).trim();
+  const numeric = Number(text);
+  let date = null;
+  if (Number.isFinite(numeric) && numeric > 20000 && numeric < 100000) {
+    date = new Date(Date.UTC(1899, 11, 30) + numeric * 86400000);
+  } else {
+    const parsed = Date.parse(text);
+    if (Number.isFinite(parsed)) date = new Date(parsed);
+  }
+  if (!date || Number.isNaN(date.getTime())) return text;
+  return date.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Dhaka" });
+}
+
+function weakestOutletCategory(record) {
+  if (!record?.cats?.size) return { name: "—", got: 0, max: 0, score: 0 };
+  const [name, [got, max]] = [...record.cats.entries()].sort((a, b) =>
+    pct(a[1][0], a[1][1]) - pct(b[1][0], b[1][1]) || String(a[0]).localeCompare(String(b[0])))[0];
+  return { name, got, max, score: pct(got, max) };
+}
+
+function buildManagementData(a, cats, overall) {
+  const breakdowns = latestOutletBreakdowns();
+  const weakCategories = cats.filter(([, [got, max]]) => pct(got, max) < overall - 0.000001);
+  // With only one filtered category, its score equals the overall score. Keep it
+  // available so the button still opens a useful ranked outlet view.
+  if (!weakCategories.length && cats.length) weakCategories.push(cats[0]);
+  const weakNames = new Set(weakCategories.map(([name]) => name));
+  const weakScores = new Map(weakCategories.map(([name, [got, max]]) => [name, pct(got, max)]));
+  const affectedOutlets = new Set();
+  breakdowns.forEach(record => {
+    record.cats.forEach(([got, max], category) => {
+      if (weakNames.has(category) && pct(got, max) < Number(weakScores.get(category))) affectedOutlets.add(record.code);
+    });
+  });
+
+  const attentionOutlets = [...a.sites.entries()]
+    .filter(([, [got, max]]) => pct(got, max) < ATTENTION_SCORE)
+    .sort((left, right) => pct(left[1][0], left[1][1]) - pct(right[1][0], right[1][1]) || String(left[0]).localeCompare(String(right[0])));
+
+  const validSelected = weakNames.has(state.managementCategory);
+  const selectedCategory = validSelected ? state.managementCategory : (weakCategories[0]?.[0] || "");
+  if (selectedCategory !== state.managementCategory) state.managementCategory = selectedCategory;
+  const selectedNetwork = weakCategories.find(([name]) => name === selectedCategory);
+  const selectedNetworkScore = selectedNetwork ? pct(selectedNetwork[1][0], selectedNetwork[1][1]) : 0;
+  const categoryOutlets = [...breakdowns.values()].filter(record => record.cats.has(selectedCategory)).map(record => {
+    const [got, max] = record.cats.get(selectedCategory);
+    return { record, got, max, score: pct(got, max), affected: pct(got, max) < selectedNetworkScore };
+  }).sort((left, right) => left.score - right.score || String(left.record.code).localeCompare(String(right.record.code)));
+
+  return {
+    breakdowns, weakCategories, affectedOutlets, attentionOutlets,
+    selectedCategory, selectedNetworkScore, categoryOutlets,
+  };
 }
 
 function barRows(entries, limit, options = {}) {
@@ -1656,6 +1894,188 @@ function refreshCategoryOptions() {
   sel.value = keep;
 }
 
+function scoreBandFromRank(rank) {
+  if (!rank || rank === "all") return null;
+  if (rank === "100plus") return { min: 100, max: null, label: "100% & above", slug: "100-and-above" };
+  const range = String(rank).match(/^(\d+)-(\d+)$/);
+  if (!range) return null;
+  const min = Number(range[1]), shownMax = Number(range[2]);
+  return { min, max: shownMax + 1, label: `${min}% to ${shownMax}%`, slug: `${min}-to-${shownMax}` };
+}
+
+function scoreMatchesBand(score, band) {
+  if (!band) return true;
+  if (band.min != null && score < band.min) return false;
+  if (band.max != null && score >= band.max) return false;
+  return true;
+}
+
+function auditOutletChoices() {
+  const codes = new Set();
+  state.rows.forEach(row => {
+    const code = String(row["Site Code"] || "").trim();
+    if (code) codes.add(code.toUpperCase());
+  });
+  state.dir.forEach((_, code) => { if (code) codes.add(String(code).trim().toUpperCase()); });
+  return [...codes].map(code => ({ code, ...meta(code) }));
+}
+
+function matchingAuditOutlets(query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return [];
+  return auditOutletChoices().filter(outlet =>
+    outlet.code.toLowerCase().includes(q) || String(outlet.name || "").toLowerCase().includes(q))
+    .sort((a, b) => {
+      const rank = outlet => outlet.code.toLowerCase() === q ? 0
+        : outlet.code.toLowerCase().startsWith(q) ? 1
+          : String(outlet.name || "").toLowerCase().startsWith(q) ? 2 : 3;
+      return rank(a) - rank(b) || String(a.name || a.code).localeCompare(String(b.name || b.code), undefined, { sensitivity: "base" });
+    });
+}
+
+function outletInputLabel(code) {
+  const detail = meta(code);
+  return detail.name ? `${String(code).toUpperCase()} · ${detail.name}` : String(code).toUpperCase();
+}
+
+function hideOutletSuggestions() {
+  const box = $("f-site-suggestions");
+  if (!box) return;
+  box.hidden = true;
+  box.innerHTML = "";
+  $("f-site")?.setAttribute("aria-expanded", "false");
+}
+
+function selectAuditOutlet(code) {
+  state.site = String(code || "").trim().toUpperCase();
+  state.siteQuery = outletInputLabel(state.site);
+  state.rank = "all";
+  state.managementView = "";
+  state.managementCategory = "";
+  if (state.site) useCategoryScoreQuestionSort();
+  $("f-site").value = state.siteQuery;
+  $("f-rank").value = "all";
+  hideOutletSuggestions();
+  render();
+}
+
+function renderOutletSuggestions(query) {
+  const box = $("f-site-suggestions");
+  if (!box) return;
+  const value = String(query || "").trim();
+  if (!value || (state.site && value === state.siteQuery)) { hideOutletSuggestions(); return; }
+  const hits = matchingAuditOutlets(value).slice(0, 24);
+  box.hidden = false;
+  $("f-site").setAttribute("aria-expanded", "true");
+  box.innerHTML = hits.length
+    ? hits.map(outlet => `<button type="button" class="outlet-suggestion" role="option" data-code="${esc(outlet.code)}"><b>${esc(outlet.name || "Outlet name unavailable")}</b><span>${esc(outlet.code)}${outlet.zonal ? ` · Zonal: ${esc(outlet.zonal)}` : ""}${outlet.rho ? ` · RHO: ${esc(outlet.rho)}` : ""}</span></button>`).join("")
+    : `<div class="outlet-suggestion-empty">No outlet matches “${esc(value)}”.</div>`;
+  box.querySelectorAll(".outlet-suggestion").forEach(button => button.addEventListener("click", () => selectAuditOutlet(button.dataset.code)));
+}
+
+function managementOutletLink(code) {
+  return `<a class="outlet-detail-link" href="#" data-code="${esc(code)}" title="Open ${esc(code)} outlet dashboard">${esc(code)}</a>`;
+}
+
+function managementOutletDetails(record, got = record?.got || 0, max = record?.max || 0) {
+  const code = record?.code || "";
+  const owner = meta(code);
+  const weakest = weakestOutletCategory(record);
+  return {
+    code, owner, record, got, max, score: pct(got, max), pointsLost: Math.max(0, max - got), weakest,
+  };
+}
+
+function wireManagementView() {
+  $("management-back")?.addEventListener("click", () => {
+    state.managementView = "";
+    state.managementCategory = "";
+    render();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+  document.querySelectorAll("[data-management-category]").forEach(button => button.addEventListener("click", () => {
+    state.managementCategory = button.dataset.managementCategory || "";
+    render();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }));
+  document.querySelectorAll(".outlet-detail-link").forEach(link => link.addEventListener("click", event => {
+    event.preventDefault();
+    selectAuditOutlet(link.dataset.code);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }));
+}
+
+function renderManagementView(management) {
+  if (state.managementView === "weakest-categories") {
+    const selected = management.selectedCategory;
+    const affectedCount = management.categoryOutlets.filter(row => row.affected).length;
+    const categoryRows = management.weakCategories.map(([name, [got, max]], index) => {
+      const networkScore = pct(got, max);
+      let outletsCovered = 0, outletsTrailing = 0;
+      management.breakdowns.forEach(record => {
+        const score = record.cats.get(name);
+        if (!score) return;
+        outletsCovered += 1;
+        if (pct(score[0], score[1]) < networkScore) outletsTrailing += 1;
+      });
+      return `<tr class="management-category-row ${selected === name ? "on" : ""}">
+        <td>${index + 1}</td><td><button type="button" class="management-category-link" data-management-category="${esc(name)}">${esc(name)}</button></td>
+        <td class="num">${got.toLocaleString()}</td><td class="num">${max.toLocaleString()}</td><td class="num">${Math.max(0, max - got).toLocaleString()}</td>
+        <td class="num">${scoreCell(networkScore)}</td><td class="num">${outletsTrailing.toLocaleString()}</td><td class="num">${outletsCovered.toLocaleString()}</td>
+      </tr>`;
+    }).join("");
+    const outletRows = management.categoryOutlets.map((row, index) => {
+      const detail = managementOutletDetails(row.record);
+      return `<tr>
+        <td>${index + 1}</td><td>${row.affected ? `<span class="pill idle">Attention</span>` : `<span class="pill live">On track</span>`}</td>
+        <td>${managementOutletLink(detail.code)}</td><td>${esc(detail.owner.name || "—")}</td><td>${esc(detail.owner.zonal || "—")}</td><td>${esc(detail.owner.rho || "—")}</td>
+        <td>${esc(formatAuditDate(detail.record.date))}</td><td>${esc(detail.record.responseId || "—")}</td>
+        <td class="num">${row.got.toLocaleString()}</td><td class="num">${row.max.toLocaleString()}</td><td class="num">${Math.max(0, row.max - row.got).toLocaleString()}</td>
+        <td class="num">${scoreCell(row.score)}</td><td class="num"><b style="color:${tone(detail.score)}">${detail.score.toFixed(1)}%</b></td>
+      </tr>`;
+    }).join("");
+    $("body").innerHTML = `
+      <section class="panel">
+        <div class="management-view-head"><div><div class="management-kicker">Management exception view</div><h2>Weakest Categories</h2>
+          <p>${management.weakCategories.length.toLocaleString()} categories trailing the network score · ${management.affectedOutlets.size.toLocaleString()} affected outlets · weakest category first</p></div>
+          <button id="management-back" class="management-back" type="button">Back to command dashboard</button></div>
+        <div class="table-wrap"><table class="management-summary-table">
+          <thead><tr><th>#</th><th>Category</th><th class="num">Earned</th><th class="num">Available</th><th class="num">Points Lost</th><th class="num">Category Score</th><th class="num">Affected Outlets</th><th class="num">Outlets Covered</th></tr></thead>
+          <tbody>${categoryRows || `<tr><td colspan="8" class="management-empty">No scored categories are available.</td></tr>`}</tbody>
+        </table></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><div><h2>Outlet details · ${esc(selected || "No category")}</h2>
+          <p class="panel-caption">${management.categoryOutlets.length.toLocaleString()} outlets · ${affectedCount.toLocaleString()} need attention against this category's network score · weakest first</p></div></div>
+        <div class="table-wrap"><table class="management-detail-table">
+          <thead><tr><th>#</th><th>Status</th><th>Outlet Code</th><th>Outlet Name</th><th>Zonal</th><th>Regional (RHO)</th><th>Latest Audit Date</th><th>Response ID</th><th class="num">Earned</th><th class="num">Available</th><th class="num">Points Lost</th><th class="num">Category Score</th><th class="num">Outlet Score</th></tr></thead>
+          <tbody>${outletRows || `<tr><td colspan="13" class="management-empty">No outlet rows are available for this category.</td></tr>`}</tbody>
+        </table></div>
+      </section>`;
+  } else {
+    const rows = management.attentionOutlets.map(([code, [got, max]], index) => {
+      const record = management.breakdowns.get(code) || { code, responseId: "", date: "", got, max, cats: new Map() };
+      const detail = managementOutletDetails(record, got, max);
+      return `<tr>
+        <td>${index + 1}</td><td>${managementOutletLink(code)}</td><td>${esc(detail.owner.name || "—")}</td><td>${esc(detail.owner.zonal || "—")}</td><td>${esc(detail.owner.rho || "—")}</td>
+        <td>${esc(formatAuditDate(record.date))}</td><td>${esc(record.responseId || "—")}</td><td>${esc(detail.weakest.name)}</td>
+        <td class="num">${got.toLocaleString()}</td><td class="num">${max.toLocaleString()}</td><td class="num">${detail.pointsLost.toLocaleString()}</td><td class="num">${scoreCell(detail.score)}</td>
+      </tr>`;
+    }).join("");
+    $("body").innerHTML = `
+      <section class="panel">
+        <div class="management-view-head"><div><div class="management-kicker">Management exception view</div><h2>Outlets Needing Attention</h2>
+          <p>${management.attentionOutlets.length.toLocaleString()} outlets flagged by the existing attention rule · latest audit response only · weakest first</p></div>
+          <button id="management-back" class="management-back" type="button">Back to command dashboard</button></div>
+        <div class="table-wrap"><table class="management-detail-table">
+          <thead><tr><th>#</th><th>Outlet Code</th><th>Outlet Name</th><th>Zonal</th><th>Regional (RHO)</th><th>Latest Audit Date</th><th>Response ID</th><th>Weakest Category</th><th class="num">Earned</th><th class="num">Available</th><th class="num">Points Lost</th><th class="num">Score</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="12" class="management-empty">No outlets currently meet the attention rule.</td></tr>`}</tbody>
+        </table></div>
+      </section>`;
+  }
+  wireManagementView();
+}
+
 function render() {
   updatePublicSnapshotTime();
   if (!state.rows.length) {
@@ -1675,27 +2095,22 @@ function render() {
   const questions = sortRows(questionPool, state.qSort);
   const outlets = sortRows([...a.sites.entries()], state.oSort);
   const days = [...a.days.entries()].sort((x, y) => new Date(x[0]) - new Date(y[0]));
-  const below = { s60: 0, s70: 0, s80: 0 };
-  for (const [, [got, max]] of a.sites) {
-    const v = pct(got, max);
-    if (v < 60) below.s60 += 1;
-    if (v < 70) below.s70 += 1;
-    if (v < 80) below.s80 += 1;
-  }
-  const scoreThreshold = state.rank === "all" ? null : Number(state.rank);
-  const thresholdOutlets = Number.isFinite(scoreThreshold)
-    ? sortRows([...a.sites.entries()].filter(([, [got, max]]) => pct(got, max) < scoreThreshold), state.oSort)
+  const scoreBand = scoreBandFromRank(state.rank);
+  const thresholdOutlets = scoreBand
+    ? sortRows([...a.sites.entries()].filter(([, [got, max]]) => scoreMatchesBand(pct(got, max), scoreBand)), state.oSort)
     : [];
-  const visibleOutlets = Number.isFinite(scoreThreshold) ? thresholdOutlets : outlets;
+  const visibleOutlets = scoreBand ? thresholdOutlets : outlets;
+  const management = buildManagementData(a, cats, overall);
   state.view = { overall, cats, questions, outlets: visibleOutlets, days, audits: a.audits.size,
-    outletCount: visibleOutlets.length, total: a.total, below, scoreThreshold };
+    outletCount: visibleOutlets.length, total: a.total, scoreBand, management,
+    managementView: state.managementView };
   state.view.drillMeta = state.site ? meta(state.site) : null;
 
-  // A threshold choice is intentionally a list-only screen: no score cards,
+  // A score-band choice is intentionally a list-only screen: no score cards,
   // category/question details, availability table, or other dashboard panels.
-  if (Number.isFinite(scoreThreshold)) {
+  if (scoreBand) {
     $("body").innerHTML = `<section id="threshold-outlet-list" class="panel threshold-outlet-panel" aria-live="polite">
-      <div class="panel-head"><div><h2>Outlets below ${scoreThreshold}%</h2>
+      <div class="panel-head"><div><h2>Outlets · ${esc(scoreBand.label)}</h2>
         <p class="panel-caption">${thresholdOutlets.length.toLocaleString()} outlets · click a column to sort · Shift-click to add another sorting level</p></div></div>
       ${sortChips(state.oSort, "o")}
       <div class="table-wrap"><table class="threshold-outlet-table">
@@ -1705,7 +2120,7 @@ function render() {
           <td><a class="outlet-detail-link" href="#" data-code="${esc(code)}" title="Open ${esc(code)} outlet dashboard">${esc(code)}</a></td>
           <td>${esc(d.name || "—")}</td><td>${esc(d.zonal || "—")}</td><td>${esc(d.rho || "—")}</td>
           <td class="num"><b style="color:${tone(pct(got, max))}">${pct(got, max).toFixed(1)}%</b></td>
-        </tr>`; }).join("") : `<tr><td colspan="5" class="empty-state">No outlets are below ${scoreThreshold}% in the current category.</td></tr>`}</tbody>
+        </tr>`; }).join("") : `<tr><td colspan="5" class="empty-state">No outlets are in the ${esc(scoreBand.label)} score band for the current category.</td></tr>`}</tbody>
       </table></div>
     </section>`;
     wireSortControls();
@@ -1713,14 +2128,20 @@ function render() {
       event.preventDefault();
       useCategoryScoreQuestionSort();
       state.site = link.dataset.code;
+      state.siteQuery = outletInputLabel(state.site);
       state.cat = "";
       state.rank = "all";
-      $("f-site").value = state.site;
+      $("f-site").value = state.siteQuery;
       $("f-cat").value = "";
       $("f-rank").value = "all";
       render();
       window.scrollTo({ top: 0, behavior: "smooth" });
     }));
+    return;
+  }
+
+  if (state.managementView && !state.site) {
+    renderManagementView(management);
     return;
   }
 
@@ -1754,12 +2175,22 @@ function render() {
           <div class="l">Last visit · RHO${drillMeta.lastVisitRhoBy ? ` · ${esc(drillMeta.lastVisitRhoBy)}` : ""}</div></div>`
         : `
         <div class="fact"><div class="n">${questions.length}</div><div class="l">Scored questions</div></div>
-        <div class="fact"><button type="button" class="n band-link" data-band="70"
-          aria-controls="threshold-outlet-list" title="Show outlets below 70%">${below.s70}</button><div class="l">Below 70%</div></div>
-        <div class="fact"><button type="button" class="n band-link" data-band="80"
-          aria-controls="threshold-outlet-list" title="Show outlets below 80%">${below.s80}</button><div class="l">Below 80%</div></div>`}
+        `}
       </div>
     </section>
+
+    ${!state.site ? `<section class="management-actions" aria-label="Management exception views">
+      <button type="button" class="management-action" data-management-view="weakest-categories" aria-controls="body">
+        <span class="management-action-copy"><span class="management-action-title">Weakest Categories</span>
+          <span class="management-action-note">Ranked category gaps with outlet-level details · ${management.affectedOutlets.size.toLocaleString()} affected outlets</span></span>
+        <span class="management-action-count"><strong>${management.weakCategories.length.toLocaleString()}</strong><span>Categories</span></span>
+      </button>
+      <button type="button" class="management-action" data-management-view="attention-outlets" aria-controls="body">
+        <span class="management-action-copy"><span class="management-action-title">Outlets Needing Attention</span>
+          <span class="management-action-note">Latest audit, ownership, response, points lost and weakest category</span></span>
+        <span class="management-action-count"><strong>${management.attentionOutlets.length.toLocaleString()}</strong><span>Outlets</span></span>
+      </button>
+    </section>` : ""}
 
     ${availabilityView ? `
     <section class="panel">
@@ -1769,7 +2200,7 @@ function render() {
         <thead><tr><th>Availability Status</th><th class="num">Avail</th><th class="num">SKUs</th><th class="num">%</th></tr></thead>
         <tbody>${AVAIL_CRITERIA.map(([label]) => {
           const cell = availabilityView[label];
-          return `<tr><td><b>${esc(label)}</b></td><td class="num">${cell.ok.toLocaleString()}</td><td class="num">${cell.total.toLocaleString()}</td>
+          return `<tr class="availability-click-row" data-availability-label="${esc(label)}" tabindex="0" role="button" aria-label="Show ${esc(label)} outlet details"><td><button type="button" class="availability-status-link">${esc(label)}</button></td><td class="num">${cell.ok.toLocaleString()}</td><td class="num">${cell.total.toLocaleString()}</td>
             <td class="num">${scoreCell(cell.pct)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>
@@ -1799,7 +2230,7 @@ function render() {
 
     <section class="panel">
       <div class="panel-head"><h2>Outlets</h2>
-        <p class="panel-caption">${outlets.length.toLocaleString()} in view · ${below.s60} below 60% · ${below.s70} below 70% · ${below.s80} below 80% · click a row to drill in · shift-click headers for multi-level sorting</p></div>
+        <p class="panel-caption">${outlets.length.toLocaleString()} in view · ${management.attentionOutlets.length.toLocaleString()} needing attention · click a row to drill in · shift-click headers for multi-level sorting</p></div>
       ${sortChips(state.oSort, "o")}
       <div class="table-wrap"><table>
         <thead><tr><th>#</th>${th("Outlet code","name",state.oSort,"o")}${th("Outlet name","oname",state.oSort,"o")}
@@ -1819,32 +2250,34 @@ function render() {
       (free-text notes) are excluded from scoring so they cannot dilute the result.</p>`;
 
   wireSortControls();
-  document.querySelectorAll(".band-link").forEach(btn => btn.addEventListener("click", () => {
-    const threshold = Number(btn.dataset.band);
-    state.rank = String(threshold);
-    state.site = "";
-    $("f-rank").value = state.rank;
-    $("f-site").value = "";
+  wireAvailabilityStatusRows();
+  document.querySelectorAll("[data-management-view]").forEach(button => button.addEventListener("click", () => {
+    state.managementView = button.dataset.managementView || "";
+    state.managementCategory = "";
     render();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }));
   document.querySelectorAll("tr.click-row").forEach(el => el.addEventListener("click", () => {
-    const nextSite = state.site === el.dataset.code ? "" : el.dataset.code;
-    if (nextSite) useCategoryScoreQuestionSort();
-    state.site = nextSite;
-    state.rank = "all";
-    $("f-site").value = state.site;
-    $("f-rank").value = "all";
-    render();
+    if (state.site === el.dataset.code) {
+      state.site = "";
+      state.siteQuery = "";
+      $("f-site").value = "";
+      render();
+    } else {
+      selectAuditOutlet(el.dataset.code);
+    }
   }));
-  $("clear-drill")?.addEventListener("click", () => { state.site = ""; $("f-site").value = ""; render(); });
+  $("clear-drill")?.addEventListener("click", () => { state.site = ""; state.siteQuery = ""; $("f-site").value = ""; hideOutletSuggestions(); render(); });
 }
 
 /* ── exports: whatever is on screen right now ────────────────────────── */
 function scopeLabel() {
   const bits = [];
+  if (state.managementView === "weakest-categories") bits.push("Weakest Categories");
+  if (state.managementView === "attention-outlets") bits.push("Outlets Needing Attention");
   if (state.site) bits.push(`Outlet ${state.site}`);
   if (state.cat) bits.push(state.cat);
-  if (state.rank !== "all") bits.push(`Below ${state.rank}%`);
+  if (state.rank !== "all") bits.push(scoreBandFromRank(state.rank)?.label || state.rank);
   return bits.length ? bits.join(" · ") : "All outlets and categories";
 }
 
@@ -1882,9 +2315,48 @@ function exportCsv({ share = false } = {}) {
   const v = state.view; if (!v) return;
   const q = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
   const lines = [];
-  if (Number.isFinite(v.scoreThreshold)) {
+  if (v.managementView && v.management) {
+    const management = v.management;
+    lines.push(["Audit Quality Dashboard"], [scopeLabel()], exportSourceRow(), []);
+    if (v.managementView === "weakest-categories") {
+      lines.push(["WEAKEST CATEGORIES"], ["Category", "Earned", "Available", "Points Lost", "Score %", "Affected Outlets", "Outlets Covered"]);
+      management.weakCategories.forEach(([name, [got, max]]) => {
+        const networkScore = pct(got, max);
+        let covered = 0, affected = 0;
+        management.breakdowns.forEach(record => {
+          const cell = record.cats.get(name);
+          if (!cell) return;
+          covered += 1;
+          if (pct(cell[0], cell[1]) < networkScore) affected += 1;
+        });
+        lines.push([name, got, max, Math.max(0, max - got), networkScore.toFixed(1), affected, covered]);
+      });
+      lines.push([], [`OUTLET DETAILS — ${management.selectedCategory}`], ["Status", "Outlet Code", "Outlet Name", "Zonal", "Regional (RHO)", "Latest Audit Date", "Response ID", "Earned", "Available", "Points Lost", "Category Score %", "Outlet Score %"]);
+      management.categoryOutlets.forEach(row => {
+        const detail = managementOutletDetails(row.record);
+        lines.push([row.affected ? "Attention" : "On track", detail.code, detail.owner.name, detail.owner.zonal, detail.owner.rho,
+          formatAuditDate(detail.record.date), detail.record.responseId, row.got, row.max, Math.max(0, row.max - row.got), row.score.toFixed(1), detail.score.toFixed(1)]);
+      });
+    } else {
+      lines.push(["OUTLETS NEEDING ATTENTION"], ["Outlet Code", "Outlet Name", "Zonal", "Regional (RHO)", "Latest Audit Date", "Response ID", "Weakest Category", "Earned", "Available", "Points Lost", "Score %"]);
+      management.attentionOutlets.forEach(([code, [got, max]]) => {
+        const record = management.breakdowns.get(code) || { code, responseId: "", date: "", got, max, cats: new Map() };
+        const detail = managementOutletDetails(record, got, max);
+        lines.push([code, detail.owner.name, detail.owner.zonal, detail.owner.rho, formatAuditDate(record.date), record.responseId,
+          detail.weakest.name, got, max, detail.pointsLost, detail.score.toFixed(1)]);
+      });
+    }
+    const csv = lines.map(row => row.map(q).join(",")).join("\r\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+    const slug = v.managementView === "weakest-categories" ? "weakest-categories" : "outlets-needing-attention";
+    const filename = `audit-${slug}-${Date.now()}.csv`;
+    if (share) shareArtifact(blob, filename, "Audit management CSV");
+    else downloadBlob(blob, filename);
+    return;
+  }
+  if (v.scoreBand) {
     lines.push(["Audit Quality Dashboard"], [scopeLabel()], exportSourceRow(),
-               [`Outlets below ${v.scoreThreshold}%`, v.outlets.length], []);
+               [`Outlet score band`, v.scoreBand.label], [`Outlets`, v.outlets.length], []);
     lines.push(["Outlet Code", "Outlet Name", "Zonal Name", "RHO Name", "Score %"]);
     v.outlets.forEach(([code, [got, max]]) => {
       const d = meta(code);
@@ -1892,7 +2364,7 @@ function exportCsv({ share = false } = {}) {
     });
     const csv = lines.map(r => r.map(q).join(",")).join("\r\n");
     const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
-    const filename = `audit-outlets-below-${v.scoreThreshold}-${Date.now()}.csv`;
+    const filename = `audit-outlets-${v.scoreBand.slug}-${Date.now()}.csv`;
     if (share) shareArtifact(blob, filename, "Audit outlet list CSV");
     else downloadBlob(blob, filename);
     return;
@@ -2032,7 +2504,69 @@ function exportPdf({ share = false } = {}) {
     return y + 14;
   };
 
-  if (Number.isFinite(v.scoreThreshold)) {
+  if (v.managementView && v.management) {
+    const management = v.management;
+    const managementFooter = (page, pages) => {
+      doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(120, 132, 145);
+      doc.text(exportFooterText(), M, H - 14);
+      doc.text(`Page ${page} of ${pages}`, W - M, H - 14, { align: "right" });
+    };
+    if (v.managementView === "weakest-categories") {
+      const categoryRows = management.weakCategories.map(([name, [got, max]]) => {
+        const networkScore = pct(got, max);
+        let covered = 0, affected = 0;
+        management.breakdowns.forEach(record => {
+          const cell = record.cats.get(name);
+          if (!cell) return;
+          covered += 1;
+          if (pct(cell[0], cell[1]) < networkScore) affected += 1;
+        });
+        return [name, got.toLocaleString(), max.toLocaleString(), Math.max(0, max - got).toLocaleString(), `${networkScore.toFixed(1)}%`, affected, covered];
+      });
+      const detailRows = management.categoryOutlets.map(row => {
+        const detail = managementOutletDetails(row.record);
+        return [row.affected ? "Attention" : "On track", detail.code, detail.owner.name || "—", detail.owner.zonal || "—", detail.owner.rho || "—",
+          formatAuditDate(detail.record.date), detail.record.responseId || "—", row.got.toLocaleString(), row.max.toLocaleString(), Math.max(0, row.max - row.got).toLocaleString(),
+          `${row.score.toFixed(1)}%`, `${detail.score.toFixed(1)}%`];
+      });
+      const perPage = 40;
+      const detailPages = Math.max(1, Math.ceil(detailRows.length / perPage));
+      const pages = 1 + detailPages;
+      title("Weakest Categories", `${management.weakCategories.length.toLocaleString()} categories trailing the network score · ${management.affectedOutlets.size.toLocaleString()} affected outlets`);
+      table(M, 66, W - 2 * M, ["Category", ">Earned", ">Available", ">Points Lost", ">Score", ">Affected", ">Covered"],
+        [240,80,80,80,70,110,118], categoryRows, "Category ranking — weakest first", 12);
+      managementFooter(1, pages);
+      for (let page = 0; page < detailPages; page += 1) {
+        doc.addPage("a4", "landscape");
+        title(`Outlet details — ${management.selectedCategory || "No category"}`, `${detailRows.length.toLocaleString()} outlets · weakest category score first`);
+        table(M, 66, W - 2 * M, ["Status", "Code", "Outlet Name", "Zonal", "RHO", "Audit Date", "Response ID", ">Earned", ">Avail.", ">Lost", ">Cat %", ">Outlet %"],
+          [30,48,135,95,95,62,60,42,42,46,63,60], detailRows.slice(page * perPage, (page + 1) * perPage), "", 10.5);
+        managementFooter(page + 2, pages);
+      }
+      finishPdf(doc, `audit-weakest-categories-${Date.now()}.pdf`, share);
+      return;
+    }
+
+    const detailRows = management.attentionOutlets.map(([code, [got, max]]) => {
+      const record = management.breakdowns.get(code) || { code, responseId: "", date: "", got, max, cats: new Map() };
+      const detail = managementOutletDetails(record, got, max);
+      return [code, detail.owner.name || "—", detail.owner.zonal || "—", detail.owner.rho || "—", formatAuditDate(record.date), record.responseId || "—",
+        detail.weakest.name, got.toLocaleString(), max.toLocaleString(), detail.pointsLost.toLocaleString(), `${detail.score.toFixed(1)}%`];
+    });
+    const perPage = 40;
+    const pages = Math.max(1, Math.ceil(detailRows.length / perPage));
+    for (let page = 0; page < pages; page += 1) {
+      if (page) doc.addPage("a4", "landscape");
+      title("Outlets Needing Attention", `${detailRows.length.toLocaleString()} outlets · latest response only · weakest first`);
+      table(M, 66, W - 2 * M, ["Code", "Outlet Name", "Zonal", "RHO", "Audit Date", "Response ID", "Weakest Category", ">Earned", ">Avail.", ">Lost", ">Score"],
+        [40,135,90,90,68,62,105,42,42,48,56], detailRows.slice(page * perPage, (page + 1) * perPage), "", 10.5);
+      managementFooter(page + 1, pages);
+    }
+    finishPdf(doc, `audit-outlets-needing-attention-${Date.now()}.pdf`, share);
+    return;
+  }
+
+  if (v.scoreBand) {
     const headers = ["Outlet Code", "Outlet Name", "Zonal Name", "RHO Name", ">Score %"];
     const widths = [72, 232, 158, 158, 158];
     const rows = v.outlets.map(([code, [got, max]]) => {
@@ -2043,13 +2577,13 @@ function exportPdf({ share = false } = {}) {
     const pages = Math.max(1, Math.ceil(rows.length / perPage));
     for (let page = 0; page < pages; page += 1) {
       if (page) doc.addPage("a4", "landscape");
-      title(`Outlets below ${v.scoreThreshold}%`, `${rows.length.toLocaleString()} outlets · weakest score first · ${state.cat || "All categories"}`);
+      title(`Outlets · ${v.scoreBand.label}`, `${rows.length.toLocaleString()} outlets · weakest score first · ${state.cat || "All categories"}`);
       table(M, 66, W - 2 * M, headers, widths, rows.slice(page * perPage, (page + 1) * perPage), "", 10.5);
       doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(120, 132, 145);
       doc.text(exportFooterText(), M, H - 14);
       doc.text(`Page ${page + 1} of ${pages}`, W - M, H - 14, { align: "right" });
     }
-    finishPdf(doc, `audit-outlets-below-${v.scoreThreshold}-${Date.now()}.pdf`, share);
+    finishPdf(doc, `audit-outlets-${v.scoreBand.slug}-${Date.now()}.pdf`, share);
     return;
   }
 
@@ -2061,7 +2595,7 @@ function exportPdf({ share = false } = {}) {
     doc.text(label, M + 14, y + 40);
     const facts = [["Audits", v.audits], ["Outlets", v.outletCount], ["Questions", v.questions.length],
                    ["Points lost", (v.total[1] - v.total[0]).toLocaleString()],
-                   ["Below 70%", v.below.s70], ["Below 80%", v.below.s80]];
+                   ["Weak categories", v.management.weakCategories.length], ["Attention outlets", v.management.attentionOutlets.length]];
     facts.forEach(([l, n], i) => {
       const x = M + 130 + i * ((W - 2 * M - 140) / 6);
       doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(20, 20, 20);
@@ -2153,8 +2687,8 @@ function exportPdf({ share = false } = {}) {
       if (zonal) return zonal;
       return pct(a[1][0], a[1][1]) - pct(b[1][0], b[1][1]);
     };
-    const flagged = v.outlets.filter(([, [g, m]]) => pct(g, m) < 70).sort(byOwner);
-    title(`Outlets needing attention — ${flagged.length} below 70%`, "Regional (RHO) A–Z, then Zonal A–Z, weakest outlet first within each Zonal");
+    const flagged = v.management.attentionOutlets.slice().sort(byOwner);
+    title(`Outlets needing attention — ${flagged.length} outlets`, "Regional (RHO) A–Z, then Zonal A–Z, weakest outlet first within each Zonal");
     const oHead = ["RHO", "Zonal", "Outlet", "Outlet name", ">Score"];
     const oW = [88, 88, 38, 128, 40];
     const rowsOf = (list) => list.map(([code, [g, m]]) => {
@@ -2172,7 +2706,7 @@ function exportPdf({ share = false } = {}) {
     const rowH = Math.max(6.4, Math.min(10.5, (BOTTOM - 66 - 20) / Math.max(perCol, 1)));
     if (omitted > 0) {
       doc.setFont("helvetica", "italic"); doc.setFontSize(7); doc.setTextColor(150, 60, 40);
-      doc.text(`Worst ${shown.length} shown · ${omitted} more below 70% are in the CSV export`, W - M, 47, { align: "right" });
+      doc.text(`Worst ${shown.length} shown · ${omitted} more attention outlets are in the CSV export`, W - M, 47, { align: "right" });
     }
     table(M, 66, 382, oHead, oW, rowsOf(shown.slice(0, perCol)), "", rowH);
     table(M + 400, 66, 382, oHead, oW, rowsOf(shown.slice(perCol)), "", rowH);
@@ -2206,6 +2740,9 @@ $("drive-modal").addEventListener("click", e => { if (e.target === $("drive-moda
 $("share-modal-close").addEventListener("click", closeShareModal);
 $("share-modal-done").addEventListener("click", closeShareModal);
 $("share-modal").addEventListener("click", e => { if (e.target === $("share-modal")) closeShareModal(); });
+$("availability-modal-close").addEventListener("click", closeAvailabilityModal);
+$("availability-modal").addEventListener("click", e => { if (e.target === $("availability-modal")) closeAvailabilityModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("availability-modal").hidden) closeAvailabilityModal(); });
 $("drive-save").addEventListener("click", () => {
   try {
     Drive.saveConfig({ clientId: $("google-client-id").value, apiKey: $("google-api-key").value, appId: $("google-app-id").value });
@@ -2222,16 +2759,36 @@ $("drive-clear").addEventListener("click", () => {
 });
 $("f-cat").addEventListener("change", e => { state.cat = e.target.value; render(); });
 $("f-site").addEventListener("input", e => {
-  state.site = e.target.value;
-  if (state.site) useCategoryScoreQuestionSort();
+  const hadAppliedFilter = Boolean(state.site) || state.rank !== "all";
+  state.siteQuery = e.target.value;
+  state.site = "";
   state.rank = "all";
+  state.managementView = "";
+  state.managementCategory = "";
   $("f-rank").value = "all";
-  render();
+  if (hadAppliedFilter) render();
+  renderOutletSuggestions(state.siteQuery);
 });
+$("f-site").addEventListener("focus", e => renderOutletSuggestions(e.target.value));
+$("f-site").addEventListener("keydown", e => {
+  if (e.key === "Escape") { hideOutletSuggestions(); return; }
+  if (e.key !== "Enter") return;
+  const hits = matchingAuditOutlets(e.target.value);
+  if (!hits.length) return;
+  e.preventDefault();
+  const q = String(e.target.value || "").trim().toLowerCase();
+  const exact = hits.find(outlet => outlet.code.toLowerCase() === q || String(outlet.name || "").toLowerCase() === q);
+  selectAuditOutlet((exact || hits[0]).code);
+});
+$("f-site").addEventListener("blur", () => setTimeout(hideOutletSuggestions, 180));
 $("f-rank").addEventListener("change", e => {
   state.rank = e.target.value;
   state.site = "";
+  state.siteQuery = "";
+  state.managementView = "";
+  state.managementCategory = "";
   $("f-site").value = "";
+  hideOutletSuggestions();
   render();
 });
 $("dl-csv").addEventListener("click", () => exportCsv());
@@ -2251,8 +2808,8 @@ function setMobileRail(open) {
   mobileRailToggle.textContent = open ? "Hide filters & export" : "Show filters & export";
 }
 mobileRailToggle.addEventListener("click", () => setMobileRail(!mobileRail.classList.contains("open")));
-$("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; state.questionCat = ""; state.rank = "all";
-  $("f-cat").value = ""; $("f-site").value = ""; $("f-rank").value = "all"; render(); });
+$("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; state.siteQuery = ""; state.questionCat = ""; state.rank = "all"; state.managementView = ""; state.managementCategory = "";
+  $("f-cat").value = ""; $("f-site").value = ""; $("f-rank").value = "all"; hideOutletSuggestions(); closeAvailabilityModal(); render(); });
 
 (async () => {
   render();
