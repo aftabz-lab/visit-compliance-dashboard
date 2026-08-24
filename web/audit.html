@@ -1900,7 +1900,8 @@ function mergeDirectory(zoneMap) {
 const FinalAvailability = window.FinalAvailabilitySource;
 const AVAIL_CACHE_VERSION = FinalAvailability.CACHE_VERSION;
 const FINAL_CRITERIA_MODE = FinalAvailability.MODE;
-const AVAIL_CRITERIA = FinalAvailability.CRITERIA;
+// Display only the three management availability groups in Audit.
+const AVAIL_CRITERIA = FinalAvailability.CRITERIA.filter(([label]) => label !== "HGPHS SKU");
 const LiveAvailability = window.LiveAvailabilitySource;
 
 const normalText = (value) => String(value ?? "").trim();
@@ -2698,10 +2699,9 @@ function render() {
   const networkAvailability = !state.site ? allOutletAvailability() : null;
   const availabilityView = state.site ? availFor(state.site) : networkAvailability?.values;
   const finalTotals = availabilityView || {};
-  const noHgphs = Number(finalTotals["HGPHS SKU"]?.total || 0) === 0;
   const availabilityCaption = state.site
-    ? `Final workbook · Detail rule: stock ≥1; DK11/DK14 ≥12 · ${esc(state.site.toUpperCase())}${noHgphs ? " · HGPHS is not classified in the Final workbook" : ""}`
-    : `Final workbook · Detail rule: stock ≥1; DK11/DK14 ≥12 · All ${(networkAvailability?.outletCount || 0).toLocaleString()} outlets in the latest availability snapshot${noHgphs ? " · HGPHS is not classified in the Final workbook" : ""}`;
+    ? `Final workbook · Detail rule: stock ≥1; DK11/DK14 ≥12 · ${esc(state.site.toUpperCase())}`
+    : `Final workbook · Detail rule: stock ≥1; DK11/DK14 ≥12 · All ${(networkAvailability?.outletCount || 0).toLocaleString()} outlets in the latest availability snapshot`;
 
   const drillMeta = state.site ? meta(state.site) : EMPTY_META;
   const drill = state.site
