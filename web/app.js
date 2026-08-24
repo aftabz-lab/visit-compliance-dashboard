@@ -1,9 +1,13 @@
 import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-interactions-v2";
+import { readCloudSnapshot } from "./supabase-sync.js?v=visit-compliance-v12-supabase";
 
 const ALL_OFFICERS = "__ALL_OFFICERS__";
 const ALL_REMARKS = "__ALL_REMARKS__";
 const NEVER_VISITED_REMARK = "Never visited outlet";
 const THEME_KEY = "visit-compliance-theme";
+const AUDIT_FIELDS = ["Response ID", "Site Code", "Question Category", "Question Title", "Question Max Score", "Answer Score", "Date"];
+const AUDIT_PUBLISHED_SOURCES = ["./data/audit_data.json", "./data/audit_data_last_good.json"];
+const LEGACY_SHARED_SNAPSHOT_URL = "./data/shared_snapshot.json";
 const TABLE_COLUMNS = [
   ["officer", "Officer"],
   ["planned", "Planned (Till)"],
@@ -23,6 +27,9 @@ const state = {
   sortDir: -1,
   activeView: null,
   detailRemark: ALL_REMARKS,
+  auditScores: new Map(),
+  auditScoreStatus: "loading",
+  auditScoreSource: "",
 };
 const $ = id => document.getElementById(id);
 const numberFmt = new Intl.NumberFormat("en-US");
@@ -54,6 +61,187 @@ function fmtSnapshotTimestamp(value) {
 function esc(v) { return String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function pct(v) { return v == null || Number.isNaN(Number(v)) ? "—" : `${Number(v).toFixed(1)}%`; }
 function lower(v) { return String(v ?? "").toLowerCase(); }
+
+function unpackAuditRows(rawPayload) {
+  const payload = rawPayload?.audit && !rawPayload?.rows ? rawPayload.audit : rawPayload;
+  if (!payload || !Array.isArray(payload.rows) || !payload.rows.length) return null;
+
+  if (payload.format === "dict-v1") {
+    const dictionaries = payload.dictionaries || {};
+    const required = ["responseIds", "siteCodes", "categories", "questions", "dates"];
+    if (!required.every(key => Array.isArray(dictionaries[key]))) return null;
+    return payload.rows.map(row => [
+      dictionaries.responseIds[row[0]] ?? "",
+      dictionaries.siteCodes[row[1]] ?? "",
+      dictionaries.categories[row[2]] ?? "",
+      dictionaries.questions[row[3]] ?? "",
+      row[4],
+      row[5],
+      dictionaries.dates[row[6]] ?? "",
+    ]);
+  }
+
+  if (!Array.isArray(payload.fields)) return null;
+  const indexes = AUDIT_FIELDS.map(field => payload.fields.indexOf(field));
+  if (indexes.some(index => index < 0)) return null;
+  return payload.rows
+    .filter(Array.isArray)
+    .map(row => indexes.map(index => row[index]));
+}
+
+function auditDateRank(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const text = String(value ?? "").trim();
+  if (!text) return -Infinity;
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) return numeric;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : -Infinity;
+}
+
+function auditResponseRank(value) {
+  const text = String(value ?? "").trim();
+  const numeric = Number(text);
+  return Number.isFinite(numeric) ? numeric : text;
+}
+
+function calculateLatestAuditScores(packedRows) {
+  const latest = new Map();
+  for (const row of packedRows || []) {
+    const siteCode = String(row[1] ?? "").trim().toUpperCase();
+    const responseId = String(row[0] ?? "").trim();
+    if (!siteCode || !responseId) continue;
+    const date = auditDateRank(row[6]);
+    const responseRank = auditResponseRank(responseId);
+    const current = latest.get(siteCode);
+    const newerDate = !current || date > current.date;
+    const sameDateNewerResponse = current && date === current.date
+      && ((typeof responseRank === "number" && typeof current.responseRank === "number")
+        ? responseRank > current.responseRank
+        : String(responseRank) > String(current.responseRank));
+    if (newerDate || sameDateNewerResponse) {
+      latest.set(siteCode, { responseId, responseRank, date, dateText: String(row[6] ?? "") });
+    }
+  }
+
+  const totals = new Map();
+  for (const row of packedRows || []) {
+    const siteCode = String(row[1] ?? "").trim().toUpperCase();
+    const responseId = String(row[0] ?? "").trim();
+    const selected = latest.get(siteCode);
+    if (!selected || selected.responseId !== responseId) continue;
+    const available = parseFloat(row[4]);
+    const earned = parseFloat(row[5]);
+    if (!Number.isFinite(available) || available <= 0 || !Number.isFinite(earned)) continue;
+    const total = totals.get(siteCode) || { earned: 0, available: 0 };
+    total.earned += earned;
+    total.available += available;
+    totals.set(siteCode, total);
+  }
+
+  const scores = new Map();
+  totals.forEach((total, siteCode) => {
+    const selected = latest.get(siteCode);
+    scores.set(siteCode, {
+      ...total,
+      score: 100 * total.earned / total.available,
+      responseId: selected?.responseId || "",
+      date: selected?.dateText || "",
+    });
+  });
+  return scores;
+}
+
+async function readAuditCache() {
+  if (!("indexedDB" in window)) return null;
+  try {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("audit-dash", 2);
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains("h")) database.createObjectStore("h");
+        if (!database.objectStoreNames.contains("cache")) database.createObjectStore("cache");
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const cached = await new Promise(resolve => {
+      const request = db.transaction("cache").objectStore("cache").get("last");
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+    });
+    if (!cached?.packed?.length) return null;
+    return {
+      packedRows: cached.packed,
+      updatedAt: Number(cached.savedAt || 0),
+      source: "saved Audit dashboard snapshot",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readPublishedAudit(url, source) {
+  try {
+    const response = await fetch(`${url}?_=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const packedRows = unpackAuditRows(payload);
+    if (!packedRows?.length) return null;
+    return {
+      packedRows,
+      updatedAt: Date.parse(payload?.metadata?.generatedAt || "") || 0,
+      source,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function loadAuditScores() {
+  const [cached, cloud] = await Promise.all([
+    readAuditCache(),
+    readCloudSnapshot("audit").then(row => {
+      const packedRows = unpackAuditRows(row?.payload);
+      if (!packedRows?.length) return null;
+      return {
+        packedRows,
+        updatedAt: Date.parse(row?.payload?.metadata?.generatedAt || row?.updated_at || "") || 0,
+        source: "Audit cloud snapshot",
+      };
+    }).catch(() => null),
+  ]);
+
+  let selected = cloud;
+  if (cached && (!selected || cached.updatedAt > selected.updatedAt)) selected = cached;
+
+  if (!selected) {
+    for (const url of AUDIT_PUBLISHED_SOURCES) {
+      selected = await readPublishedAudit(url, "published Audit snapshot");
+      if (selected) break;
+    }
+  }
+
+  if (!selected) {
+    try {
+      const response = await fetch(`${LEGACY_SHARED_SNAPSHOT_URL}?_=${Date.now()}`, { cache: "no-store" });
+      if (response.ok) {
+        const payload = await response.json();
+        const packedRows = unpackAuditRows(payload?.audit);
+        if (packedRows?.length) {
+          selected = {
+            packedRows,
+            updatedAt: Date.parse(payload?.audit?.metadata?.generatedAt || payload?.generatedAt || "") || 0,
+            source: "legacy shared Audit snapshot",
+          };
+        }
+      }
+    } catch {}
+  }
+
+  if (!selected) return { scores: new Map(), source: "" };
+  return { scores: calculateLatestAuditScores(selected.packedRows), source: selected.source };
+}
 
 function normalizedOfficerName(value) {
   return lower(value)
@@ -620,6 +808,20 @@ function visitCell(label, iso, who, inTime, outTime) {
   const value = iso ? `${esc(fmtDate(iso))}${who ? `<span class="by">by ${esc(who)}</span>` : ""}${inTime || outTime ? `<span class="by">In time: ${esc(inTime || 'Missing')} · Out time: ${esc(outTime || 'Missing')}</span>` : ""}` : `Not visited yet`;
   return `<div class="outlet-cell"><dt>${esc(label)}</dt><dd class="${iso ? '' : 'none'}">${value}</dd></div>`;
 }
+function auditScoreCell(siteCode) {
+  const code = String(siteCode || "").trim().toUpperCase();
+  const audit = state.auditScores.get(code);
+  if (!audit) {
+    const message = state.auditScoreStatus === "loading" ? "Loading latest audit…" : "No scored audit found";
+    return `<div class="outlet-cell audit-score-cell"><dt>Audit score</dt><dd class="none">${esc(message)}</dd></div>`;
+  }
+  const score = pct(audit.score);
+  const points = `${numberFmt.format(audit.earned)} / ${numberFmt.format(audit.available)} points`;
+  return `<div class="outlet-cell audit-score-cell"><dt>Audit score</dt><dd>
+    <a class="audit-score-link ${scoreClass(audit.score)}" href="./audit.html?outlet=${encodeURIComponent(code)}" aria-label="Open Audit Command Dashboard for outlet ${esc(code)}">${esc(score)}</a>
+    <span class="by">${esc(points)} · click score for outlet audit</span>
+  </dd></div>`;
+}
 function renderOutletCard() {
   const card = $("outlet-card");
   const outlet = state.selectedOutlet ? state.data.outlets?.[state.selectedOutlet] : null;
@@ -639,6 +841,7 @@ function renderOutletCard() {
       ${visitCell('Last visit', outlet.lastVisit, outlet.lastVisitBy)}
       ${visitCell('Last visit by Zonal', outlet.lastVisitZonal, outlet.lastVisitZonalBy, outlet.lastVisitZonalInTime, outlet.lastVisitZonalOutTime)}
       ${visitCell('Last visit by Regional (RHO)', outlet.lastVisitRho, outlet.lastVisitRhoBy, outlet.lastVisitRhoInTime, outlet.lastVisitRhoOutTime)}
+      ${auditScoreCell(outlet.siteCode)}
     </dl>`;
   $("outlet-card-close").addEventListener("click", () => {
     state.selectedOutlet = null;
@@ -782,11 +985,19 @@ function bindDriveSetupModalFix() {
 async function init() {
   bindDriveSetupModalFix();
   try {
+    const auditScorePromise = loadAuditScores().catch(() => ({ scores: new Map(), source: "" }));
     state.dataLoad = await loadDashboardData();
     state.data = state.dataLoad.data;
     renderHeader();
     renderDefinitions();
     render();
+
+    auditScorePromise.then(result => {
+      state.auditScores = result.scores;
+      state.auditScoreSource = result.source;
+      state.auditScoreStatus = result.scores.size ? "ready" : "unavailable";
+      renderOutletCard();
+    });
 
     $("status-filter").addEventListener("change", e => {
       state.status = e.target.value;

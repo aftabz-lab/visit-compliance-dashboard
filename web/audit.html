@@ -521,7 +521,8 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
-const state = { rows: [], file: "", sig: "", questionCat: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", attendanceEntries: [], attendanceSig: "", attendanceFiles: [], responseSummaries: [], avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: "", siteQuery: "", rank: "all", managementView: "", managementCategory: "", latestRowsRef: null, latestResponseKeys: null };
+const REQUESTED_OUTLET = String(new URLSearchParams(location.search).get("outlet") || "").trim().toUpperCase().slice(0, 80);
+const state = { rows: [], file: "", sig: "", questionCat: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", attendanceEntries: [], attendanceSig: "", attendanceFiles: [], responseSummaries: [], avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: REQUESTED_OUTLET, siteQuery: REQUESTED_OUTLET, rank: "all", managementView: "", managementCategory: "", latestRowsRef: null, latestResponseKeys: null };
 const ATTENTION_SCORE = 70; // existing management attention rule; audit score calculations are unchanged
 const Drive = window.ShwapnoDrive;
 const Attendance = window.ShwapnoAttendance;
@@ -2078,6 +2079,13 @@ function renderManagementView(management) {
 
 function render() {
   updatePublicSnapshotTime();
+  if (state.site) {
+    const selectedLabel = outletInputLabel(state.site);
+    if (selectedLabel !== state.siteQuery) {
+      state.siteQuery = selectedLabel;
+      if ($("f-site")) $("f-site").value = selectedLabel;
+    }
+  }
   if (!state.rows.length) {
     const message = isDriveOwner()
       ? "Connect the shared Google Drive folder containing the survey export.<br>The newest matching Excel file will be read automatically."
@@ -2810,6 +2818,19 @@ function setMobileRail(open) {
 mobileRailToggle.addEventListener("click", () => setMobileRail(!mobileRail.classList.contains("open")));
 $("reset").addEventListener("click", () => { state.cat = ""; state.site = ""; state.siteQuery = ""; state.questionCat = ""; state.rank = "all"; state.managementView = ""; state.managementCategory = "";
   $("f-cat").value = ""; $("f-site").value = ""; $("f-rank").value = "all"; hideOutletSuggestions(); closeAvailabilityModal(); render(); });
+
+// A Visit Compliance outlet score links here with ?outlet=CODE. Start in the
+// normal all-category view, then constrain every Audit panel to that outlet.
+if (REQUESTED_OUTLET) {
+  state.cat = "";
+  state.questionCat = "";
+  state.rank = "all";
+  state.managementView = "";
+  state.managementCategory = "";
+  useCategoryScoreQuestionSort();
+  $("f-site").value = state.siteQuery;
+  $("f-rank").value = "all";
+}
 
 (async () => {
   render();
