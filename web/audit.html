@@ -507,14 +507,13 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
       <button id="availability-modal-close" class="availability-modal-close" type="button" aria-label="Close availability details">×</button>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>#</th><th>Outlet Code</th><th>Outlet Name</th><th>Zonal</th><th>Regional (RHO)</th><th class="num">Available by Final Rule</th><th class="num">Has Stock</th><th class="num">Eligible SKUs</th><th class="num">Availability %</th></tr></thead>
+      <thead><tr><th>#</th><th>Outlet Code</th><th>Outlet Name</th><th>Zonal</th><th>Regional (RHO)</th><th class="num">Available</th><th class="num">Unavailable</th><th class="num">Eligible SKUs</th><th class="num">Availability %</th></tr></thead>
       <tbody id="availability-modal-body"></tbody>
     </table></div>
   </section>
 </div>
 
-<script src="fflate.min.js?v=final-detail-v1"></script>
-<script src="final-availability-source.js?v=final-detail-v2"></script>
+<script src="live-availability-source.js?v=operations-live-v1"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="attendance-source.js?v=visit-attendance-v2-time-fix"></script>
@@ -524,7 +523,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const pct = (a, b) => (b > 0 ? (100 * a / b) : 0);
 const REQUESTED_OUTLET = String(new URLSearchParams(location.search).get("outlet") || "").trim().toUpperCase().slice(0, 80);
-const state = { rows: [], file: "", sig: "", questionCat: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", attendanceEntries: [], attendanceSig: "", attendanceFiles: [], responseSummaries: [], avail: new Map(), availFile: "", stockFile: "", criteriaSig: "", criteriaMode: "", criteriaSheet: "", criteriaRows: 0, criteriaUnique: 0, formulaCellsChecked: 0, stockSig: "", availSavedAt: 0, availSource: "none", availMatched: 0, qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: REQUESTED_OUTLET, siteQuery: REQUESTED_OUTLET, rank: "all", managementView: "", managementCategory: "", latestRowsRef: null, latestResponseKeys: null };
+const state = { rows: [], file: "", sig: "", questionCat: "", source: "none", dir: new Map(), baseDir: new Map(), sharedDashboard: null, zoneFile: "", attendanceEntries: [], attendanceSig: "", attendanceFiles: [], responseSummaries: [], avail: new Map(), availDirectory: new Map(), availFile: "", stockFile: "", criteriaSig: "", criteriaMode: "", criteriaSheet: "", criteriaRows: 0, criteriaUnique: 0, formulaCellsChecked: 0, stockSig: "", availSavedAt: 0, availFetchedAt: 0, availSource: "none", availMatched: 0, availSourceUrl: "", availRefreshLabel: "", availTypes: [], availError: "", qSort: [{ key: "score", dir: "asc" }], oSort: [{ key: "score", dir: "asc" }], savedAt: 0, stale: false, dirHandle: null, driveMode: true, driveRemoteSig: "", cat: "", site: REQUESTED_OUTLET, siteQuery: REQUESTED_OUTLET, rank: "all", managementView: "", managementCategory: "", latestRowsRef: null, latestResponseKeys: null };
 const ATTENTION_SCORE = 70; // existing management attention rule; audit score calculations are unchanged
 const Drive = window.ShwapnoDrive;
 const Attendance = window.ShwapnoAttendance;
@@ -647,26 +646,6 @@ async function autoPublishAuditSnapshot(packed, file, savedAt) {
   void cloud.publishIfSignedIn("audit", payload);
 }
 
-async function autoPublishAvailabilitySnapshot(cache) {
-  const cloud = await cloudApi();
-  if (!cloud?.publishIfSignedIn || !cache?.entries?.length) return;
-  void cloud.publishIfSignedIn("availability", {
-    version: Number(cache.version || 0),
-    metadata: {
-      criteriaFile: cache.file || "",
-      stockFile: cache.stockFile || "",
-      generatedAt: new Date(cache.savedAt || Date.now()).toISOString(),
-      matched: Number(cache.matched || 0),
-      criteriaMode: cache.criteriaMode || "",
-      criteriaSheet: cache.criteriaSheet || "",
-      criteriaRows: Number(cache.criteriaRows || 0),
-      criteriaUnique: Number(cache.criteriaUnique || 0),
-      formulaCellsChecked: Number(cache.formulaCellsChecked || 0),
-    },
-    entries: cache.entries,
-  });
-}
-
 function unpackSharedAudit(audit) {
   if (!audit || !Array.isArray(audit.rows) || !audit.rows.length) return null;
   if (audit.format !== "dict-v1") {
@@ -702,41 +681,8 @@ async function applyCrossPcSnapshot(payload, sharedAt = 0) {
     await idbPut("cache", "last", { file: state.file, sig: state.sig, savedAt: state.savedAt, packed: auditPacked });
   }
 
-  const availability = payload?.availability;
-  const availabilityAt = Date.parse(availability?.metadata?.generatedAt || "") || sharedAt;
-  // Never revive a snapshot created from the invalid Compiled ALL workbook.
-  // Only this build's Final/Detail calculation is safe to share across PCs.
-  const sharedVersion = Number(availability?.version || 0);
-  const sharedMode = String(availability?.metadata?.criteriaMode || "");
-  const sharedEntries = sharedVersion === AVAIL_CACHE_VERSION && sharedMode === FINAL_CRITERIA_MODE
-    ? availability?.entries
-    : null;
-  const currentAvailLocal = state.availSource === "local" || state.availSource === "cache" || state.availSource === "retained";
-  if (Array.isArray(sharedEntries) && sharedEntries.length && (!state.avail.size || !currentAvailLocal || availabilityAt >= Number(state.availSavedAt || 0))) {
-    state.avail = new Map(sharedEntries);
-    state.availFile = availability?.metadata?.criteriaFile || "";
-    state.stockFile = availability?.metadata?.stockFile || "";
-    state.criteriaMode = sharedMode;
-    state.criteriaSheet = availability?.metadata?.criteriaSheet || "Detail";
-    state.criteriaRows = Number(availability?.metadata?.criteriaRows || 0);
-    state.criteriaUnique = Number(availability?.metadata?.criteriaUnique || 0);
-    state.formulaCellsChecked = Number(availability?.metadata?.formulaCellsChecked || 0);
-    state.availSavedAt = availabilityAt || Date.now();
-    state.availSource = "shared";
-    state.availMatched = Number(availability?.metadata?.matched || 0);
-    await idbPut("cache", "avail", {
-      version: sharedVersion,
-      file: state.availFile, stockFile: state.stockFile,
-      criteriaSig: "shared", stockSig: "shared",
-      criteriaMode: state.criteriaMode, criteriaSheet: state.criteriaSheet,
-      criteriaRows: state.criteriaRows, criteriaUnique: state.criteriaUnique,
-      formulaCellsChecked: state.formulaCellsChecked,
-      savedAt: state.availSavedAt, matched: state.availMatched, entries: sharedEntries,
-    });
-  }
-
   if (state.rows.length) { showLoaded(); render(); }
-  return Boolean(auditPacked?.length || sharedEntries?.length || payload?.visitDashboard);
+  return Boolean(auditPacked?.length || payload?.visitDashboard);
 }
 
 async function loadSharedPublishedSnapshot() {
@@ -746,19 +692,17 @@ async function loadSharedPublishedSnapshot() {
   try {
     const cloud = await cloudApi();
     if (cloud?.readCloudSnapshot) {
-      const [visitRow, auditRow, availabilityRow] = await Promise.all([
+      const [visitRow, auditRow] = await Promise.all([
         cloud.readCloudSnapshot("visit").catch(() => null),
         cloud.readCloudSnapshot("audit").catch(() => null),
-        cloud.readCloudSnapshot("availability").catch(() => null),
       ]);
       const payload = {
         version: 2,
-        generatedAt: [visitRow?.updated_at, auditRow?.updated_at, availabilityRow?.updated_at].filter(Boolean).sort().at(-1) || null,
+        generatedAt: [visitRow?.updated_at, auditRow?.updated_at].filter(Boolean).sort().at(-1) || null,
         visitDashboard: visitRow?.payload?.data || visitRow?.payload?.visitDashboard || null,
         audit: auditRow?.payload || null,
-        availability: availabilityRow?.payload || null,
       };
-      const sharedAt = Math.max(0, ...[visitRow?.updated_at, auditRow?.updated_at, availabilityRow?.updated_at].map(v => Date.parse(v || "") || 0));
+      const sharedAt = Math.max(0, ...[visitRow?.updated_at, auditRow?.updated_at].map(v => Date.parse(v || "") || 0));
       if (await applyCrossPcSnapshot(payload, sharedAt)) return true;
     }
   } catch (error) {
@@ -956,17 +900,20 @@ function sourceDisplay() {
 }
 
 function availabilityStatusHtml() {
-  if (!state.avail.size) return "";
-  const shared = state.availSource === "shared";
-  const retained = state.availSource === "retained" || state.availSource === "cache";
-  const label = shared ? "cloud availability" : retained ? "availability saved copy" : "availability snapshot";
+  if (!state.avail.size) return state.availError
+    ? `<br><span style="color:#e0a53f">live availability unavailable · ${esc(state.availError)}</span>`
+    : "";
+  const retained = state.availSource === "cache";
+  const label = retained ? "saved live availability copy" : "live availability";
   const when = state.availSavedAt
     ? ` · ${new Date(state.availSavedAt).toLocaleString()}` : "";
-  const sourceFile = state.stockFile ? `<br><b>${esc(state.stockFile)}</b>` : "";
-  const ruleSource = state.criteriaMode === FINAL_CRITERIA_MODE
-    ? `<br><span style="color:#75d89b">Final workbook · ${esc(state.criteriaSheet || "Detail")}!AKF:BVC rule${state.criteriaRows ? ` · ${state.criteriaRows.toLocaleString()} rows` : ""}${state.formulaCellsChecked ? ` · ${state.formulaCellsChecked.toLocaleString()} formula columns verified` : ""}</span>`
+  const sourceFile = state.availFile ? ` · ${esc(state.availFile)}` : "";
+  const missing = AVAIL_CRITERIA.map(([name]) => name).filter(name => !state.availTypes.includes(name));
+  const missingNote = missing.length
+    ? `<br><span style="color:#e0a53f">Awaiting classification from source: ${esc(missing.join(", "))}</span>`
     : "";
-  return `<br><span style="color:${shared || retained ? "#e0a53f" : "#75d89b"}">${label}${when}</span>${ruleSource}${sourceFile}`;
+  return `<br><span style="color:${retained ? "#e0a53f" : "#75d89b"}">${label}${when}${sourceFile}</span>`
+    + `<br><a href="${esc(state.availSourceUrl || LiveAvailability.SOURCE_PAGE)}" target="_blank" rel="noopener" style="color:#69bfe9">operations-t Availability Report</a>${missingNote}`;
 }
 
 function showLoaded(note = "") {
@@ -996,10 +943,8 @@ async function syncFolder({ silent = true } = {}) {
     let chosen = null;
     for (const file of ordered) { if (await isAuditWorkbook(file)) { chosen = file; break; } }
 
-    // Availability is also sourced from the selected shared Drive folder.
-    // Keep the last successful calculation as a small browser snapshot so
-    // removing stock_extraction_report*.csv does not blank the availability count.
-    // A newer/replaced stock or criteria file automatically refreshes the snapshot.
+    // Drive remains the source for Audit, attendance, and outlet ownership only.
+    // Availability is fetched independently from the published Availability Report.
     const all = await candidateFiles(state.dirHandle);
     const attendanceFiles = all
       .filter(file => /attend(?:ance)?/i.test(file.name) && /\.(csv|xlsx|xlsm|xls)$/i.test(file.name))
@@ -1015,105 +960,6 @@ async function syncFolder({ silent = true } = {}) {
       }
       refreshDirectoryAttendanceTimes();
     }
-    const bookFiles = all.filter(file => /\.xlsx$|\.xlsm$/i.test(file.name));
-    const criteriaNamed = bookFiles.filter(file => /product.*crit|avaiablity|availability/i.test(file.name));
-    // Prefer the explicitly named Final workbook, and never accept the older
-    // Compiled ALL workbook as a fallback.
-    const finalNamed = criteriaNamed.filter(file => /(?:^|[_\s-])final(?:[_\s.-]|$)/i.test(file.name));
-    const criteriaCandidates = [
-      ...finalNamed,
-      ...criteriaNamed.filter(file => !finalNamed.includes(file)),
-      ...bookFiles.filter(file => !criteriaNamed.includes(file)),
-    ];
-    let criteriaFile = null;
-    for (const file of criteriaCandidates) {
-      // If the remembered criteria file is unchanged, avoid reparsing it just to identify it.
-      if (state.criteriaMode === FINAL_CRITERIA_MODE && file.name === state.availFile && state.criteriaSig && signature(file) === state.criteriaSig) {
-        criteriaFile = file; break;
-      }
-      if (await isCriteriaWorkbook(file)) { criteriaFile = file; break; }
-    }
-
-    const csvFiles = all.filter(file => /\.csv$/i.test(file.name));
-    const stockNamed = csvFiles.filter(file => /stock[ _-]*extraction[ _-]*report/i.test(file.name));
-    let stockFile = null;
-    for (const file of [...stockNamed, ...csvFiles.filter(file => !stockNamed.includes(file))]) {
-      if (await isStockFile(file)) { stockFile = file; break; }
-    }
-
-    if (criteriaFile && stockFile) {
-      const nextCriteriaSig = signature(criteriaFile);
-      const nextStockSig = signature(stockFile);
-      const sameAvailabilitySnapshot = state.avail.size
-        && state.criteriaMode === FINAL_CRITERIA_MODE
-        && state.criteriaSig === nextCriteriaSig
-        && state.stockSig === nextStockSig;
-
-      if (!sameAvailabilitySnapshot) {
-        try {
-          setState(`<span class="pill idle">reading</span><br>Validating Final workbook <b>${esc(criteriaFile.name)}</b> · Detail!AKF:BVC…`);
-          const criteria = await readCriteria(criteriaFile);
-          state.availFile = criteriaFile.name;
-          state.criteriaMode = criteria.mode;
-          state.criteriaSheet = criteria.sheetName;
-          state.criteriaRows = Number(criteria.rowCount || 0);
-          state.criteriaUnique = Number(criteria.uniqueItemCount || 0);
-          state.formulaCellsChecked = Number(criteria.formulaCellsChecked || 0);
-          setState(`<span class="pill idle">reading</span><br>Taking availability snapshot from <b>${esc(stockFile.name)}</b> (${(stockFile.size / 1048576).toFixed(0)} MB)…`);
-          const { result, matched } = await readStockAvailability(stockFile, criteria, (read) => {
-            setState(`<span class="pill idle">reading</span><br>Stock snapshot: ${(read / 1048576).toFixed(0)} MB scanned…`);
-          });
-          state.avail = result;
-          state.stockFile = stockFile.name;
-          state.criteriaSig = nextCriteriaSig;
-          state.stockSig = nextStockSig;
-          state.availSavedAt = Date.now();
-          state.availSource = "local";
-          state.availMatched = matched;
-          const availabilityCache = {
-            version: AVAIL_CACHE_VERSION,
-            file: state.availFile,
-            stockFile: stockFile.name,
-            criteriaSig: state.criteriaSig,
-            criteriaMode: state.criteriaMode,
-            criteriaSheet: state.criteriaSheet,
-            criteriaRows: state.criteriaRows,
-            criteriaUnique: state.criteriaUnique,
-            formulaCellsChecked: state.formulaCellsChecked,
-            stockSig: state.stockSig,
-            savedAt: state.availSavedAt,
-            matched,
-            entries: [...result.entries()],
-          };
-          await idbPut("cache", "avail", availabilityCache);
-          // v12: a newly calculated stock availability snapshot is independently
-          // published to Supabase as soon as it is successfully saved locally.
-          void autoPublishAvailabilitySnapshot(availabilityCache);
-        } catch (error) {
-          console.warn("Availability snapshot failed; retaining last successful copy.", error);
-          if (state.avail.size) {
-            state.availSource = "retained";
-            if (state.rows.length) showLoaded(`Availability refresh failed; retained copy shown. ${error?.message || "Check the Final workbook and stock CSV."}`);
-          } else if (state.rows.length) {
-            showLoaded(`Availability was not calculated. ${error?.message || "Check the Final workbook and stock CSV."}`);
-          } else {
-            setState(`<span class="pill idle">availability error</span><br>${esc(error?.message || "Check the Final workbook and stock CSV.")}`);
-          }
-        }
-      } else {
-        state.availSource = "local";
-      }
-    } else if (state.avail.size) {
-      // Stock/criteria file was removed or the folder is temporarily empty.
-      // Keep the saved availability calculation until a new valid source appears.
-      state.availSource = "retained";
-    } else if (!criteriaFile && stockFile && state.rows.length) {
-      showLoaded("Availability is waiting for the Final workbook containing Detail and Summary sheets. The older Compiled ALL workbook is intentionally ignored.");
-    } else if (criteriaFile && !stockFile && state.rows.length) {
-      showLoaded("Availability is waiting for a CSV whose first column is ProductCode (the filename may be changed).");
-    }
-
-
     if (!chosen) {
       const reason = all.length
         ? `No current workbook in this folder has an Answer Details sheet (checked ${candidates.length} workbook${candidates.length === 1 ? "" : "s"}).`
@@ -1188,21 +1034,28 @@ let watchTimer = null;
 let driveSyncPromise = null;
 function startWatching() {
   if (watchTimer) return;
-  watchTimer = setInterval(() => { if (Drive.cachedToken()) syncDrive({ silent: true }); }, DRIVE_WATCH_MS);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && Drive.cachedToken()) syncDrive({ silent: true }); });
+  watchTimer = setInterval(() => {
+    if (Drive.cachedToken()) syncDrive({ silent: true });
+    void refreshLiveAvailability({ silent: true });
+  }, DRIVE_WATCH_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    if (Drive.cachedToken()) syncDrive({ silent: true });
+    void refreshLiveAvailability({ silent: true });
+  });
 }
 
 function driveFileScore(meta) {
   const name = String(meta?.name || "").toLowerCase();
   if (name.startsWith("~$")) return 99;
-  if (/\.csv$/i.test(name) && /stock[ _-]*extraction[ _-]*report/.test(name)) return 0;
   if (/\.(csv|xlsx|xlsm|xls)$/i.test(name) && /attend(?:ance)?/.test(name)) return 3;
-  if (/\.csv$/i.test(name)) return 5; // content check supports a renamed stock export
+  // Product criteria and stock extraction files are intentionally ignored.
+  if (/product.*crit|avaiablity|availability|stock[ _-]*extraction[ _-]*report/.test(name)) return 99;
+  if (/\.csv$/i.test(name)) return 99;
   if (!/\.(xlsx|xlsm|xls)$/i.test(name)) return 99;
   if (/audit|response|survey|compliance/.test(name)) return 0;
   if (/zone|distribution/.test(name)) return 1;
-  if (/product.*crit|avaiablity|availability/.test(name)) return 2;
-  return 4; // sheet-structure checks support a renamed Final workbook
+  return 4; // sheet-structure checks support renamed Audit/ownership workbooks
 }
 
 function memoryFolderHandle(files) {
@@ -1230,6 +1083,7 @@ async function syncDriveNow({ silent = true, interactive = false, pickFolder = f
       const connection = await Drive.connect({ pickFolder: pickFolder || !Drive.getFolder(), title: "Select shared Shwapno dashboard data folder" });
       if (!connection) return;
       state.driveRemoteSig = "";
+      void refreshLiveAvailability({ silent: true, force: true });
     }
     const folder = Drive.getFolder();
     if (!folder) {
@@ -1249,14 +1103,14 @@ async function syncDriveNow({ silent = true, interactive = false, pickFolder = f
       .filter(meta => driveFileScore(meta) < 99 && meta.capabilities?.canDownload !== false)
       .sort((a, b) => driveFileScore(a) - driveFileScore(b) || Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || "") || String(a.name).localeCompare(String(b.name)));
     if (!metas.length) {
-      const message = "No Audit/Response, Zone Distribution, criteria, or stock workbook was found in the shared Drive folder.";
+      const message = "No Audit/Response, Zone Distribution, or attendance file was found in the shared Drive folder.";
       if (state.rows.length) { state.stale = true; showLoaded(message); render(); }
       else setState(`<span class="pill idle">no match</span><br>${esc(message)}`);
       return;
     }
     const remoteSig = metas.map(Drive.remoteSignature).sort().join("||");
-    const hasCurrentFinalAvailability = state.avail.size && state.criteriaMode === FINAL_CRITERIA_MODE;
-    if (state.driveRemoteSig === remoteSig && state.rows.length && hasCurrentFinalAvailability) {
+    const hasLiveAvailability = state.avail.size && state.criteriaMode === FINAL_CRITERIA_MODE;
+    if (state.driveRemoteSig === remoteSig && state.rows.length && hasLiveAvailability) {
       if (state.source === "gdrive") state.stale = false;
       $("grant").hidden = true;
       if (!silent) showLoaded(`Live from Google Drive folder “${folder.name}”.`);
@@ -1443,6 +1297,10 @@ async function readZoneDirectory(file) {
 // has a value, so a fresher Drive file always wins.
 function mergeDirectory(zoneMap) {
   const merged = new Map(state.baseDir);
+  state.availDirectory.forEach((v, code) => {
+    const current = merged.get(code) || { name: "", zonal: "", rho: "" };
+    merged.set(code, { ...current, name: current.name || v.name || "" });
+  });
   zoneMap.forEach((v, code) => {
     const current = merged.get(code) || { name: "", zonal: "", rho: "" };
     merged.set(code, { ...current, name: v.name || current.name, zonal: v.zonal || current.zonal, rho: v.rho || current.rho });
@@ -1452,157 +1310,75 @@ function mergeDirectory(zoneMap) {
 }
 
 // ── SKU availability ────────────────────────────────────────────────────
-// Two files, both taken from the same folder:
-//   Product Criteria Wise Availability Report_Final.xlsx → Detail + Summary.
-//   stock_extraction_report*.csv → the live stock on hand, one column per outlet.
-//
-// The authoritative item universe and category are read only from Final!Detail.
-// The default threshold comes from Final!Summary!F6, while any outlet-specific
-// threshold on Detail row 4 overrides it. This is the exact source logic behind
-// the workbook's Detail!AKF:BVC formulas (=IF(stock >= threshold,1,0)).
-// The older workbook's Compiled ALL and Min Stock Should Be rules are never used.
-// Bumped whenever the shape of a cached availability entry changes, so a copy
-// saved by an older build is discarded instead of being shown with blank columns.
-const FinalAvailability = window.FinalAvailabilitySource;
-const AVAIL_CACHE_VERSION = FinalAvailability.CACHE_VERSION;
-const FINAL_CRITERIA_MODE = FinalAvailability.MODE;
-const AVAIL_CRITERIA = FinalAvailability.CRITERIA;
+// Availability is no longer calculated from files in the selected Drive folder.
+// Every load and dashboard refresh reads the current published outlet/SKU snapshot
+// from operations-t.github.io/Availability-Report/ with browser caching disabled.
+const LiveAvailability = window.LiveAvailabilitySource;
+const AVAIL_CACHE_VERSION = LiveAvailability.CACHE_VERSION;
+const FINAL_CRITERIA_MODE = LiveAvailability.MODE; // retained name for older call sites
+const AVAIL_CRITERIA = LiveAvailability.CRITERIA;
 
-const normalText = (value) => String(value ?? "").trim();
-const normalKey = (value) => normalText(value).toUpperCase();
+function applyLiveAvailability(cache, source = "live") {
+  if (!LiveAvailability.isUsableCache(cache)) return false;
+  state.avail = new Map(cache.entries);
+  state.availFile = cache.sourceFile || "Availability Report live data";
+  state.stockFile = "";
+  state.criteriaMode = cache.mode;
+  state.criteriaSheet = "";
+  state.criteriaRows = Number(cache.sourceSkuRows || 0);
+  state.criteriaUnique = Number(cache.sourceSkuRows || 0);
+  state.formulaCellsChecked = 0;
+  state.criteriaSig = "";
+  state.stockSig = "";
+  state.availSavedAt = Number(cache.savedAt || 0);
+  state.availFetchedAt = Number(cache.fetchedAt || 0);
+  state.availSource = source;
+  state.availMatched = Number(cache.sourceOutlets || cache.entries.length || 0);
+  state.availSourceUrl = cache.sourcePage || LiveAvailability.SOURCE_PAGE;
+  state.availRefreshLabel = cache.refreshLabel || "";
+  state.availTypes = Array.isArray(cache.sourceTypes) ? cache.sourceTypes.slice() : [];
+  state.availError = "";
 
-async function isCriteriaWorkbook(file) {
-  return Boolean(await FinalAvailability.isFinalWorkbook(file));
+  // The published availability source supplies outlet names. Merge those names
+  // without replacing Zonal/RHO ownership from Visit Compliance.
+  state.availDirectory = new Map(Array.isArray(cache.sourceDirectory) ? cache.sourceDirectory : []);
+  mergeDirectory(new Map(state.dir));
+  return true;
 }
 
-// Item Code → category flags from the Final workbook's Detail sheet. Thresholds
-// are read from the same workbook rather than inferred from the invalid file.
-async function readCriteria(file) {
-  return FinalAvailability.read(file);
-}
-
-async function isStockFile(file) {
-  if (!/\.csv$/i.test(file.name)) return false;
-  const head = await file.slice(0, 400).text();
-  return /^\s*"?productcode"?\s*,/i.test(head);
-}
-
-function splitCsvLine(line) {
-  const out = []; let cur = "", quoted = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line[i];
-    if (quoted) {
-      if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i += 1; } else quoted = false; }
-      else cur += ch;
-    } else if (ch === '"') quoted = true;
-    else if (ch === ",") { out.push(cur); cur = ""; }
-    else cur += ch;
-  }
-  out.push(cur);
-  return out;
-}
-
-// Exact counterpart of Final!Detail!AKF:BVC: use the outlet's row-4 override
-// when present; otherwise compare with the default stored at Final!Summary!F6.
-function finalAvailabilityThreshold(outletCode, criteria) {
-  const code = normalKey(outletCode);
-  const configured = Number(criteria.thresholds?.get(code));
-  if (Number.isFinite(configured) && configured > 0) return configured;
-  // Defensive fallback for the current Final workbook if an export drops row 4.
-  if (code === "DK11" || code === "DK14") return 12;
-  return Number(criteria.defaultThreshold) > 0 ? Number(criteria.defaultThreshold) : 1;
-}
-
-// The stock file runs to hundreds of megabytes, so it is streamed and only the
-// rows that appear in Final!Detail are kept.
-async function readStockAvailability(file, criteria, onProgress) {
-  const { items, totals } = criteria;
-  const counts = new Map();     // outlet code -> { label: available }
-  const processedStockCodes = new Set();
-  let header = null, columns = [];
-  let carry = "", scanned = 0, matched = 0, read = 0;
-
-  const processDataLine = (line) => {
-    scanned += 1;
-    if (scanned % 4000 === 0) onProgress?.(read, matched);
-    const cells = splitCsvLine(line);
-    const code = normalKey(cells[0]);
-    const item = items.get(code);
-    if (!item || processedStockCodes.has(code)) return;
-    processedStockCodes.add(code);
-    matched += Number(item.rowCount || 1);
-    for (const [i, outlet, threshold] of columns) {
-      const value = parseFloat(cells[i]);
-      if (!Number.isFinite(value) || value <= 0) continue;
-      // "Actual" is stock physically present. "ok" follows the Final workbook's
-      // outlet-specific IF(stock >= threshold, 1, 0) rule.
-      const availableByFinalRule = value >= threshold;
-      const bucket = counts.get(outlet);
-      for (const [label] of AVAIL_CRITERIA) {
-        if (!item.flags[label]) continue;
-        // Duplicate Detail codes remain separate Excel formula rows. The row
-        // weight preserves those 798 formula rows while stock is matched once
-        // against the 777 unique ProductCode values in the extraction report.
-        const weight = Number(item.weights?.[label] || 0) || 1;
-        bucket[label].actual += weight;
-        if (availableByFinalRule) bucket[label].ok += weight;
+let availabilityRefreshPromise = null;
+let availabilityLastAttemptAt = 0;
+const LIVE_AVAILABILITY_CHECK_MS = 5 * 60 * 1000;
+async function refreshLiveAvailability({ silent = true, force = false } = {}) {
+  if (availabilityRefreshPromise) return availabilityRefreshPromise;
+  const lastCheck = Math.max(Number(state.availFetchedAt || 0), availabilityLastAttemptAt);
+  if (!force && lastCheck && Date.now() - lastCheck < LIVE_AVAILABILITY_CHECK_MS) return true;
+  availabilityLastAttemptAt = Date.now();
+  availabilityRefreshPromise = (async () => {
+    try {
+      if (!silent) setState(`<span class="pill idle">loading availability</span><br>Fetching the latest outlet data from <b>Availability Report</b>…`);
+      const cache = await LiveAvailability.fetchLatest();
+      applyLiveAvailability(cache, "live");
+      await idbPut("cache", "avail-live", cache);
+      // Remove the obsolete workbook/stock cache so it can never be revived.
+      await idbDel("cache", "avail");
+      if (state.rows.length) { showLoaded(); render(); }
+      return true;
+    } catch (error) {
+      state.availError = error?.message || "Could not load the live Availability Report.";
+      console.warn("Live Availability Report unavailable:", error);
+      if (state.avail.size) {
+        state.availSource = "cache";
+        if (state.rows.length) showLoaded(`Live availability refresh failed; the last successful live copy remains visible. ${state.availError}`);
+      } else if (state.rows.length) {
+        showLoaded(`Availability is temporarily unavailable. ${state.availError}`);
       }
+      return false;
+    } finally {
+      availabilityRefreshPromise = null;
     }
-  };
-
-  const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    read += value.length;
-    const chunk = carry + value;
-    const lines = chunk.split("\n");
-    carry = lines.pop() ?? "";
-    for (const raw of lines) {
-      const line = raw.replace(/\r$/, "");
-      if (!line) continue;
-      if (!header) {
-        header = splitCsvLine(line);
-        columns = header
-          .map((h, i) => [i, normalKey(h)])
-          // AKF:BVC has one output for each Final!Detail G:AKD header.
-          // Stock columns not present in that Final source block are extras and
-          // must not expand the dashboard's outlet universe.
-          .filter(([i, c]) => i >= 2 && c && criteria.thresholds.has(c))
-          .map(([i, code]) => [i, code, finalAvailabilityThreshold(code, criteria)]);
-        columns.forEach(([, code]) => counts.set(code,
-          Object.fromEntries(AVAIL_CRITERIA.map(([l]) => [l, { ok: 0, actual: 0 }]))));
-        continue;
-      }
-      processDataLine(line);
-    }
-  }
-
-  // Some stock exports do not end with a newline; include their final product row.
-  const finalLine = carry.replace(/\r$/, "");
-  if (finalLine) {
-    if (!header) {
-      header = splitCsvLine(finalLine);
-    } else {
-      processDataLine(finalLine);
-    }
-  }
-
-  const result = new Map();
-  counts.forEach((bucket, outlet) => {
-    const entry = {};
-    for (const [label] of AVAIL_CRITERIA) {
-      const total = totals[label];
-      const { ok, actual } = bucket[label];
-      entry[label] = {
-        ok, actual, total,
-        pct: total ? (100 * ok / total) : 0,
-        pctActual: total ? (100 * actual / total) : 0,
-      };
-    }
-    result.set(outlet, entry);
-  });
-  return { result, matched, scanned };
+  })();
+  return availabilityRefreshPromise;
 }
 
 const availFor = (code) => state.avail.get(String(code ?? "").trim().toUpperCase()) || null;
@@ -1611,7 +1387,7 @@ const availFor = (code) => state.avail.get(String(code ?? "").trim().toUpperCase
 // calculated from the summed counts (total available / total eligible SKUs),
 // so a small outlet cannot carry the same weight as a large one.
 function allOutletAvailability() {
-  const values = Object.fromEntries(AVAIL_CRITERIA.map(([label]) => [label, { ok: 0, total: 0, pct: 0 }]));
+  const values = Object.fromEntries(AVAIL_CRITERIA.map(([label]) => [label, { ok: 0, total: 0, pct: 0, supported: false }]));
   let outletCount = 0;
   for (const entry of state.avail.values()) {
     if (!entry || !AVAIL_CRITERIA.some(([label]) => entry[label])) continue;
@@ -1619,6 +1395,7 @@ function allOutletAvailability() {
     for (const [label] of AVAIL_CRITERIA) {
       const cell = entry[label];
       if (!cell) continue;
+      values[label].supported ||= Boolean(cell.supported || Number(cell.total || 0) > 0);
       values[label].ok += Number(cell.ok || 0);
       values[label].total += Number(cell.total || 0);
     }
@@ -1637,7 +1414,7 @@ function availabilityOutletRows(label) {
     const code = String(rawCode || "").trim().toUpperCase();
     if (selected && code !== selected) continue;
     const cell = entry?.[label];
-    if (!cell) continue;
+    if (!cell || (!cell.supported && !Number(cell.total || 0))) continue;
     const detail = meta(code);
     rows.push({
       code,
@@ -1645,7 +1422,6 @@ function availabilityOutletRows(label) {
       zonal: detail.zonal || "",
       rho: detail.rho || "",
       ok: Number(cell.ok || 0),
-      actual: Number(cell.actual || 0),
       total: Number(cell.total || 0),
       pct: Number(cell.pct || 0),
     });
@@ -1660,13 +1436,16 @@ function closeAvailabilityModal() {
 
 function openAvailabilityModal(label) {
   const rows = availabilityOutletRows(label);
+  const supported = state.availTypes.includes(label) || rows.some(row => row.total > 0);
   $("availability-modal-title").textContent = `${label} — Outlet details`;
-  $("availability-modal-caption").textContent = state.site
-    ? `${rows.length.toLocaleString()} selected outlet · Final rule: stock ≥1 (DK11/DK14 ≥12)` 
-    : `${rows.length.toLocaleString()} outlets · weakest availability first · Final rule: stock ≥1 (DK11/DK14 ≥12)`;
+  $("availability-modal-caption").textContent = supported
+    ? (state.site
+      ? `${rows.length.toLocaleString()} selected outlet · live source generated ${formatSnapshotTime(state.availSavedAt)}`
+      : `${rows.length.toLocaleString()} outlets · weakest availability first · live source generated ${formatSnapshotTime(state.availSavedAt)}`)
+    : `${label} is visible and ready, but the current live source does not publish this classification yet.`;
   $("availability-modal-body").innerHTML = rows.length
-    ? rows.map((row, index) => `<tr><td>${index + 1}</td><td><b>${esc(row.code)}</b></td><td>${esc(row.name || "—")}</td><td>${esc(row.zonal || "—")}</td><td>${esc(row.rho || "—")}</td><td class="num">${row.ok.toLocaleString()}</td><td class="num">${row.actual.toLocaleString()}</td><td class="num">${row.total.toLocaleString()}</td><td class="num">${scoreCell(row.pct)}</td></tr>`).join("")
-    : `<tr><td colspan="9" class="empty-state">No outlet availability records were found for ${esc(label)}.</td></tr>`;
+    ? rows.map((row, index) => `<tr><td>${index + 1}</td><td><b>${esc(row.code)}</b></td><td>${esc(row.name || "—")}</td><td>${esc(row.zonal || "—")}</td><td>${esc(row.rho || "—")}</td><td class="num">${row.ok.toLocaleString()}</td><td class="num">${Math.max(0, row.total - row.ok).toLocaleString()}</td><td class="num">${row.total.toLocaleString()}</td><td class="num">${scoreCell(row.pct)}</td></tr>`).join("")
+    : `<tr><td colspan="9" class="empty-state">${supported ? `No outlet availability records were found for ${esc(label)}.` : `The published source currently provides Core, KVI and Promo only. HGPHS will populate automatically when the source publishes that type.`}</td></tr>`;
   $("availability-modal").hidden = false;
   $("availability-modal-close").focus();
 }
@@ -2225,11 +2004,11 @@ function render() {
 
   const networkAvailability = !state.site ? allOutletAvailability() : null;
   const availabilityView = state.site ? availFor(state.site) : networkAvailability?.values;
-  const finalTotals = availabilityView || {};
-  const noHgphs = Number(finalTotals["HGPHS SKU"]?.total || 0) === 0;
+  const unavailableTypes = AVAIL_CRITERIA.map(([label]) => label)
+    .filter(label => !(availabilityView?.[label]?.supported || Number(availabilityView?.[label]?.total || 0) > 0));
   const availabilityCaption = state.site
-    ? `Final workbook · Detail rule: stock ≥1; DK11/DK14 ≥12 · ${esc(state.site.toUpperCase())}${noHgphs ? " · HGPHS is not classified in the Final workbook" : ""}`
-    : `Final workbook · Detail rule: stock ≥1; DK11/DK14 ≥12 · All ${(networkAvailability?.outletCount || 0).toLocaleString()} outlets in the latest availability snapshot${noHgphs ? " · HGPHS is not classified in the Final workbook" : ""}`;
+    ? `Live Availability Report · ${esc(state.site.toUpperCase())} · generated ${esc(formatSnapshotTime(state.availSavedAt))}${unavailableTypes.length ? ` · awaiting source: ${esc(unavailableTypes.join(", "))}` : ""}`
+    : `Live Availability Report · All ${(networkAvailability?.outletCount || 0).toLocaleString()} published outlets · generated ${esc(formatSnapshotTime(state.availSavedAt))}${unavailableTypes.length ? ` · awaiting source: ${esc(unavailableTypes.join(", "))}` : ""}`;
 
   const drillMeta = state.site ? meta(state.site) : EMPTY_META;
   const drill = state.site
@@ -2275,13 +2054,15 @@ function render() {
     ${availabilityView ? `
     <section class="panel">
       <div class="panel-head"><h2>Availability Status</h2>
-        <p class="panel-caption">${availabilityCaption}${isDriveOwner() && state.availFile ? ` · ${esc(state.availFile)}` : ""}${isDriveOwner() && state.stockFile ? ` + ${esc(state.stockFile)}` : ""}</p></div>
+        <p class="panel-caption">${availabilityCaption}${isDriveOwner() && state.availFile ? ` · ${esc(state.availFile)}` : ""}</p></div>
       <div class="table-wrap"><table>
         <thead><tr><th>Availability Status</th><th class="num">Avail</th><th class="num">SKUs</th><th class="num">%</th></tr></thead>
         <tbody>${AVAIL_CRITERIA.map(([label]) => {
-          const cell = availabilityView[label];
-          return `<tr class="availability-click-row" data-availability-label="${esc(label)}" tabindex="0" role="button" aria-label="Show ${esc(label)} outlet details"><td><button type="button" class="availability-status-link">${esc(label)}</button></td><td class="num">${cell.ok.toLocaleString()}</td><td class="num">${cell.total.toLocaleString()}</td>
-            <td class="num">${scoreCell(cell.pct)}</td></tr>`;
+          const cell = availabilityView[label] || { ok: 0, total: 0, pct: 0, supported: false };
+          const supported = Boolean(cell.supported || Number(cell.total || 0) > 0);
+          return `<tr class="availability-click-row" data-availability-label="${esc(label)}" tabindex="0" role="button" aria-label="Show ${esc(label)} outlet details"><td><button type="button" class="availability-status-link">${esc(label)}</button></td>${supported
+            ? `<td class="num">${cell.ok.toLocaleString()}</td><td class="num">${cell.total.toLocaleString()}</td><td class="num">${scoreCell(cell.pct)}</td>`
+            : `<td class="num">—</td><td class="num">—</td><td class="num"><span class="pill idle">Awaiting source</span></td>`}</tr>`;
         }).join("")}</tbody>
       </table></div>
     </section>` : ""}
@@ -2457,11 +2238,12 @@ function exportCsv({ share = false } = {}) {
   v.questions.forEach(([k,[g,m,c]]) => lines.push([k, c || "", g, m, pct(g,m).toFixed(1)]));
   const av = state.site ? availFor(state.site) : allOutletAvailability()?.values;
   if (av) {
-    lines.push([], ["AVAILABILITY STATUS", "Available by Final rule (stock >=1; DK11/DK14 >=12)", "SKUs",
-                    "% available by Final rule"]);
+    lines.push([], ["AVAILABILITY STATUS", "Available", "SKUs", "% available"],
+      ["Live source", LiveAvailability.SOURCE_PAGE, "Generated", formatSnapshotTime(state.availSavedAt)]);
     AVAIL_CRITERIA.forEach(([label]) => {
-      const c = av[label];
-      lines.push([label, c.ok, c.total, c.pct.toFixed(1)]);
+      const c = av[label] || { ok: 0, total: 0, pct: 0, supported: false };
+      const supported = Boolean(c.supported || Number(c.total || 0) > 0);
+      lines.push(supported ? [label, c.ok, c.total, c.pct.toFixed(1)] : [label, "Awaiting source", "", ""]);
     });
   }
   lines.push([], ["OUTLET", "Outlet name", "Zonal", "Regional (RHO)", "Earned", "Available", "Score %"]);
@@ -2736,8 +2518,9 @@ function exportPdf({ share = false } = {}) {
       const avY = y0 + 37 + catRowsAz.length * 10.5 + 16;
       table(M, avY, 232, ["Availability Status", ">Avail", ">SKUs", ">%"], [104, 44, 44, 40],
             AVAIL_CRITERIA.map(([label]) => {
-              const c = av[label];
-              return [label, c.ok, c.total, c.pct.toFixed(1) + "%"];
+              const c = av[label] || { ok: 0, total: 0, pct: 0, supported: false };
+              const supported = Boolean(c.supported || Number(c.total || 0) > 0);
+              return supported ? [label, c.ok, c.total, c.pct.toFixed(1) + "%"] : [label, "—", "—", "Awaiting source"];
             }),
             "Availability Status", 11);
     }
@@ -2915,40 +2698,23 @@ if (REQUESTED_OUTLET) {
   } else {
     setState(`<span class="pill idle">Drive setup required</span><br>Connect the shared Google Drive folder holding the survey export.`);
   }
-  // 2. Restore the last successful PC stock availability snapshot BEFORE
-  // reconnecting to the folder.  This prevents a refresh/empty folder from
-  // temporarily showing zero availability.
-  const availCache = await idbGet("cache", "avail");
-  const availUsable = availCache?.version === AVAIL_CACHE_VERSION
-    && availCache.criteriaMode === FINAL_CRITERIA_MODE
-    && availCache.entries?.length
-    && availCache.entries.some(([, e]) => e && Object.values(e).some(v => v && v.actual !== undefined));
-  if (availUsable) {
-    state.avail = new Map(availCache.entries);
-    state.availFile = availCache.file || "";
-    state.stockFile = availCache.stockFile || "";
-    state.criteriaSig = availCache.criteriaSig || "";
-    state.criteriaMode = availCache.criteriaMode || "";
-    state.criteriaSheet = availCache.criteriaSheet || "Detail";
-    state.criteriaRows = Number(availCache.criteriaRows || 0);
-    state.criteriaUnique = Number(availCache.criteriaUnique || 0);
-    state.formulaCellsChecked = Number(availCache.formulaCellsChecked || 0);
-    state.stockSig = availCache.stockSig || "";
-    state.availSavedAt = availCache.savedAt || 0;
-    state.availSource = "cache";
-    state.availMatched = availCache.matched || 0;
+  // 2. Restore only a cache previously fetched from the public Availability
+  // Report. Old workbook/stock calculations are deliberately discarded.
+  const availCache = await idbGet("cache", "avail-live");
+  if (LiveAvailability.isUsableCache(availCache)) {
+    applyLiveAvailability(availCache, "cache");
     if (state.rows.length) { showLoaded(); render(); }
-  } else if (availCache) {
-    await idbDel("cache", "avail");
   }
+  await idbDel("cache", "avail");
+  const liveAvailabilityPromise = refreshLiveAvailability({ silent: Boolean(state.avail.size), force: true });
 
-  // 3. Use the server-side audit snapshot when one has been published.  The
-  // availability snapshot remains the local PC-folder copy restored above.
+  // 3. Use the server-side Audit snapshot when one has been published.
   await loadPublishedAudit();
   // 4. Prefer the explicitly published cross-PC snapshot when available.
   await loadSharedPublishedSnapshot();
   // 5. Load outlet ownership and then reconnect to the remembered Drive folder.
   await loadDirectory();
+  await liveAvailabilityPromise;
   const zoneCache = await idbGet("cache", "zone");
   if (zoneCache?.entries?.length) {
     state.zoneFile = zoneCache.file;
@@ -2958,9 +2724,10 @@ if (REQUESTED_OUTLET) {
   const driveCache = await idbGet("cache", "drive-source");
   if (driveCache && driveCache.folderId === Drive.getFolder()?.id) state.driveRemoteSig = driveCache.remoteSig || "";
   const folder = Drive.getFolder();
-  if (folder && Drive.cachedToken()) { await syncDrive({ silent: false }); startWatching(); }
+  if (folder && Drive.cachedToken()) { await syncDrive({ silent: false }); }
   else if (folder) setState(`<span class="pill idle">reconnect Drive</span><br>Folder <b>${esc(folder.name)}</b> is already selected. Click Reconnect Google Drive.${state.rows.length ? " The retained snapshot remains visible." : ""}`);
   else if (state.rows.length) showLoaded("Use Drive setup to select the shared Google Drive folder.");
+  startWatching();
 })();
 </script>
 </body>
