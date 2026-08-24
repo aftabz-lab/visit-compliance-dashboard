@@ -310,6 +310,20 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
     border: 0; padding: 0; background: transparent; color: var(--blue-2);
     font: inherit; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
   }
+  .availability-cards { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; padding:16px; }
+  .availability-card {
+    position:relative; display:grid; gap:10px; min-height:142px; padding:18px 20px;
+    border:1px solid var(--line); border-left:5px solid var(--availability-accent);
+    border-radius:16px; background:var(--dark-2); color:var(--white-text); text-align:left; cursor:pointer;
+  }
+  .availability-card:hover,.availability-card:focus-visible { transform:translateY(-1px); box-shadow:0 10px 24px rgba(0,0,0,.18); }
+  .availability-card-top,.availability-card-foot { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .availability-card-tag { padding:6px 11px; border-radius:999px; background:var(--availability-soft); color:var(--availability-accent); font-size:12px; font-weight:900; }
+  .availability-card-skus,.availability-card-foot { color:var(--muted-text); font-size:12px; font-weight:800; }
+  .availability-card-score { color:var(--availability-score); font-size:40px; line-height:1; font-weight:900; letter-spacing:-1.5px; }
+  .availability-card.core { --availability-accent:#2d7bc4; --availability-soft:rgba(45,123,196,.14); --availability-score:#a76300; }
+  .availability-card.kvi { --availability-accent:#20a87a; --availability-soft:rgba(32,168,122,.14); --availability-score:#cf2e28; }
+  .availability-card.promo { --availability-accent:#ee6d36; --availability-soft:rgba(238,109,54,.14); --availability-score:#a76300; }
   .availability-modal-backdrop {
     position: fixed; inset: 0; z-index: 1300; display: grid; place-items: center;
     padding: 24px; background: rgba(4,8,12,.7);
@@ -391,6 +405,7 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
     .split { grid-template-columns: 1fr; }
   }
   @media (max-width: 900px) {
+    .availability-cards { grid-template-columns:1fr; }
     .topbar { margin: 12px; border-radius: 18px; }
     .audit-layout { padding: 12px; }
     .rail-body { grid-template-columns: minmax(0,1fr); }
@@ -507,7 +522,7 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
       <button id="availability-modal-close" class="availability-modal-close" type="button" aria-label="Close availability details">×</button>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>#</th><th>Outlet Code</th><th>Outlet Name</th><th>Zonal</th><th>Regional (RHO)</th><th class="num">Available by Final Rule</th><th class="num">Has Stock</th><th class="num">Eligible SKUs</th><th class="num">Availability %</th></tr></thead>
+      <thead><tr><th>#</th><th>Outlet Code</th><th>Outlet Name</th><th>Zonal</th><th>Regional (RHO)</th><th class="num">1D DOS Qty</th><th class="num">In Stock</th><th class="num">SKUs</th><th class="num">1D DOS %</th></tr></thead>
       <tbody id="availability-modal-body"></tbody>
     </table></div>
   </section>
@@ -858,7 +873,7 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
   "use strict";
 
   const MODE = "operations-availability-live-v1";
-  const CACHE_VERSION = 7;
+  const CACHE_VERSION = 8;
   const SOURCE_PAGE = "https://operations-t.github.io/Availability-Report/";
   const SOURCE_URL = `${SOURCE_PAGE}data/dashboard.json`;
   const CRITERIA = [
@@ -890,6 +905,12 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
     } catch { return null; }
   }
 
+  function decodeFloat32(encoded) {
+    const bytes = decodeBytes(encoded);
+    if (!bytes || bytes.byteLength % 4) return null;
+    return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+  }
+
   function bitAt(bytes, index) { return bytes ? ((bytes[index >> 3] >> (index & 7)) & 1) : 0; }
   function emptyCell() { return { ok: 0, actual: 0, total: 0, pct: 0, pctActual: 0, supported: false }; }
 
@@ -913,16 +934,22 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
     for (const sku of data.skus) {
       const label = labelForType(sku?.type); if (!label) continue;
       const bits = decodeBytes(sku?.stock_bits_b64);
+      const coverageDays = decodeFloat32(sku?.coverage_days_f32_b64);
       if (!bits || bits.length * 8 < codes.length) throw new Error(`The live Availability Report has an incomplete outlet payload for SKU ${normalText(sku?.sku_code) || "(unknown)"}.`);
+      if (!coverageDays || coverageDays.length < codes.length) throw new Error(`The live Availability Report has incomplete DOS coverage for SKU ${normalText(sku?.sku_code) || "(unknown)"}.`);
       supportedLabels.add(label);
       for (let index = 0; index < codes.length; index += 1) {
         const cell = entries.get(codes[index])[label]; cell.total += 1;
-        if (bitAt(bits, index)) { cell.ok += 1; cell.actual += 1; }
+        if (bitAt(bits, index)) cell.ok += 1;
+        // Exact source formula for the selected 1-day DOS view:
+        // IF(stock >= forecast/30, 1, stock/(forecast/30)).
+        cell.actual += Math.min(1, Math.max(0, Number(coverageDays[index]) || 0));
       }
     }
     for (const entry of entries.values()) for (const [label] of CRITERIA) {
       const cell = entry[label]; cell.supported = supportedLabels.has(label);
-      cell.pct = cell.total ? (100 * cell.ok / cell.total) : 0; cell.pctActual = cell.pct;
+      cell.pct = cell.total ? (100 * cell.actual / cell.total) : 0;
+      cell.pctActual = cell.total ? (100 * cell.ok / cell.total) : 0;
     }
     const generatedAt = Date.parse(data.meta?.generated_at || "") || fetchedAt;
     return {
@@ -1689,8 +1716,8 @@ async function syncDriveNow({ silent = true, interactive = false, pickFolder = f
       return;
     }
     const remoteSig = metas.map(Drive.remoteSignature).sort().join("||");
-    const hasCurrentFinalAvailability = state.avail.size && state.criteriaMode === FINAL_CRITERIA_MODE;
-    if (state.driveRemoteSig === remoteSig && state.rows.length && hasCurrentFinalAvailability) {
+    const hasCurrentAvailability = state.avail.size > 0;
+    if (state.driveRemoteSig === remoteSig && state.rows.length && hasCurrentAvailability) {
       if (state.source === "gdrive") state.stale = false;
       $("grant").hidden = true;
       if (!silent) showLoaded(`Live from Google Drive folder “${folder.name}”.`);
@@ -1706,6 +1733,9 @@ async function syncDriveNow({ silent = true, interactive = false, pickFolder = f
     $("grant").hidden = true;
     state.dirHandle = memoryFolderHandle(files);
     await syncFolder({ silent: false });
+    // Keep the source dashboard's exact 1-day DOS metrics authoritative after
+    // any Drive refresh recalculates the older binary availability snapshot.
+    await loadLiveAvailabilityFallback();
     state.driveRemoteSig = remoteSig;
     await idbPut("cache", "drive-source", { remoteSig, folderId: folder.id, folderName: folder.name, savedAt: Date.now() });
     if (state.source === "gdrive") showLoaded(`Live from Google Drive folder “${folder.name}”.`);
@@ -2047,7 +2077,7 @@ const availFor = (code) => state.avail.get(String(code ?? "").trim().toUpperCase
 // calculated from the summed counts (total available / total eligible SKUs),
 // so a small outlet cannot carry the same weight as a large one.
 function allOutletAvailability() {
-  const values = Object.fromEntries(AVAIL_CRITERIA.map(([label]) => [label, { ok: 0, total: 0, pct: 0 }]));
+  const values = Object.fromEntries(AVAIL_CRITERIA.map(([label]) => [label, { ok: 0, actual: 0, total: 0, pct: 0, pctActual: 0 }]));
   let outletCount = 0;
   for (const entry of state.avail.values()) {
     if (!entry || !AVAIL_CRITERIA.some(([label]) => entry[label])) continue;
@@ -2056,12 +2086,14 @@ function allOutletAvailability() {
       const cell = entry[label];
       if (!cell) continue;
       values[label].ok += Number(cell.ok || 0);
+      values[label].actual += Number(cell.actual || 0);
       values[label].total += Number(cell.total || 0);
     }
   }
   for (const [label] of AVAIL_CRITERIA) {
     const cell = values[label];
-    cell.pct = cell.total ? (100 * cell.ok / cell.total) : 0;
+    cell.pct = cell.total ? (100 * cell.actual / cell.total) : 0;
+    cell.pctActual = cell.total ? (100 * cell.ok / cell.total) : 0;
   }
   return outletCount ? { outletCount, values } : null;
 }
@@ -2085,15 +2117,15 @@ function applyLiveAvailability(cache, source = "live") {
 async function loadLiveAvailabilityFallback() {
   if (!LiveAvailability) return false;
   const cached = await idbGet("cache", "live-avail");
-  if (!state.avail.size && applyLiveAvailability(cached, "live-cache")) {
+  if (applyLiveAvailability(cached, "live-cache")) {
     if (state.rows.length) { showLoaded(); render(); }
   }
   try {
     const latest = await LiveAvailability.fetchLatest();
     await idbPut("cache", "live-avail", latest);
-    const finalLocal = ["local", "cache", "retained", "shared"].includes(state.availSource)
-      && state.criteriaMode === FINAL_CRITERIA_MODE;
-    if (!finalLocal && applyLiveAvailability(latest, "live")) {
+    // The source dashboard's live payload is authoritative for the three
+    // outlet-level 1-day DOS cards, even when an older local stock cache exists.
+    if (applyLiveAvailability(latest, "live")) {
       if (state.rows.length) { showLoaded(); render(); }
       return true;
     }
@@ -2135,10 +2167,10 @@ function openAvailabilityModal(label) {
   const rows = availabilityOutletRows(label);
   $("availability-modal-title").textContent = `${label} — Outlet details`;
   $("availability-modal-caption").textContent = state.site
-    ? `${rows.length.toLocaleString()} selected outlet · Final rule: stock ≥1 (DK11/DK14 ≥12)` 
-    : `${rows.length.toLocaleString()} outlets · weakest availability first · Final rule: stock ≥1 (DK11/DK14 ≥12)`;
+    ? `${rows.length.toLocaleString()} selected outlet · exact 1-day DOS calculation` 
+    : `${rows.length.toLocaleString()} outlets · weakest 1-day DOS first`;
   $("availability-modal-body").innerHTML = rows.length
-    ? rows.map((row, index) => `<tr><td>${index + 1}</td><td><b>${esc(row.code)}</b></td><td>${esc(row.name || "—")}</td><td>${esc(row.zonal || "—")}</td><td>${esc(row.rho || "—")}</td><td class="num">${row.ok.toLocaleString()}</td><td class="num">${row.actual.toLocaleString()}</td><td class="num">${row.total.toLocaleString()}</td><td class="num">${scoreCell(row.pct)}</td></tr>`).join("")
+    ? rows.map((row, index) => `<tr><td>${index + 1}</td><td><b>${esc(row.code)}</b></td><td>${esc(row.name || "—")}</td><td>${esc(row.zonal || "—")}</td><td>${esc(row.rho || "—")}</td><td class="num">${row.actual.toFixed(1)}</td><td class="num">${row.ok.toLocaleString()}</td><td class="num">${row.total.toLocaleString()}</td><td class="num">${scoreCell(row.pct)}</td></tr>`).join("")
     : `<tr><td colspan="9" class="empty-state">No outlet availability records were found for ${esc(label)}.</td></tr>`;
   $("availability-modal").hidden = false;
   $("availability-modal-close").focus();
@@ -2699,9 +2731,13 @@ function render() {
   const networkAvailability = !state.site ? allOutletAvailability() : null;
   const availabilityView = state.site ? availFor(state.site) : networkAvailability?.values;
   const finalTotals = availabilityView || {};
+  const totalDosGap = AVAIL_CRITERIA.reduce((sum, [label]) => {
+    const cell = finalTotals[label];
+    return sum + Math.max(0, Number(cell?.total || 0) - Number(cell?.actual || 0));
+  }, 0);
   const availabilityCaption = state.site
-    ? `Final workbook · Detail rule: stock ≥1; DK11/DK14 ≥12 · ${esc(state.site.toUpperCase())}`
-    : `Final workbook · Detail rule: stock ≥1; DK11/DK14 ≥12 · All ${(networkAvailability?.outletCount || 0).toLocaleString()} outlets in the latest availability snapshot`;
+    ? `Exact 1-day DOS values · ${esc(state.site.toUpperCase())} · changes automatically with the selected outlet`
+    : `Exact 1-day DOS values · All ${(networkAvailability?.outletCount || 0).toLocaleString()} outlets in the latest availability snapshot`;
 
   const drillMeta = state.site ? meta(state.site) : EMPTY_META;
   const drill = state.site
@@ -2748,14 +2784,19 @@ function render() {
     <section class="panel">
       <div class="panel-head"><h2>Availability Status</h2>
         <p class="panel-caption">${availabilityCaption}${isDriveOwner() && state.availFile ? ` · ${esc(state.availFile)}` : ""}${isDriveOwner() && state.stockFile ? ` + ${esc(state.stockFile)}` : ""}</p></div>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Availability Status</th><th class="num">Avail</th><th class="num">SKUs</th><th class="num">%</th></tr></thead>
-        <tbody>${AVAIL_CRITERIA.map(([label]) => {
+      <div class="availability-cards">${AVAIL_CRITERIA.map(([label]) => {
           const cell = availabilityView[label];
-          return `<tr class="availability-click-row" data-availability-label="${esc(label)}" tabindex="0" role="button" aria-label="Show ${esc(label)} outlet details"><td><button type="button" class="availability-status-link">${esc(label)}</button></td><td class="num">${cell.ok.toLocaleString()}</td><td class="num">${cell.total.toLocaleString()}</td>
-            <td class="num">${scoreCell(cell.pct)}</td></tr>`;
-        }).join("")}</tbody>
-      </table></div>
+          const short = label.replace(/\s+SKU$/i, "");
+          const cls = short.toLowerCase();
+          const stockPct = Number(cell.pctActual ?? (cell.total ? 100 * Number(cell.ok || 0) / cell.total : 0));
+          const gap = Math.max(0, Number(cell.total || 0) - Number(cell.actual || 0));
+          const gapShare = totalDosGap ? 100 * gap / totalDosGap : 0;
+          return `<button type="button" class="availability-card ${esc(cls)}" data-availability-label="${esc(label)}" aria-label="Show ${esc(label)} outlet details">
+            <span class="availability-card-top"><span class="availability-card-tag">${esc(short)}</span><span class="availability-card-skus">${Number(cell.total || 0).toLocaleString()} SKUs</span></span>
+            <strong class="availability-card-score">${Number(cell.pct || 0).toFixed(1)}%</strong>
+            <span class="availability-card-foot"><span>1D DOS · stock ${stockPct.toFixed(1)}%</span><span>${gapShare.toFixed(1)}% of DOS gap</span></span>
+          </button>`;
+        }).join("")}</div>
     </section>` : ""}
 
     <section class="panel">
@@ -2929,11 +2970,10 @@ function exportCsv({ share = false } = {}) {
   v.questions.forEach(([k,[g,m,c]]) => lines.push([k, c || "", g, m, pct(g,m).toFixed(1)]));
   const av = state.site ? availFor(state.site) : allOutletAvailability()?.values;
   if (av) {
-    lines.push([], ["AVAILABILITY STATUS", "Available by Final rule (stock >=1; DK11/DK14 >=12)", "SKUs",
-                    "% available by Final rule"]);
+    lines.push([], ["AVAILABILITY STATUS", "1D DOS Qty", "In Stock", "SKUs", "1D DOS %"]);
     AVAIL_CRITERIA.forEach(([label]) => {
       const c = av[label];
-      lines.push([label, c.ok, c.total, c.pct.toFixed(1)]);
+      lines.push([label, Number(c.actual || 0).toFixed(1), c.ok, c.total, c.pct.toFixed(1)]);
     });
   }
   lines.push([], ["OUTLET", "Outlet name", "Zonal", "Regional (RHO)", "Earned", "Available", "Score %"]);
@@ -3206,10 +3246,10 @@ function exportPdf({ share = false } = {}) {
     const av = availFor(state.site);
     if (av) {
       const avY = y0 + 37 + catRowsAz.length * 10.5 + 16;
-      table(M, avY, 232, ["Availability Status", ">Avail", ">SKUs", ">%"], [104, 44, 44, 40],
+      table(M, avY, 232, ["Availability Status", ">1D DOS", ">Stock", ">SKUs", ">%"], [84, 40, 36, 34, 38],
             AVAIL_CRITERIA.map(([label]) => {
               const c = av[label];
-              return [label, c.ok, c.total, c.pct.toFixed(1) + "%"];
+              return [label, Number(c.actual || 0).toFixed(1), c.ok, c.total, c.pct.toFixed(1) + "%"];
             }),
             "Availability Status", 11);
     }
