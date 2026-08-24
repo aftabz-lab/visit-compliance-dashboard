@@ -910,7 +910,7 @@ function availabilityStatusHtml() {
   const sourceFile = state.availFile ? ` · ${esc(state.availFile)}` : "";
   const missing = AVAIL_CRITERIA.map(([name]) => name).filter(name => !state.availTypes.includes(name));
   const missingNote = missing.length
-    ? `<br><span style="color:#e0a53f">Awaiting classification from source: ${esc(missing.join(", "))}</span>`
+    ? `<br><span style="color:#e0a53f">Not supplied by current source: ${esc(missing.join(", "))}</span>`
     : "";
   return `<br><span style="color:${retained ? "#e0a53f" : "#75d89b"}">${label}${when}${sourceFile}</span>`
     + `<br><a href="${esc(state.availSourceUrl || LiveAvailability.SOURCE_PAGE)}" target="_blank" rel="noopener" style="color:#69bfe9">operations-t Availability Report</a>${missingNote}`;
@@ -1316,7 +1316,7 @@ function mergeDirectory(zoneMap) {
 const LiveAvailability = window.LiveAvailabilitySource;
 const AVAIL_CACHE_VERSION = LiveAvailability.CACHE_VERSION;
 const FINAL_CRITERIA_MODE = LiveAvailability.MODE; // retained name for older call sites
-const AVAIL_CRITERIA = LiveAvailability.CRITERIA;
+const AVAIL_CRITERIA = LiveAvailability.CRITERIA.filter(([label]) => label !== "HGPHS SKU");
 
 function applyLiveAvailability(cache, source = "live") {
   if (!LiveAvailability.isUsableCache(cache)) return false;
@@ -1442,10 +1442,10 @@ function openAvailabilityModal(label) {
     ? (state.site
       ? `${rows.length.toLocaleString()} selected outlet · live source generated ${formatSnapshotTime(state.availSavedAt)}`
       : `${rows.length.toLocaleString()} outlets · weakest availability first · live source generated ${formatSnapshotTime(state.availSavedAt)}`)
-    : `${label} is visible and ready, but the current live source does not publish this classification yet.`;
+    : `${label} is not supplied by the current live Availability Report. This is not a loading status.`;
   $("availability-modal-body").innerHTML = rows.length
     ? rows.map((row, index) => `<tr><td>${index + 1}</td><td><b>${esc(row.code)}</b></td><td>${esc(row.name || "—")}</td><td>${esc(row.zonal || "—")}</td><td>${esc(row.rho || "—")}</td><td class="num">${row.ok.toLocaleString()}</td><td class="num">${Math.max(0, row.total - row.ok).toLocaleString()}</td><td class="num">${row.total.toLocaleString()}</td><td class="num">${scoreCell(row.pct)}</td></tr>`).join("")
-    : `<tr><td colspan="9" class="empty-state">${supported ? `No outlet availability records were found for ${esc(label)}.` : `The published source currently provides Core, KVI and Promo only. HGPHS will populate automatically when the source publishes that type.`}</td></tr>`;
+    : `<tr><td colspan="9" class="empty-state">${supported ? `No outlet availability records were found for ${esc(label)}.` : `Not supplied by the live source. Its published data currently contains Core, KVI and Promo only.`}</td></tr>`;
   $("availability-modal").hidden = false;
   $("availability-modal-close").focus();
 }
@@ -2007,8 +2007,8 @@ function render() {
   const unavailableTypes = AVAIL_CRITERIA.map(([label]) => label)
     .filter(label => !(availabilityView?.[label]?.supported || Number(availabilityView?.[label]?.total || 0) > 0));
   const availabilityCaption = state.site
-    ? `Live Availability Report · ${esc(state.site.toUpperCase())} · generated ${esc(formatSnapshotTime(state.availSavedAt))}${unavailableTypes.length ? ` · awaiting source: ${esc(unavailableTypes.join(", "))}` : ""}`
-    : `Live Availability Report · All ${(networkAvailability?.outletCount || 0).toLocaleString()} published outlets · generated ${esc(formatSnapshotTime(state.availSavedAt))}${unavailableTypes.length ? ` · awaiting source: ${esc(unavailableTypes.join(", "))}` : ""}`;
+    ? `Live Availability Report · ${esc(state.site.toUpperCase())} · generated ${esc(formatSnapshotTime(state.availSavedAt))}${unavailableTypes.length ? ` · not supplied by source: ${esc(unavailableTypes.join(", "))}` : ""}`
+    : `Live Availability Report · All ${(networkAvailability?.outletCount || 0).toLocaleString()} published outlets · generated ${esc(formatSnapshotTime(state.availSavedAt))}${unavailableTypes.length ? ` · not supplied by source: ${esc(unavailableTypes.join(", "))}` : ""}`;
 
   const drillMeta = state.site ? meta(state.site) : EMPTY_META;
   const drill = state.site
@@ -2062,7 +2062,7 @@ function render() {
           const supported = Boolean(cell.supported || Number(cell.total || 0) > 0);
           return `<tr class="availability-click-row" data-availability-label="${esc(label)}" tabindex="0" role="button" aria-label="Show ${esc(label)} outlet details"><td><button type="button" class="availability-status-link">${esc(label)}</button></td>${supported
             ? `<td class="num">${cell.ok.toLocaleString()}</td><td class="num">${cell.total.toLocaleString()}</td><td class="num">${scoreCell(cell.pct)}</td>`
-            : `<td class="num">—</td><td class="num">—</td><td class="num"><span class="pill idle">Awaiting source</span></td>`}</tr>`;
+            : `<td class="num">—</td><td class="num">—</td><td class="num"><span class="pill idle">Not supplied by source</span></td>`}</tr>`;
         }).join("")}</tbody>
       </table></div>
     </section>` : ""}
@@ -2243,7 +2243,7 @@ function exportCsv({ share = false } = {}) {
     AVAIL_CRITERIA.forEach(([label]) => {
       const c = av[label] || { ok: 0, total: 0, pct: 0, supported: false };
       const supported = Boolean(c.supported || Number(c.total || 0) > 0);
-      lines.push(supported ? [label, c.ok, c.total, c.pct.toFixed(1)] : [label, "Awaiting source", "", ""]);
+      lines.push(supported ? [label, c.ok, c.total, c.pct.toFixed(1)] : [label, "Not supplied by source", "", ""]);
     });
   }
   lines.push([], ["OUTLET", "Outlet name", "Zonal", "Regional (RHO)", "Earned", "Available", "Score %"]);
@@ -2520,7 +2520,7 @@ function exportPdf({ share = false } = {}) {
             AVAIL_CRITERIA.map(([label]) => {
               const c = av[label] || { ok: 0, total: 0, pct: 0, supported: false };
               const supported = Boolean(c.supported || Number(c.total || 0) > 0);
-              return supported ? [label, c.ok, c.total, c.pct.toFixed(1) + "%"] : [label, "—", "—", "Awaiting source"];
+              return supported ? [label, c.ok, c.total, c.pct.toFixed(1) + "%"] : [label, "—", "—", "Not supplied"];
             }),
             "Availability Status", 11);
     }
