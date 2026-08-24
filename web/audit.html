@@ -507,7 +507,7 @@ html:not(.drive-owner) [data-drive-owner-only] { display: none !important; }
       <button id="availability-modal-close" class="availability-modal-close" type="button" aria-label="Close availability details">×</button>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>#</th><th>Outlet Code</th><th>Outlet Name</th><th>Zonal</th><th>Regional (RHO)</th><th class="num">Meets Minimum</th><th class="num">Has Stock</th><th class="num">Eligible SKUs</th><th class="num">Availability %</th></tr></thead>
+      <thead><tr><th>#</th><th>Outlet Code</th><th>Outlet Name</th><th>Zonal</th><th>Regional (RHO)</th><th class="num">Available by Final Rule</th><th class="num">Has Stock</th><th class="num">Eligible SKUs</th><th class="num">Availability %</th></tr></thead>
       <tbody id="availability-modal-body"></tbody>
     </table></div>
   </section>
@@ -1396,14 +1396,16 @@ function mergeDirectory(zoneMap) {
 
 // ── SKU availability ────────────────────────────────────────────────────
 // Two files, both taken from the same folder:
-//   Product_Critaria_Wise_Avaiablity_Report.xlsx → sheet "Compiled ALL", and only
-//     these columns: Item Code, Core Item, Core Promo, KVI, HGPHS, Min Stock Should Be.
+//   Product_Critaria_Wise_Avaiablity_Report.xlsx → sheet "Compiled ALL", using
+//     only Item Code plus the Core Item, Core Promo, KVI and HGPHS membership flags.
 //   stock_extraction_report*.csv → the stock on hand, one column per outlet.
-// An item counts as available at an outlet only when its stock reaches
-// "Min Stock Should Be"; below that it is treated as zero stock for that outlet.
+// Availability follows the authoritative Final workbook formula block Detail!AKF:BVC:
+//   standard outlet: IF(stock >= 1, 1, 0)
+//   DK11 / DK14:     IF(stock >= 12, 1, 0)
+// The invalid item-level "Min Stock Should Be" rule in the second workbook is ignored.
 // Bumped whenever the shape of a cached availability entry changes, so a copy
 // saved by an older build is discarded instead of being shown with blank columns.
-const AVAIL_CACHE_VERSION = 3;
+const AVAIL_CACHE_VERSION = 4;
 const AVAIL_CRITERIA = [["Core SKU", "Core Item"], ["KVI SKU", "KVI"], ["Promo SKU", "Core Promo"], ["HGPHS SKU", "HGPHS"]];
 
 async function isCriteriaWorkbook(file) {
@@ -1413,11 +1415,14 @@ async function isCriteriaWorkbook(file) {
     if (!name) return false;
     const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "", blankrows: false });
     const head = grid.flat().map(h => String(h).trim().toLowerCase());
-    return head.includes("item code") && head.includes("min stock should be");
+    return head.includes("item code")
+      && ["core item", "core promo", "kvi", "hgphs"].some(column => head.includes(column));
   } catch { return false; }
 }
 
-// Item Code → { min, flags } for the four criteria. Outlet columns are ignored.
+// Item Code → { flags } for the four criteria. Min-stock and outlet-formula
+// columns in this workbook are deliberately ignored; the Final rule is applied
+// directly to the live stock extraction below.
 async function readCriteria(file) {
   const wb = XLSX.read(await file.arrayBuffer(), { type: "array", sheetRows: 4000, cellStyles: false });
   const sheetName = wb.SheetNames.find(n => n.trim().toLowerCase() === "compiled all");
@@ -1427,23 +1432,25 @@ async function readCriteria(file) {
   const head = grid[headerRow].map(c => String(c).trim().toLowerCase());
   const at = {
     code: head.indexOf("item code"),
-    min: head.indexOf("min stock should be"),
     flags: Object.fromEntries(AVAIL_CRITERIA.map(([label, column]) => [label, head.indexOf(column.toLowerCase())])),
   };
   const items = new Map();
-  const totals = Object.fromEntries(AVAIL_CRITERIA.map(([label]) => [label, 0]));
   for (const line of grid.slice(headerRow + 1)) {
     const code = String(line[at.code] ?? "").trim();
     if (!code) continue;
-    const min = Number(line[at.min]) || 0;
-    const flags = {};
+    const prior = items.get(code)?.flags || {};
+    const flags = { ...prior };
     for (const [label] of AVAIL_CRITERIA) {
-      const on = String(line[at.flags[label]] ?? "").trim().toUpperCase() === "Y";
-      flags[label] = on;
-      if (on) totals[label] += 1;
+      const flagColumn = at.flags[label];
+      const on = flagColumn >= 0 && String(line[flagColumn] ?? "").trim().toUpperCase() === "Y";
+      flags[label] = Boolean(prior[label] || on);
     }
-    items.set(code, { min, flags });
+    items.set(code, { flags });
   }
+  const totals = Object.fromEntries(AVAIL_CRITERIA.map(([label]) => [label, 0]));
+  items.forEach(item => AVAIL_CRITERIA.forEach(([label]) => {
+    if (item.flags[label]) totals[label] += 1;
+  }));
   return { items, totals };
 }
 
@@ -1468,6 +1475,14 @@ function splitCsvLine(line) {
   return out;
 }
 
+// Exact counterpart of the formulas verified in the Final workbook:
+// AKF/AKG compare DK11/DK14 with the 12-unit header value; the remaining
+// availability columns compare their stock with Summary!F6, whose value is 1.
+function finalAvailabilityThreshold(outletCode) {
+  const code = String(outletCode || "").trim().toUpperCase();
+  return code === "DK11" || code === "DK14" ? 12 : 1;
+}
+
 // The stock file runs to hundreds of megabytes, so it is streamed and only the
 // ~1,400 rows that appear in the criteria workbook are kept.
 async function readStockAvailability(file, criteria, onProgress) {
@@ -1475,6 +1490,29 @@ async function readStockAvailability(file, criteria, onProgress) {
   const counts = new Map();     // outlet code -> { label: available }
   let header = null, columns = [];
   let carry = "", scanned = 0, matched = 0, read = 0;
+
+  const processDataLine = (line) => {
+    scanned += 1;
+    if (scanned % 4000 === 0) onProgress?.(read, matched);
+    const cells = splitCsvLine(line);
+    const code = String(cells[0] ?? "").trim();
+    const item = items.get(code);
+    if (!item) return;
+    matched += 1;
+    for (const [i, outlet, threshold] of columns) {
+      const value = parseFloat(cells[i]);
+      if (!Number.isFinite(value) || value <= 0) continue;
+      // "Actual" is stock physically present. "ok" follows the Final workbook's
+      // outlet-specific IF(stock >= threshold, 1, 0) rule.
+      const availableByFinalRule = value >= threshold;
+      const bucket = counts.get(outlet);
+      for (const [label] of AVAIL_CRITERIA) {
+        if (!item.flags[label]) continue;
+        bucket[label].actual += 1;
+        if (availableByFinalRule) bucket[label].ok += 1;
+      }
+    }
+  };
 
   const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
   for (;;) {
@@ -1489,32 +1527,25 @@ async function readStockAvailability(file, criteria, onProgress) {
       if (!line) continue;
       if (!header) {
         header = splitCsvLine(line);
-        columns = header.map((h, i) => [i, String(h).trim().toUpperCase()]).filter(([i, c]) => i >= 2 && c);
+        columns = header
+          .map((h, i) => [i, String(h).trim().toUpperCase()])
+          .filter(([i, c]) => i >= 2 && c)
+          .map(([i, code]) => [i, code, finalAvailabilityThreshold(code)]);
         columns.forEach(([, code]) => counts.set(code,
           Object.fromEntries(AVAIL_CRITERIA.map(([l]) => [l, { ok: 0, actual: 0 }]))));
         continue;
       }
-      scanned += 1;
-      if (scanned % 4000 === 0) onProgress?.(read, matched);
-      const comma = line.indexOf(",");
-      const code = line.slice(0, comma).trim();
-      const item = items.get(code);
-      if (!item) continue;
-      matched += 1;
-      const cells = splitCsvLine(line);
-      for (const [i, outlet] of columns) {
-        const value = parseFloat(cells[i]);
-        if (!Number.isFinite(value) || value <= 0) continue;
-        // "Actual" is stock physically present; the headline figure also demands
-        // the item reach its Min Stock Should Be.
-        const meetsMinimum = value >= item.min;
-        const bucket = counts.get(outlet);
-        for (const [label] of AVAIL_CRITERIA) {
-          if (!item.flags[label]) continue;
-          bucket[label].actual += 1;
-          if (meetsMinimum) bucket[label].ok += 1;
-        }
-      }
+      processDataLine(line);
+    }
+  }
+
+  // Some stock exports do not end with a newline; include their final product row.
+  const finalLine = carry.replace(/\r$/, "");
+  if (finalLine) {
+    if (!header) {
+      header = splitCsvLine(finalLine);
+    } else {
+      processDataLine(finalLine);
     }
   }
 
@@ -1592,8 +1623,8 @@ function openAvailabilityModal(label) {
   const rows = availabilityOutletRows(label);
   $("availability-modal-title").textContent = `${label} — Outlet details`;
   $("availability-modal-caption").textContent = state.site
-    ? `${rows.length.toLocaleString()} selected outlet · stock meeting the minimum quantity` 
-    : `${rows.length.toLocaleString()} outlets · weakest availability first · stock meeting the minimum quantity`;
+    ? `${rows.length.toLocaleString()} selected outlet · Final rule: stock ≥1 (DK11/DK14 ≥12)` 
+    : `${rows.length.toLocaleString()} outlets · weakest availability first · Final rule: stock ≥1 (DK11/DK14 ≥12)`;
   $("availability-modal-body").innerHTML = rows.length
     ? rows.map((row, index) => `<tr><td>${index + 1}</td><td><b>${esc(row.code)}</b></td><td>${esc(row.name || "—")}</td><td>${esc(row.zonal || "—")}</td><td>${esc(row.rho || "—")}</td><td class="num">${row.ok.toLocaleString()}</td><td class="num">${row.actual.toLocaleString()}</td><td class="num">${row.total.toLocaleString()}</td><td class="num">${scoreCell(row.pct)}</td></tr>`).join("")
     : `<tr><td colspan="9" class="empty-state">No outlet availability records were found for ${esc(label)}.</td></tr>`;
@@ -2156,8 +2187,8 @@ function render() {
   const networkAvailability = !state.site ? allOutletAvailability() : null;
   const availabilityView = state.site ? availFor(state.site) : networkAvailability?.values;
   const availabilityCaption = state.site
-    ? `Counts stock that meets the minimum Qty · ${esc(state.site.toUpperCase())}`
-    : `Counts stock that meets the minimum Qty · All ${(networkAvailability?.outletCount || 0).toLocaleString()} outlets in the latest availability snapshot`;
+    ? `Final rule: stock ≥1; DK11/DK14 ≥12 · ${esc(state.site.toUpperCase())}`
+    : `Final rule: stock ≥1; DK11/DK14 ≥12 · All ${(networkAvailability?.outletCount || 0).toLocaleString()} outlets in the latest availability snapshot`;
 
   const drillMeta = state.site ? meta(state.site) : EMPTY_META;
   const drill = state.site
@@ -2385,8 +2416,8 @@ function exportCsv({ share = false } = {}) {
   v.questions.forEach(([k,[g,m,c]]) => lines.push([k, c || "", g, m, pct(g,m).toFixed(1)]));
   const av = state.site ? availFor(state.site) : allOutletAvailability()?.values;
   if (av) {
-    lines.push([], ["AVAILABILITY STATUS", "Avail (Stock meets the minimum Qty)", "SKUs",
-                    "% (Stock meets the minimum Qty)"]);
+    lines.push([], ["AVAILABILITY STATUS", "Available by Final rule (stock >=1; DK11/DK14 >=12)", "SKUs",
+                    "% available by Final rule"]);
     AVAIL_CRITERIA.forEach(([label]) => {
       const c = av[label];
       lines.push([label, c.ok, c.total, c.pct.toFixed(1)]);
