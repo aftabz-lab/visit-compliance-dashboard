@@ -304,3 +304,15 @@ html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border
 
 .trend-pick { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 .trend-pick button + button { background: var(--surface) !important; color: var(--accent) !important; }
+
+/* Keep all six headline KPI cards in one row. On a narrow screen the row
+   scrolls horizontally instead of wrapping; card contents and sizing rules
+   (including the reduced Planned/Accepted cards) remain unchanged. */
+#summary-anchor > #kpis {
+  grid-column: 1 / -1 !important;
+  width: 100% !important;
+  grid-template-columns: repeat(6, minmax(150px, 1fr)) !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+#summary-anchor > #kpis > .kpi-card { min-width: 150px; }
