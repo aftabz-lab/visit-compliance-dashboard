@@ -199,3 +199,33 @@ html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border
   .detail-table { min-width: 1100px; }
   .details-summary { display: grid; grid-template-columns: 1fr; }
 }
+
+/* Response reconciliation panel */
+.reconciliation:empty { display: none; }
+.reconciliation tr.recon-drop td { color: var(--muted-text); font-size: 11.5px; }
+.reconciliation tr.recon-sub td, .reconciliation tr.recon-total td { border-top: 1px solid var(--line); }
+.reconciliation tr.recon-total td { font-size: 13px; }
+.reconciliation .recon-why { font-size: 11px; color: var(--muted-text); }
+.reconciliation .recon-note { margin: 10px 14px 14px; font-size: 11.5px; color: var(--muted-text); line-height: 1.6; }
+
+/* Planned Visits (Till Date) only — reduced to a quarter of its previous
+   footprint. Every other KPI card is untouched. */
+.kpi-card[data-kpi-card="planned"] { padding: 7px 9px !important; min-height: 0 !important; }
+.kpi-card[data-kpi-card="planned"] .kpi-label { font-size: 8px !important; letter-spacing: .05em !important; min-height: 0 !important; margin-bottom: 2px !important; }
+.kpi-card[data-kpi-card="planned"] .kpi-action { font-size: 17px !important; line-height: 1.1 !important; }
+.kpi-card[data-kpi-card="planned"] .kpi-meta { font-size: 8px !important; line-height: 1.3 !important; }
+
+/* Visit-score trend (Trend workbook only) */
+.trend-panel[hidden] { display: none !important; }
+.trend-controls { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.trend-controls select, .trend-controls input { height: 32px; padding: 0 9px; font: inherit; font-size: 12px;
+  background: var(--dark-4); color: var(--white-text); border: 1px solid var(--line); border-radius: 7px; }
+.trend-note { font-size: 11px; color: var(--muted-text); margin-left: auto; }
+.trend-chart { display: flex; align-items: flex-end; gap: 14px; padding: 18px 16px 8px; min-height: 190px; }
+.trend-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.trend-bar-wrap { width: 100%; height: 140px; display: flex; align-items: flex-end; justify-content: center; }
+.trend-bar { width: 100%; max-width: 56px; border-radius: 5px 5px 0 0; position: relative; min-height: 4px; }
+.trend-val { font-size: 12px; font-weight: 800; }
+.trend-date { font-size: 10.5px; color: var(--muted-text); text-align: center; line-height: 1.3; }
+.trend-empty { padding: 26px; text-align: center; color: var(--muted-text); font-size: 12.5px; }
+@media (max-width: 700px){ .trend-chart { gap: 7px; } .trend-bar-wrap { height: 110px; } .trend-date { font-size: 9px; } }

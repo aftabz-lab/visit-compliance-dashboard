@@ -381,11 +381,12 @@ function renderKpis(rows, officerKey = null) {
     { id: "pending", tone: "danger", label: "Pending Visits", value: numberFmt.format(pending), meta: "No response yet" },
     { id: "never", tone: "warning", label: "Never Visited Outlets", value: numberFmt.format(never), meta: "Till date" },
     { id: "planned", tone: "info", label: "Planned Visits (Till Date)", value: numberFmt.format(planned), meta: "Visits scheduled up to the snapshot date" },
-    { id: "completed", tone: "success", label: "Completed Visits (Till Date)", value: numberFmt.format(completed), meta: "Completed planned visits + extra / unplanned responses" }
+    { id: "completed", tone: "success", label: "Completed Visits (Till Date)", value: numberFmt.format(completed), meta: "Completed planned visits + extra / unplanned responses" },
+    { id: "accepted", tone: "info", label: "Accepted Responses", value: numberFmt.format(total(rows, "acceptedResponses")), meta: "Survey responses accepted from the workbook" }
   ];
 
   $("kpis").innerHTML = cards.map(card => `
-    <div class="kpi-card" data-tone="${card.tone}">
+    <div class="kpi-card" data-tone="${card.tone}" data-kpi-card="${card.id}">
       <div class="kpi-label">${card.label}</div>
       <button type="button" class="kpi-action" data-kpi="${card.id}">${card.value}</button>
       <div class="kpi-meta">${card.meta}</div>
@@ -396,6 +397,122 @@ function renderKpis(rows, officerKey = null) {
       ? { type: "officer", officerKey, metric: btn.dataset.kpi }
       : { type: "aggregate", metric: btn.dataset.kpi });
   }));
+}
+
+// Accounts for every gap between the row count in the response workbook and the
+// figure shown on screen, so a mismatch can be traced rather than guessed at.
+function renderReconciliation(meta) {
+  const target = $("reconciliation");
+  if (!target) return;
+  const d = meta?.diagnostics || {};
+  const n = v => numberFmt.format(Number(v) || 0);
+  const inFile = Number(d.acceptedInFile) || 0;
+  const rejected = Number(d.rejectedResponseRows) || 0;
+  const dupes = Number(d.duplicateResponseIdsIgnored) || 0;
+  const rawRows = inFile + rejected + dupes;
+  const afterSnap = Number(d.afterSnapshotIgnored) || 0;
+  const accepted = Number(d.acceptedResponses) || 0;
+  const unmapped = Number(d.unmappedOfficerResponses) || 0;
+  const unscheduled = Number(d.responsesForUnscheduledOutlets) || 0;
+
+  const steps = [
+    ["Rows in the response workbook", rawRows, "", ""],
+    ["Rejected — missing Response ID, Date, Site Code or Officer", -rejected, "drop", "These rows cannot be attributed to an outlet or officer."],
+    ["Ignored — duplicate Response ID", -dupes, "drop", "The same Response ID appears more than once; only the first is kept."],
+    ["Accepted from the file", inFile, "sub", ""],
+    [`Ignored — dated after the snapshot (${meta?.snapshotDate || "snapshot"})`, -afterSnap, "drop", "Responses recorded after the snapshot date are out of scope."],
+    ["Accepted responses (counted)", accepted, "total", ""],
+  ];
+
+  target.innerHTML = `
+    <div class="panel-head"><h2>Response reconciliation</h2>
+      <p class="panel-caption">From workbook rows to the figure on the cards</p></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Step</th><th class="num">Rows</th><th>Why</th></tr></thead>
+      <tbody>${steps.map(([label, value, kind, why]) => `
+        <tr class="recon-${kind}">
+          <td>${kind === "drop" ? "↳ " : ""}<b>${esc(label)}</b></td>
+          <td class="num" style="color:${kind === "drop" && value ? "#ff9f9f" : "inherit"};font-weight:${kind === "total" ? 800 : 600}">
+            ${kind === "drop" ? (value ? n(value) : "0") : n(value)}</td>
+          <td class="recon-why">${esc(why)}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table></div>
+    <p class="recon-note">Of the ${n(accepted)} accepted, ${n(unscheduled)} are for outlets with no planned visit in the schedule
+      and ${n(unmapped)} could not be matched to a named officer — both are still counted as responses, but they do not
+      close a planned visit, which is why <b>Completed Visits</b> can differ from <b>Accepted Responses</b>.</p>`;
+}
+
+
+/* ── Visit-score trend ─────────────────────────────────────────────────
+   Fed only by the "Trend" workbook via window.TrendSource. Nothing here
+   touches state.data, and no compliance or audit figure reads trendState,
+   so this file can never affect any other number on the dashboard.      */
+const trendState = { outlets: null, fileName: "", code: "", error: "" };
+
+function trendTone(v, max) {
+  const share = max > 0 ? v / max : 0;
+  if (share >= 0.85) return "#3fb27f";
+  if (share >= 0.7) return "#8cc152";
+  if (share >= 0.5) return "#e0a53f";
+  return "#d9534f";
+}
+
+function renderTrend() {
+  const panel = $("trend-panel");
+  if (!panel) return;
+  if (!trendState.outlets || !trendState.outlets.size) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  panel.hidden = false;
+
+  const codes = [...trendState.outlets.keys()].sort();
+  if (!trendState.code || !trendState.outlets.has(trendState.code)) trendState.code = codes[0];
+  const entry = trendState.outlets.get(trendState.code);
+  const visits = entry?.visits || [];
+  const max = Math.max(1, ...visits.map(v => v.score));
+
+  panel.innerHTML = `
+    <div class="panel-head"><h2>Visit score trend</h2>
+      <p class="panel-caption">Last ${window.TrendSource.LAST_N} visits · from ${esc(trendState.fileName || "Trend workbook")}</p></div>
+    <div class="trend-controls">
+      <label style="font-size:11px;color:var(--muted-text);font-weight:700">Outlet</label>
+      <select id="trend-outlet">${codes.map(c => {
+        const o = trendState.outlets.get(c);
+        return `<option value="${esc(c)}"${c === trendState.code ? " selected" : ""}>${esc(c)}${o.name ? " · " + esc(o.name) : ""}</option>`;
+      }).join("")}</select>
+      <span class="trend-note">${codes.length.toLocaleString()} outlets in the Trend file</span>
+    </div>
+    ${visits.length ? `<div class="trend-chart">${visits.map(v => {
+      const h = Math.max(4, Math.round(140 * v.score / max));
+      return `<div class="trend-col">
+        <span class="trend-val" style="color:${trendTone(v.score, max)}">${v.score}</span>
+        <span class="trend-bar-wrap"><span class="trend-bar" style="height:${h}px;background:${trendTone(v.score, max)}"></span></span>
+        <span class="trend-date">${esc(fmtDate(v.date))}</span>
+      </div>`;
+    }).join("")}</div>` : `<div class="trend-empty">No visits recorded for this outlet.</div>`}`;
+
+  const sel = $("trend-outlet");
+  if (sel) sel.addEventListener("change", e => { trendState.code = e.target.value; renderTrend(); });
+}
+
+async function loadTrend() {
+  const Trend = window.TrendSource;
+  if (!Trend) return;
+  try {
+    const drive = window.GoogleDriveSource;
+    const built = drive ? await Trend.fromDrive(drive) : null;
+    if (built?.outlets?.size) {
+      trendState.outlets = built.outlets;
+      trendState.fileName = built.fileName;
+      renderTrend();
+    }
+  } catch (error) {
+    trendState.error = error?.message || String(error);
+    console.warn("Trend workbook not loaded:", trendState.error);
+  }
 }
 
 function scoreClass(v) {
@@ -917,6 +1034,8 @@ function applyDataLoad(nextLoad) {
   renderHeader();
   $("status-filter").value = state.status;
   renderDefinitions();
+  renderReconciliation(state.data?.metadata);
+  loadTrend();
   render();
 }
 
@@ -990,6 +1109,7 @@ async function init() {
     state.data = state.dataLoad.data;
     renderHeader();
     renderDefinitions();
+  renderReconciliation(state.data?.metadata);
     render();
 
     auditScorePromise.then(result => {
