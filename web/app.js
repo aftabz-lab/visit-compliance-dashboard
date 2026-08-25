@@ -448,7 +448,7 @@ function renderReconciliation(meta) {
    Fed only by the "Trend" workbook via window.TrendSource. Nothing here
    touches state.data, and no compliance or audit figure reads trendState,
    so this file can never affect any other number on the dashboard.      */
-const trendState = { outlets: null, fileName: "", code: "", error: "", open: false, maxScore: 0 };
+const trendState = { outlets: null, fileName: "", code: "", error: "", open: false, maxScore: 0, published: null, signature: "" };
 
 function trendTone(v, max) {
   const share = max > 0 ? v / max : 0;
@@ -560,7 +560,7 @@ async function loadTrend({ silent = true } = {}) {
 
   // Published with the dashboard payload by scripts/build.py — works for every
   // viewer with no Drive access at all.
-  const published = state.data?.trend;
+  const published = state.data?.trend || trendState.published;
   if (published?.outlets && Object.keys(published.outlets).length) {
     trendState.outlets = new Map(Object.entries(published.outlets).map(([code, o]) => [
       String(code).toUpperCase(), { name: o.name || "", visits: o.visits || [] },
@@ -577,7 +577,7 @@ async function loadTrend({ silent = true } = {}) {
   if (!Trend) { trendState.error = "trend-source.js is not loaded"; setTrendToggle(); return; }
   try {
     const drive = window.GoogleDriveSource;
-    if (!drive) throw new Error("Google Drive module not loaded");
+    if (!drive) throw new Error("Trend data not published yet — upload scripts/build.py and put Trend.xlsx in data/");
     if (drive.getFolder && !drive.getFolder()) throw new Error("no Drive folder connected on this device");
     const built = await Trend.fromDrive(drive);
     if (!built) throw new Error("no file named Trend in the connected folder");
@@ -592,6 +592,41 @@ async function loadTrend({ silent = true } = {}) {
     setTrendToggle();
     renderTrend();
   }
+}
+
+// Re-reads only the published trend every minute, so a newly uploaded Trend
+// workbook appears without a page refresh and without any Drive connection.
+// Nothing else in the payload is touched, so no other figure can change here.
+const TREND_POLL_MS = 60000;
+let trendPollStarted = false;
+
+async function pollPublishedTrend() {
+  try {
+    const res = await fetch(`data/dashboard_data.json?t=${Date.now()}`, { cache: "no-store" });
+    if (!res.ok) return;
+    const fresh = (await res.json())?.trend;
+    if (!fresh?.outlets || !Object.keys(fresh.outlets).length) return;
+    const signature = `${fresh.fileName || ""}|${Object.keys(fresh.outlets).length}|${fresh.maxScore || 0}`;
+    if (signature === trendState.signature) return;      // unchanged, leave it alone
+    trendState.published = fresh;
+    trendState.signature = signature;
+    trendState.outlets = new Map(Object.entries(fresh.outlets).map(([code, o]) => [
+      String(code).toUpperCase(), { name: o.name || "", visits: o.visits || [] },
+    ]));
+    trendState.fileName = fresh.fileName || "Trend workbook";
+    trendState.maxScore = Number(fresh.maxScore) || 0;
+    trendState.error = "";
+    setTrendToggle();
+    renderTrend();
+  } catch { /* offline or mid-deploy - try again next minute */ }
+}
+
+function startTrendPolling() {
+  if (trendPollStarted) return;
+  trendPollStarted = true;
+  pollPublishedTrend();
+  setInterval(() => { if (!document.hidden) pollPublishedTrend(); }, TREND_POLL_MS);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) pollPublishedTrend(); });
 }
 
 function scoreClass(v) {
@@ -1116,7 +1151,7 @@ function applyDataLoad(nextLoad) {
   renderDefinitions();
   renderReconciliation(state.data?.metadata);
   loadTrend();
-  setTimeout(() => { if (!trendState.outlets?.size) loadTrend(); }, 4000);
+  startTrendPolling();
   render();
 }
 
