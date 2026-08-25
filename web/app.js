@@ -521,7 +521,10 @@ function setTrendToggle() {
   }
 }
 
+let trendWired = false;
 function wireTrendControls() {
+  if (trendWired) return;
+  trendWired = true;
   $("trend-toggle")?.addEventListener("click", () => {
     trendState.open = !trendState.open;
     setTrendToggle();

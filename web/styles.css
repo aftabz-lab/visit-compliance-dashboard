@@ -230,14 +230,14 @@ html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border
   display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%;
   margin: 0; padding: 14px 16px; cursor: pointer; font: inherit; text-align: left;
   background: var(--surface); color: var(--text);
-  border: 1px solid var(--border); border-left: 4px solid var(--accent-3);
+  border: 1px solid var(--border); border-top: 4px solid var(--accent-3);
   border-radius: 14px; box-shadow: var(--shadow);
 }
 .trend-toggle:hover:not([disabled]) { background: var(--surface-2); border-color: var(--accent-3); }
 .trend-toggle b { font-size: 14px; color: var(--text); }
 .trend-toggle span span { font-size: 12px; color: var(--muted); display: block; margin-top: 3px; font-weight: 500; }
 .trend-toggle .chev { color: var(--accent-3); font-size: 16px; }
-.trend-toggle[disabled] { opacity: .55; cursor: not-allowed; border-left-color: var(--border-strong); box-shadow: none; }
+.trend-toggle[disabled] { opacity: .55; cursor: not-allowed; border-top-color: var(--border-strong); box-shadow: none; }
 
 .trend-panel { grid-column: 1 / -1; }
 .trend-panel[hidden] { display: none !important; }
@@ -259,3 +259,6 @@ html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border
   background: var(--accent); color: #fff; border: 1px solid var(--accent);
 }
 @media (max-width: 700px) { .trend-chart { gap: 7px; } .trend-bar-wrap { height: 110px; } .trend-date { font-size: 9px; } }
+
+/* Trend block sits below the summary layout, full width like the panels. */
+.trend-toggle, .trend-panel { margin: 14px 0 0; }
