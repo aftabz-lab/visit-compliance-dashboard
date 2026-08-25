@@ -262,3 +262,16 @@ html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border
 
 /* Trend block sits below the summary layout, full width like the panels. */
 .trend-toggle, .trend-panel { margin: 14px 0 0; }
+
+/* Trend button styled as a KPI card rather than a wide bar. */
+.trend-toggle {
+  display: block !important; width: auto !important; max-width: 260px;
+  padding: 16px 18px !important; text-align: left;
+  border-top: 4px solid #1f9d55 !important; border-radius: 16px !important;
+}
+.trend-toggle b {
+  display: block; font-size: 12.5px !important; font-weight: 800; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--accent) !important; line-height: 1.35;
+}
+.trend-toggle span span { font-size: 12.5px !important; color: var(--muted) !important; margin-top: 8px !important; }
+.trend-toggle .chev { display: none; }

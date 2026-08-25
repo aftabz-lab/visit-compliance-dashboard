@@ -551,9 +551,24 @@ function wireTrendControls() {
 async function loadTrend({ silent = true } = {}) {
   wireTrendControls();
   setTrendToggle();
+  if (trendState.outlets?.size) return;
+
+  // Published with the dashboard payload by scripts/build.py — works for every
+  // viewer with no Drive access at all.
+  const published = state.data?.trend;
+  if (published?.outlets && Object.keys(published.outlets).length) {
+    trendState.outlets = new Map(Object.entries(published.outlets).map(([code, o]) => [
+      String(code).toUpperCase(), { name: o.name || "", visits: o.visits || [] },
+    ]));
+    trendState.fileName = published.fileName || "Trend workbook";
+    trendState.error = "";
+    setTrendToggle();
+    renderTrend();
+    return;
+  }
+
   const Trend = window.TrendSource;
   if (!Trend) { trendState.error = "trend-source.js is not loaded"; setTrendToggle(); return; }
-  if (trendState.outlets?.size) return;
   try {
     const drive = window.GoogleDriveSource;
     if (!drive) throw new Error("Google Drive module not loaded");
