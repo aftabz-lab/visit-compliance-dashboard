@@ -484,11 +484,15 @@ function renderTrend() {
         trendState.error = "connecting…"; setTrendToggle(); renderTrend();
         await drive.connect({});                 // user asked for it, so the prompt is expected
         trendState.driveSignature = "";
-        await loadTrendFromDrive();
-        if (!trendState.outlets?.size) {
+        trendState.error = "";
+        await loadTrendFromDrive({ reportErrors: true });
+        // Only claim the file is missing when the folder listing really had no
+        // Trend workbook. Any other failure now reports its own reason instead
+        // of hiding behind a wrong "no file named Trend" message.
+        if (!trendState.outlets?.size && !trendState.error) {
           trendState.error = "connected, but no file named Trend in that folder";
-          setTrendToggle(); renderTrend();
         }
+        if (!trendState.outlets?.size) { setTrendToggle(); renderTrend(); }
       } catch (error) {
         trendState.error = error?.message || "could not connect";
         setTrendToggle(); renderTrend();
@@ -687,27 +691,45 @@ function restoreTrendCache() {
   } catch { return false; }
 }
 
-async function loadTrendFromDrive() {
+const TREND_SLOW_FILE_BYTES = 8 * 1024 * 1024;   // past this, say it is working
+
+async function loadTrendFromDrive({ reportErrors = false } = {}) {
   const Trend = window.TrendSource;
   const drive = window.ShwapnoDrive;
   if (!Trend || !drive?.listFolderFiles) return;
+  // An empty box must always explain itself. Errors are recorded whenever there
+  // is nothing on screen, and stay silent only when a chart is already showing.
+  const speak = reportErrors || !trendState.outlets?.size;
   try {
     const files = await drive.listFolderFiles();
-
-    // Trend is isolated. Do not depend on Drive ordering or other workbook filters.
-    const meta = (files || []).find(f => {
-      const n = String(f.name || "").trim().toLowerCase();
-      return n === "trend.xlsx" || n === "trend.xlsm";
-    }) || Trend.pickTrendFile(files);
-
-    if (!meta) return;
-
+    const meta = Trend.pickTrendFile(files);
+    if (!meta) {
+      if (speak) {
+        const sheets = (files || []).filter(f => /\.(xlsx|xlsm)$/i.test(String(f.name || ""))).length;
+        trendState.error = sheets
+          ? `no .xlsx named Trend among the ${sheets} workbooks in that folder`
+          : "that folder has no Excel workbooks";
+        setTrendToggle(); renderTrend();
+      }
+      return;
+    }
     const signature = `${meta.name}|${meta.modifiedTime || meta.md5Checksum || ""}`;
-    if (signature === trendState.driveSignature) return;
-
+    if (signature === trendState.driveSignature) return;   // unchanged
+    const size = Number(meta.size) || 0;
+    if (speak && size > TREND_SLOW_FILE_BYTES) {
+      // A big workbook takes a while to download and parse. Say so rather than
+      // leaving the box looking stuck.
+      trendState.error = `reading ${meta.name} (${Math.round(size / 1048576)} MB) — this can take a while`;
+      setTrendToggle(); renderTrend();
+    }
     const built = await Trend.fromDrive(drive);
-    if (!built?.outlets?.size) return;
-
+    if (!built?.outlets?.size) {
+      if (speak) {
+        trendState.error = `${meta.name} has no rows with an outlet code, a date and a score`;
+        setTrendToggle(); renderTrend();
+      }
+      return;
+    }
     trendState.driveSignature = signature;
     trendState.outlets = built.outlets;
     trendState.fileName = built.fileName;
@@ -716,8 +738,12 @@ async function loadTrendFromDrive() {
     saveTrendCache();
     setTrendToggle();
     renderTrend();
-  } catch (e) {
-    console.warn("Trend Drive load failed:", e);
+  } catch (error) {
+    console.warn("Trend workbook not read from Drive:", error);
+    if (speak) {
+      trendState.error = error?.message || String(error);
+      setTrendToggle(); renderTrend();
+    }
   }
 }
 

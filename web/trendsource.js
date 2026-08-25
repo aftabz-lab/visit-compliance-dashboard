@@ -78,7 +78,14 @@
   function parseWorkbook(buffer) {
     if (!global.XLSX) throw new Error("Spreadsheet library is not loaded.");
     const bytes = ArrayBuffer.isView(buffer) ? buffer : new Uint8Array(buffer);
-    const wb = global.XLSX.read(bytes, { type: "array", cellDates: true, cellStyles: false });
+    // Everything that is not a cell value is switched off. A Trend workbook can
+    // be large, and formulas, number formats and workbook metadata are what make
+    // a large one exhaust the tab.
+    const wb = global.XLSX.read(bytes, {
+      type: "array", cellDates: true, cellStyles: false, cellFormula: false,
+      cellHTML: false, cellNF: false, bookDeps: false, bookProps: false,
+      bookVBA: false,
+    });
     for (const sheetName of wb.SheetNames) {
       const grid = global.XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {
         header: 1, defval: "", blankrows: false,
@@ -108,28 +115,49 @@
         // Percentages need a denominator. An explicit max column wins; otherwise
         // the highest score anywhere in the file is used — the same rule the
         // GitHub build uses, so a Drive read and a published build agree.
-        const every = [...outlets.values()].flatMap((entry) => entry.visits);
-        const statedMax = Math.max(0, ...every.map((v) => Number(v.max) || 0));
-        const maxScore = statedMax || Math.max(0, ...every.map((v) => Number(v.score) || 0));
+        // Reduced rather than spread: a workbook with very many outlet codes
+        // would blow the call stack if every visit became a Math.max argument.
+        let statedMax = 0;
+        let topScore = 0;
+        outlets.forEach((entry) => entry.visits.forEach((v) => {
+          const max = Number(v.max) || 0;
+          const score = Number(v.score) || 0;
+          if (max > statedMax) statedMax = max;
+          if (score > topScore) topScore = score;
+        }));
+        const maxScore = statedMax || topScore;
         return { outlets, sheetName, maxScore, maxFromColumn: Boolean(statedMax) };
       }
     }
     throw new Error("No sheet with Outlet Code, Date and Score columns.");
   }
 
+  /** Parses, and blames the file size when a large workbook is what broke it. */
+  function parseSized(buffer, fileName, size) {
+    try {
+      return parseWorkbook(buffer);
+    } catch (error) {
+      const mb = Math.round((Number(size) || 0) / 1048576);
+      const reason = error?.message || String(error);
+      if (mb >= 25) {
+        throw new Error(
+          `${fileName || "the Trend workbook"} is ${mb} MB and could not be read in the browser (${reason}). `
+          + "Keep only the Outlet Code, Date and Score columns on one sheet and save it again.",
+        );
+      }
+      throw error;
+    }
+  }
+
   /** Picks the Trend workbook out of a list of {name} file entries. */
   function pickTrendFile(files) {
-    const list = files || [];
-    const exact = list.find((f) => {
-      const n = String(f.name || "").trim().toLowerCase();
-      return n === "trend.xlsx" || n === "trend.xlsm";
-    });
-    if (exact) return exact;
-
-    return list.find((f) => {
-      const n = String(f.name || "").trim();
-      return FILE_NAME_MATCH.test(n) && /\.(xlsx|xlsm)$/i.test(n);;
-    }) || null;
+    const matches = (files || []).filter(
+      (f) => FILE_NAME_MATCH.test(String(f.name || "")) && /\.xlsx$|\.xlsm$/i.test(String(f.name || "")),
+    );
+    if (!matches.length) return null;
+    // A file actually called "Trend.xlsx" always wins over a longer name.
+    const exact = matches.find((f) => headerKey(String(f.name || "").replace(/\.[^.]+$/, "")) === "trend");
+    return exact || matches[0];
   }
 
   /** Plain-JSON shape published with the dashboard payload (same as build.py). */
@@ -164,13 +192,13 @@
       // the spreadsheet library sees them. Passing the File straight through was
       // silently producing no chart at all.
       const downloaded = await drive.downloadFile(meta);
-      const parsed = parseWorkbook(await toArrayBuffer(downloaded));
+      const parsed = parseSized(await toArrayBuffer(downloaded), meta.name, Number(meta.size) || downloaded?.size);
       return { ...parsed, fileName: meta.name };
     },
 
     /** Reads it from a File the user picked directly. */
     async fromFile(file) {
-      const parsed = parseWorkbook(await toArrayBuffer(file));
+      const parsed = parseSized(await toArrayBuffer(file), file.name, file.size);
       return { ...parsed, fileName: file.name };
     },
   };
