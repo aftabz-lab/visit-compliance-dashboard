@@ -693,17 +693,21 @@ async function loadTrendFromDrive() {
   if (!Trend || !drive?.listFolderFiles) return;
   try {
     const files = await drive.listFolderFiles();
-    // Trend is isolated: search only the Trend workbook in the selected folder.
-    // Keep this independent from all compliance/audit data files.
-    const meta = Trend.pickTrendFile(files) || (files || []).find(f => {
+
+    // Trend is isolated. Do not depend on Drive ordering or other workbook filters.
+    const meta = (files || []).find(f => {
       const n = String(f.name || "").trim().toLowerCase();
       return n === "trend.xlsx" || n === "trend.xlsm";
-    });
+    }) || Trend.pickTrendFile(files);
+
     if (!meta) return;
+
     const signature = `${meta.name}|${meta.modifiedTime || meta.md5Checksum || ""}`;
-    if (signature === trendState.driveSignature) return;   // unchanged
+    if (signature === trendState.driveSignature) return;
+
     const built = await Trend.fromDrive(drive);
     if (!built?.outlets?.size) return;
+
     trendState.driveSignature = signature;
     trendState.outlets = built.outlets;
     trendState.fileName = built.fileName;
@@ -712,7 +716,9 @@ async function loadTrendFromDrive() {
     saveTrendCache();
     setTrendToggle();
     renderTrend();
-  } catch { /* leave whatever is already showing */ }
+  } catch (e) {
+    console.warn("Trend Drive load failed:", e);
+  }
 }
 
 async function pollPublishedTrend() {
