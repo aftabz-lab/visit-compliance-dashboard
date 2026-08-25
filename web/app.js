@@ -1,4 +1,4 @@
-import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-interactions-v2";
+import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-interactions-v3-trend";
 import { readCloudSnapshot } from "./supabase-sync.js?v=visit-compliance-v12-supabase";
 
 const ALL_OFFICERS = "__ALL_OFFICERS__";
@@ -508,7 +508,7 @@ function renderTrend() {
 
   panel.innerHTML = `
     <div class="panel-head"><h2>Visit score trend</h2>
-      <p class="panel-caption">Last ${window.TrendSource.LAST_N} visits · from ${esc(trendState.fileName || "Trend workbook")}</p></div>
+      <p class="panel-caption">Last ${window.TrendSource ? window.TrendSource.LAST_N : 6} visits · from ${esc(trendState.fileName || "Trend workbook")}</p></div>
     <div class="trend-controls">
       <b style="font-size:12.5px">${esc(trendState.code)}${entry?.name ? " · " + esc(entry.name) : ""}</b>
       <span class="trend-note">${codes.length.toLocaleString()} outlets in ${esc(trendState.fileName || "the Trend file")}</span>
@@ -564,6 +564,7 @@ function wireTrendControls() {
       const built = await window.TrendSource.fromFile(file);
       trendState.outlets = built.outlets;
       trendState.fileName = built.fileName;
+      trendState.maxScore = Number(built.maxScore) || 0;
       trendState.error = "";
     } catch (error) {
       trendState.error = error?.message || String(error);
@@ -573,34 +574,55 @@ function wireTrendControls() {
   });
 }
 
+// Takes a published trend payload — from the shared cloud snapshot or from the
+// GitHub build — and puts it on screen. Returns true only when it is different
+// from what is already showing, so a refreshed Trend workbook replaces an older
+// chart in place and an unchanged one is left alone.
+function adoptTrendPayload(published) {
+  const codes = published?.outlets ? Object.keys(published.outlets) : [];
+  if (!codes.length) return false;
+  const signature = `${published.fileName || ""}|${codes.length}|${published.maxScore || 0}`;
+  if (signature === trendState.signature) return false;
+  trendState.published = published;
+  trendState.signature = signature;
+  trendState.outlets = new Map(codes.map(code => [
+    String(code).toUpperCase(),
+    { name: published.outlets[code]?.name || "", visits: published.outlets[code]?.visits || [] },
+  ]));
+  trendState.fileName = published.fileName || "Trend workbook";
+  trendState.maxScore = Number(published.maxScore) || 0;
+  trendState.error = "";
+  return true;
+}
+
 async function loadTrend({ silent = true } = {}) {
   wireTrendControls();
   setTrendToggle();
-  if (trendState.outlets?.size) return;
-  if (restoreTrendCache()) { setTrendToggle(); renderTrend(); }
-  if (window.ShwapnoDrive?.cachedToken?.()) { loadTrendFromDrive(); }
 
-  // Published with the dashboard payload by scripts/build.py — works for every
-  // viewer with no Drive access at all.
-  const published = state.data?.trend || trendState.published;
-  if (published?.outlets && Object.keys(published.outlets).length) {
-    trendState.outlets = new Map(Object.entries(published.outlets).map(([code, o]) => [
-      String(code).toUpperCase(), { name: o.name || "", visits: o.visits || [] },
-    ]));
-    trendState.fileName = published.fileName || "Trend workbook";
-    trendState.maxScore = Number(published.maxScore) || 0;
-    trendState.error = "";
+  // The shared snapshot carries the trend for every viewer, including those with
+  // no Google Drive access at all. It is checked on every data refresh, so a
+  // newly published Trend workbook appears without a page reload.
+  if (adoptTrendPayload(state.data?.trend || trendState.published)) {
     setTrendToggle();
     renderTrend();
     return;
   }
+  if (trendState.outlets?.size) return;
+  if (restoreTrendCache()) { setTrendToggle(); renderTrend(); }
+
+  // The published copy is what every viewer gets, so it is checked before this
+  // device's own Drive session. Without this, a viewer with no Drive folder saw
+  // a Drive error flash into the box before the published chart arrived.
+  await pollPublishedTrend();
+  if (trendState.outlets?.size) return;
+  if (window.ShwapnoDrive?.cachedToken?.()) { loadTrendFromDrive(); }
 
   const Trend = window.TrendSource;
   if (!Trend) { trendState.error = "trend-source.js is not loaded"; setTrendToggle(); return; }
   try {
     const drive = window.ShwapnoDrive || window.GoogleDriveSource;
     if (!drive) throw new Error("Drive module not available on this page");
-    if (drive.getFolder && !drive.getFolder()) throw new Error("no Drive folder connected on this device");
+    if (drive.getFolder && !drive.getFolder()) throw new Error("no Trend data published yet");
     // Strictly passive: the trend never triggers a Google sign-in. It rides on
     // the session the dashboard has already established; if there is none, it
     // waits quietly and the minute timer tries again.
@@ -611,6 +633,7 @@ async function loadTrend({ silent = true } = {}) {
     if (!built) throw new Error("no file named Trend in the connected folder");
     trendState.outlets = built.outlets;
     trendState.fileName = built.fileName;
+    trendState.maxScore = Number(built.maxScore) || 0;
     trendState.error = "";
     setTrendToggle();
     renderTrend();
@@ -679,6 +702,7 @@ async function loadTrendFromDrive() {
     trendState.driveSignature = signature;
     trendState.outlets = built.outlets;
     trendState.fileName = built.fileName;
+    trendState.maxScore = Number(built.maxScore) || 0;
     trendState.error = "";
     saveTrendCache();
     setTrendToggle();
@@ -687,21 +711,18 @@ async function loadTrendFromDrive() {
 }
 
 async function pollPublishedTrend() {
+  // The shared cloud snapshot is the live source when it carries a trend, so the
+  // repository build is only consulted when it does not. This stops the two
+  // published copies from replacing each other every minute.
+  if (state.data?.trend?.outlets && Object.keys(state.data.trend.outlets).length) {
+    if (adoptTrendPayload(state.data.trend)) { setTrendToggle(); renderTrend(); }
+    return;
+  }
   try {
     const res = await fetch(`data/dashboard_data.json?t=${Date.now()}`, { cache: "no-store" });
     if (!res.ok) return;
     const fresh = (await res.json())?.trend;
-    if (!fresh?.outlets || !Object.keys(fresh.outlets).length) return;
-    const signature = `${fresh.fileName || ""}|${Object.keys(fresh.outlets).length}|${fresh.maxScore || 0}`;
-    if (signature === trendState.signature) return;      // unchanged, leave it alone
-    trendState.published = fresh;
-    trendState.signature = signature;
-    trendState.outlets = new Map(Object.entries(fresh.outlets).map(([code, o]) => [
-      String(code).toUpperCase(), { name: o.name || "", visits: o.visits || [] },
-    ]));
-    trendState.fileName = fresh.fileName || "Trend workbook";
-    trendState.maxScore = Number(fresh.maxScore) || 0;
-    trendState.error = "";
+    if (!adoptTrendPayload(fresh)) return;               // missing or unchanged
     setTrendToggle();
     renderTrend();
   } catch { /* offline or mid-deploy - try again next minute */ }
@@ -1318,6 +1339,11 @@ async function init() {
     renderDefinitions();
   renderReconciliation(state.data?.metadata);
     render();
+    // First paint has to read the trend too. Previously only a later Google
+    // Drive refresh did, so anyone who simply opened the page never got the
+    // chart and the box stayed on "Trend workbook not read yet".
+    loadTrend();
+    startTrendPolling();
 
     auditScorePromise.then(result => {
       state.auditScores = result.scores;
