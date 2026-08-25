@@ -472,8 +472,28 @@ function renderTrend() {
       <div class="trend-empty">${!trendState.outlets ? "" : `No rows for <b>${esc(state.selectedOutlet || "")}</b> in the Trend workbook.<br>`}${trendState.error
         ? `Could not read the Trend workbook: ${esc(trendState.error)}`
         : "No workbook named <b>Trend</b> was found in the connected Google Drive folder."}</div>
-      <div class="trend-pick"><button type="button" id="trend-open">Open the Trend workbook</button></div>`;
+      <div class="trend-pick">
+        <button type="button" id="trend-connect">Connect Google Drive &amp; load Trend</button>
+        <button type="button" id="trend-open">Open the Trend workbook</button>
+      </div>`;
     $("trend-open")?.addEventListener("click", () => $("trend-file")?.click());
+    $("trend-connect")?.addEventListener("click", async () => {
+      const drive = window.ShwapnoDrive;
+      if (!drive?.connect) { trendState.error = "Drive module not available"; setTrendToggle(); renderTrend(); return; }
+      try {
+        trendState.error = "connecting…"; setTrendToggle(); renderTrend();
+        await drive.connect({});                 // user asked for it, so the prompt is expected
+        trendState.driveSignature = "";
+        await loadTrendFromDrive();
+        if (!trendState.outlets?.size) {
+          trendState.error = "connected, but no file named Trend in that folder";
+          setTrendToggle(); renderTrend();
+        }
+      } catch (error) {
+        trendState.error = error?.message || "could not connect";
+        setTrendToggle(); renderTrend();
+      }
+    });
     return;
   }
 
@@ -558,6 +578,7 @@ async function loadTrend({ silent = true } = {}) {
   setTrendToggle();
   if (trendState.outlets?.size) return;
   if (restoreTrendCache()) { setTrendToggle(); renderTrend(); }
+  if (window.ShwapnoDrive?.cachedToken?.()) { loadTrendFromDrive(); }
 
   // Published with the dashboard payload by scripts/build.py — works for every
   // viewer with no Drive access at all.
@@ -583,12 +604,8 @@ async function loadTrend({ silent = true } = {}) {
     // Strictly passive: the trend never triggers a Google sign-in. It rides on
     // the session the dashboard has already established; if there is none, it
     // waits quietly and the minute timer tries again.
-    // Trend uses the same Google Drive session as the existing raw-data loaders.
-    // Do not ask for a separate Trend connection and do not require a Trend file
-    // inside the repository. If the session is not ready yet, the normal Drive
-    // polling/retry will load it after the existing connection is established.
     if (drive.cachedToken && !drive.cachedToken()) {
-      throw new Error("waiting for the connected Google Drive session");
+      throw new Error("open the box and press Connect Google Drive");
     }
     const built = await Trend.fromDrive(drive);
     if (!built) throw new Error("no file named Trend in the connected folder");

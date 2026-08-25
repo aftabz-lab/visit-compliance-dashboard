@@ -295,3 +295,12 @@ html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border
 #performance-table { width: 100% !important; table-layout: auto; }
 /* Outside the grid now, so it needs its own spacing rather than a grid span. */
 .trend-toggle, .trend-panel { grid-column: auto !important; margin: 14px 0 0 !important; }
+
+/* Both the trend block and the officer table take a whole grid row, so they
+   stack (KPIs -> trend -> officer) instead of sitting side by side. */
+#summary-anchor > .trend-toggle,
+#summary-anchor > .trend-panel { grid-column: 1 / -1 !important; margin: 0 !important; }
+#summary-anchor > #performance-panel { grid-column: 1 / -1 !important; }
+
+.trend-pick { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.trend-pick button + button { background: var(--surface) !important; color: var(--accent) !important; }
