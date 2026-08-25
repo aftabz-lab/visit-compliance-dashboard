@@ -281,3 +281,8 @@ html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border
 .trend-col { flex: 0 0 auto !important; width: 74px; }
 .trend-bar { max-width: none !important; }
 @media (max-width: 700px) { .trend-col { width: 52px; } .trend-chart { gap: 6px !important; } }
+
+/* Always present, just inert until an outlet is chosen. */
+.trend-toggle { grid-column: 1 / -1 !important; display: block !important; visibility: visible !important; }
+.trend-toggle[disabled] { display: block !important; }
+.trend-panel { grid-column: 1 / -1 !important; }

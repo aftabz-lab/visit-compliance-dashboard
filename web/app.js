@@ -579,10 +579,11 @@ async function loadTrend({ silent = true } = {}) {
     const drive = window.ShwapnoDrive || window.GoogleDriveSource;
     if (!drive) throw new Error("Drive module not available on this page");
     if (drive.getFolder && !drive.getFolder()) throw new Error("no Drive folder connected on this device");
-    // Same session the other workbooks use — no separate sign-in for Trend.
+    // Strictly passive: the trend never triggers a Google sign-in. It rides on
+    // the session the dashboard has already established; if there is none, it
+    // waits quietly and the minute timer tries again.
     if (drive.cachedToken && !drive.cachedToken()) {
-      if (drive.connect) await drive.connect({});
-      else throw new Error("Drive session not ready");
+      throw new Error("waiting for the dashboard's Drive session");
     }
     const built = await Trend.fromDrive(drive);
     if (!built) throw new Error("no file named Trend in the connected folder");
