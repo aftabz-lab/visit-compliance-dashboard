@@ -448,7 +448,7 @@ function renderReconciliation(meta) {
    Fed only by the "Trend" workbook via window.TrendSource. Nothing here
    touches state.data, and no compliance or audit figure reads trendState,
    so this file can never affect any other number on the dashboard.      */
-const trendState = { outlets: null, fileName: "", code: "", error: "", open: false };
+const trendState = { outlets: null, fileName: "", code: "", error: "", open: false, maxScore: 0 };
 
 function trendTone(v, max) {
   const share = max > 0 ? v / max : 0;
@@ -481,7 +481,10 @@ function renderTrend() {
   trendState.code = state.selectedOutlet ? String(state.selectedOutlet).toUpperCase() : codes[0];
   const entry = trendState.outlets.get(trendState.code);
   const visits = entry?.visits || [];
-  const max = Math.max(1, ...visits.map(v => v.score));
+  // Percentage of the score available, so bars compare across dates and outlets.
+  const denom = Number(trendState.maxScore)
+    || Math.max(1, ...visits.map(v => Number(v.max) || 0), ...visits.map(v => v.score));
+  const max = 100;
 
   panel.innerHTML = `
     <div class="panel-head"><h2>Visit score trend</h2>
@@ -491,10 +494,12 @@ function renderTrend() {
       <span class="trend-note">${codes.length.toLocaleString()} outlets in ${esc(trendState.fileName || "the Trend file")}</span>
     </div>
     ${visits.length ? `<div class="trend-chart">${visits.map(v => {
-      const h = Math.max(4, Math.round(140 * v.score / max));
+      const own = Number(v.max) || denom;
+      const share = own > 0 ? (100 * v.score / own) : 0;
+      const h = Math.max(4, Math.round(140 * share / max));
       return `<div class="trend-col">
-        <span class="trend-val" style="color:${trendTone(v.score, max)}">${v.score}</span>
-        <span class="trend-bar-wrap"><span class="trend-bar" style="height:${h}px;background:${trendTone(v.score, max)}"></span></span>
+        <span class="trend-val" style="color:${trendTone(share, max)}">${share.toFixed(0)}%</span>
+        <span class="trend-bar-wrap"><span class="trend-bar" style="height:${h}px;background:${trendTone(share, max)}"></span></span>
         <span class="trend-date">${esc(fmtDate(v.date))}</span>
       </div>`;
     }).join("")}</div>` : `<div class="trend-empty">No visits recorded for this outlet.</div>`}`;
@@ -561,6 +566,7 @@ async function loadTrend({ silent = true } = {}) {
       String(code).toUpperCase(), { name: o.name || "", visits: o.visits || [] },
     ]));
     trendState.fileName = published.fileName || "Trend workbook";
+    trendState.maxScore = Number(published.maxScore) || 0;
     trendState.error = "";
     setTrendToggle();
     renderTrend();

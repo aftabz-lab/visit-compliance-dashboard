@@ -275,3 +275,9 @@ html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border
 }
 .trend-toggle span span { font-size: 12.5px !important; color: var(--muted) !important; margin-top: 8px !important; }
 .trend-toggle .chev { display: none; }
+
+/* Bars sit together at the left rather than spreading across the panel. */
+.trend-chart { justify-content: flex-start !important; gap: 10px !important; }
+.trend-col { flex: 0 0 auto !important; width: 74px; }
+.trend-bar { max-width: none !important; }
+@media (max-width: 700px) { .trend-col { width: 52px; } .trend-chart { gap: 6px !important; } }
