@@ -380,8 +380,8 @@ function renderKpis(rows, officerKey = null) {
     { id: "completion", tone: "success", label: "Visit Completion %", value: completion == null ? "—" : `${completion.toFixed(1)}%`, meta: "Completed visits ÷ planned visits (till date)" },
     { id: "pending", tone: "danger", label: "Pending Visits", value: numberFmt.format(pending), meta: "No response yet" },
     { id: "never", tone: "warning", label: "Never Visited Outlets", value: numberFmt.format(never), meta: "Till date" },
-    { id: "planned", tone: "info", label: "Planned Visits (Till Date)", value: numberFmt.format(planned), meta: "Visits scheduled up to the snapshot date" },
     { id: "completed", tone: "success", label: "Completed Visits (Till Date)", value: numberFmt.format(completed), meta: "Completed planned visits + extra / unplanned responses" },
+    { id: "planned", tone: "info", label: "Planned Visits (Till Date)", value: numberFmt.format(planned), meta: "Visits scheduled up to the snapshot date" },
     { id: "accepted", tone: "info", label: "Accepted Responses", value: numberFmt.format(total(rows, "acceptedResponses")), meta: "Survey responses accepted from the workbook" }
   ];
 
