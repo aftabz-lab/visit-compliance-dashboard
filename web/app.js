@@ -448,7 +448,7 @@ function renderReconciliation(meta) {
    Fed only by the "Trend" workbook via window.TrendSource. Nothing here
    touches state.data, and no compliance or audit figure reads trendState,
    so this file can never affect any other number on the dashboard.      */
-const trendState = { outlets: null, fileName: "", code: "", error: "", open: false, maxScore: 0, published: null, signature: "" };
+const trendState = { outlets: null, fileName: "", code: "", error: "", open: false, maxScore: 0, published: null, signature: "", driveSignature: "" };
 
 function trendTone(v, max) {
   const share = max > 0 ? v / max : 0;
@@ -576,9 +576,14 @@ async function loadTrend({ silent = true } = {}) {
   const Trend = window.TrendSource;
   if (!Trend) { trendState.error = "trend-source.js is not loaded"; setTrendToggle(); return; }
   try {
-    const drive = window.GoogleDriveSource;
-    if (!drive) throw new Error("Trend data not published yet — upload scripts/build.py and put Trend.xlsx in data/");
+    const drive = window.ShwapnoDrive || window.GoogleDriveSource;
+    if (!drive) throw new Error("Drive module not available on this page");
     if (drive.getFolder && !drive.getFolder()) throw new Error("no Drive folder connected on this device");
+    // Same session the other workbooks use — no separate sign-in for Trend.
+    if (drive.cachedToken && !drive.cachedToken()) {
+      if (drive.connect) await drive.connect({});
+      else throw new Error("Drive session not ready");
+    }
     const built = await Trend.fromDrive(drive);
     if (!built) throw new Error("no file named Trend in the connected folder");
     trendState.outlets = built.outlets;
@@ -599,6 +604,29 @@ async function loadTrend({ silent = true } = {}) {
 // Nothing else in the payload is touched, so no other figure can change here.
 const TREND_POLL_MS = 60000;
 let trendPollStarted = false;
+
+// Re-reads the Trend workbook straight from the shared Drive folder using the
+// session already established for the other raw files.
+async function loadTrendFromDrive() {
+  const Trend = window.TrendSource;
+  const drive = window.ShwapnoDrive;
+  if (!Trend || !drive?.listFolderFiles) return;
+  try {
+    const files = await drive.listFolderFiles();
+    const meta = Trend.pickTrendFile(files);
+    if (!meta) return;
+    const signature = `${meta.name}|${meta.modifiedTime || meta.md5Checksum || ""}`;
+    if (signature === trendState.driveSignature) return;   // unchanged
+    const built = await Trend.fromDrive(drive);
+    if (!built?.outlets?.size) return;
+    trendState.driveSignature = signature;
+    trendState.outlets = built.outlets;
+    trendState.fileName = built.fileName;
+    trendState.error = "";
+    setTrendToggle();
+    renderTrend();
+  } catch { /* leave whatever is already showing */ }
+}
 
 async function pollPublishedTrend() {
   try {
@@ -624,8 +652,13 @@ async function pollPublishedTrend() {
 function startTrendPolling() {
   if (trendPollStarted) return;
   trendPollStarted = true;
-  pollPublishedTrend();
-  setInterval(() => { if (!document.hidden) pollPublishedTrend(); }, TREND_POLL_MS);
+  const tick = () => {
+    pollPublishedTrend();
+    // Drive is the live source for the raw workbooks, so re-read it too.
+    if (window.ShwapnoDrive?.cachedToken?.()) loadTrendFromDrive();
+  };
+  tick();
+  setInterval(() => { if (!document.hidden) tick(); }, TREND_POLL_MS);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) pollPublishedTrend(); });
 }
 
