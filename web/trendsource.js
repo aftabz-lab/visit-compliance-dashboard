@@ -128,7 +128,7 @@
 
     return list.find((f) => {
       const n = String(f.name || "").trim();
-      return FILE_NAME_MATCH.test(n) && /\\.(xlsx|xlsm)$/i.test(n);
+      return FILE_NAME_MATCH.test(n) && /\.(xlsx|xlsm)$/i.test(n);;
     }) || null;
   }
 
