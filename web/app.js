@@ -449,7 +449,8 @@ function renderReconciliation(meta) {
    touches state.data, and no compliance or audit figure reads trendState,
    so this file can never affect any other number on the dashboard.      */
 const TREND_CLOUD_SNAPSHOT_KEY = "visit-trend";
-const TREND_CACHE_KEY = "shwapno-visit-trend-cache-v2";
+const TREND_CACHE_KEY = "shwapno-visit-trend-cache-v3-latest-daily";
+const TREND_RULE_VERSION = "latest-daily-v1";
 const trendState = {
   outlets: null,
   fileName: "",
@@ -464,6 +465,11 @@ const trendState = {
   publishedSignature: "",
 };
 let trendDriveLoadPromise = null;
+
+function trendRuleSignature(sourceSignature) {
+  const base = String(sourceSignature || "").trim();
+  return base ? `${base}|rule:${TREND_RULE_VERSION}` : `rule:${TREND_RULE_VERSION}`;
+}
 
 function trendTone(v, max) {
   const share = max > 0 ? v / max : 0;
@@ -787,9 +793,10 @@ async function loadTrendFromDrive() {
         return null;
       }
 
-      const signature = typeof drive.remoteSignature === "function"
+      const rawSignature = typeof drive.remoteSignature === "function"
         ? drive.remoteSignature(meta)
         : [meta.id || "", meta.name || "", meta.size || "", meta.modifiedTime || ""].join("|");
+      const signature = trendRuleSignature(rawSignature);
 
       // A cached parse can be published immediately after the source PC signs
       // in, without downloading or recalculating the compliance dashboard.
@@ -807,10 +814,10 @@ async function loadTrendFromDrive() {
 
       const built = await Trend.fromDrive(drive, files);
       if (!built?.outlets?.size) throw new Error("Trend has no usable visit rows.");
-      const payload = Trend.toPayload(built, built.fileName || meta.name, built.sourceSignature || signature);
+      const payload = Trend.toPayload(built, built.fileName || meta.name, signature);
       if (!payload) throw new Error("Trend has no usable visit rows.");
 
-      trendState.driveSignature = built.sourceSignature || signature;
+      trendState.driveSignature = signature;
       adoptTrendPayload(payload);
       trendState.error = "";
       saveTrendCache();

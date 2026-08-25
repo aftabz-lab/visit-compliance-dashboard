@@ -13,6 +13,7 @@
      Score         — total visit score for the day (or Total / Total Score)
    Optional:
      Outlet Name
+     Time          — or Visit Time / Response Time / Timestamp
      Max           — or Max Score / Out Of / Total Marks / Full Marks
    ═══════════════════════════════════════════════════════════════════════════ */
 (function (global) {
@@ -24,7 +25,17 @@
   const HEADERS = Object.freeze({
     code: ["outletcode", "sitecode", "storecode", "outletid", "siteid", "outlet", "code"],
     name: ["outletname", "storename", "sitename", "name"],
-    date: ["date", "visitdate", "auditdate", "responsedate", "visiteddate"],
+    date: [
+      "date", "visitdate", "auditdate", "responsedate", "visiteddate",
+      "datetime", "visitdatetime", "responsedatetime", "timestamp",
+      "submissiondate", "submitteddate", "submittedat", "createdat", "recordedat",
+    ],
+    time: [
+      "time", "visittime", "audittime", "responsetime", "submissiontime",
+      "submittedtime", "recordedtime", "completiontime", "completedtime",
+      "timestamp", "datetime", "visitdatetime", "responsedatetime",
+      "submissiondatetime", "submittedat", "createdat", "recordedat",
+    ],
     score: [
       "score", "totalscore", "visitscore", "auditscore", "obtainedscore",
       "achievedscore", "scoreobtained", "total",
@@ -72,10 +83,10 @@
       return excelSerialToIso(serial, date1904);
     }
 
-    let match = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    let match = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T].*)?$/);
     if (match) return isoDate(match[1], match[2], match[3]);
 
-    match = text.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
+    match = text.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})(?:[ T].*)?$/);
     if (match) {
       const first = Number(match[1]);
       const second = Number(match[2]);
@@ -110,6 +121,48 @@
     if (!text) return NaN;
     const number = Number(text);
     return Number.isFinite(number) ? number : NaN;
+  }
+
+  function toTimeOfDay(value) {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      return (
+        value.getHours() * 3600000
+        + value.getMinutes() * 60000
+        + value.getSeconds() * 1000
+        + value.getMilliseconds()
+      );
+    }
+
+    const text = clean(value);
+    if (!text) return NaN;
+    const numeric = typeof value === "number" ? value : Number(text);
+    if (Number.isFinite(numeric)) {
+      const fraction = ((numeric % 1) + 1) % 1;
+      return Math.min(86399999, Math.round(fraction * 86400000));
+    }
+
+    const match = text.match(/(?:^|[^0-9])(\d{1,2}):([0-5]\d)(?::([0-5]\d)(?:\.(\d{1,3}))?)?\s*([ap])?\.?m?\.?/i);
+    if (!match) return NaN;
+
+    let hour = Number(match[1]);
+    const minute = Number(match[2]);
+    const second = Number(match[3] || 0);
+    const millisecond = Number(String(match[4] || "0").padEnd(3, "0"));
+    const meridiem = String(match[5] || "").toLowerCase();
+    if (meridiem) {
+      if (hour < 1 || hour > 12) return NaN;
+      hour = (hour % 12) + (meridiem === "p" ? 12 : 0);
+    } else if (hour > 23) {
+      return NaN;
+    }
+    return hour * 3600000 + minute * 60000 + second * 1000 + millisecond;
+  }
+
+  function visitTimeOrder(timeValue, dateValue) {
+    const explicitTime = toTimeOfDay(timeValue);
+    if (Number.isFinite(explicitTime)) return explicitTime;
+    const embeddedTime = toTimeOfDay(dateValue);
+    return Number.isFinite(embeddedTime) ? embeddedTime : -1;
   }
 
   function findHeaderRow(grid) {
@@ -177,9 +230,12 @@
       if (!found) continue;
 
       const outlets = new Map();
+      let sourceRow = 0;
       for (const row of grid.slice(found.row + 1)) {
+        sourceRow += 1;
         const code = clean(row[found.at.code]).toUpperCase();
-        const date = toIsoDate(row[found.at.date], date1904);
+        const dateValue = row[found.at.date];
+        const date = toIsoDate(dateValue, date1904);
         const score = toNumber(row[found.at.score]);
         if (!code || !date || !Number.isFinite(score)) continue;
 
@@ -193,13 +249,28 @@
           date,
           score,
           max: Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : 0,
+          _time: visitTimeOrder(found.at.time >= 0 ? row[found.at.time] : "", dateValue),
+          _row: sourceRow,
         });
         outlets.set(code, entry);
       }
 
       outlets.forEach((entry) => {
-        entry.visits.sort((a, b) => a.date.localeCompare(b.date));
-        entry.visits = entry.visits.slice(-LAST_N);
+        const latestByDate = new Map();
+        for (const visit of entry.visits) {
+          const current = latestByDate.get(visit.date);
+          if (
+            !current
+            || visit._time > current._time
+            || (visit._time === current._time && visit._row > current._row)
+          ) {
+            latestByDate.set(visit.date, visit);
+          }
+        }
+        entry.visits = [...latestByDate.values()]
+          .sort((a, b) => a.date.localeCompare(b.date))
+          .slice(-LAST_N)
+          .map(({ _time, _row, ...visit }) => visit);
       });
 
       if (outlets.size) {
