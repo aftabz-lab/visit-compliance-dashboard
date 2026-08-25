@@ -583,8 +583,12 @@ async function loadTrend({ silent = true } = {}) {
     // Strictly passive: the trend never triggers a Google sign-in. It rides on
     // the session the dashboard has already established; if there is none, it
     // waits quietly and the minute timer tries again.
+    // Trend uses the same Google Drive session as the existing raw-data loaders.
+    // Do not ask for a separate Trend connection and do not require a Trend file
+    // inside the repository. If the session is not ready yet, the normal Drive
+    // polling/retry will load it after the existing connection is established.
     if (drive.cachedToken && !drive.cachedToken()) {
-      throw new Error("connect Google Drive once to load the trend");
+      throw new Error("waiting for the connected Google Drive session");
     }
     const built = await Trend.fromDrive(drive);
     if (!built) throw new Error("no file named Trend in the connected folder");
