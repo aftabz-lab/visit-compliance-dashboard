@@ -557,6 +557,7 @@ async function loadTrend({ silent = true } = {}) {
   wireTrendControls();
   setTrendToggle();
   if (trendState.outlets?.size) return;
+  if (restoreTrendCache()) { setTrendToggle(); renderTrend(); }
 
   // Published with the dashboard payload by scripts/build.py — works for every
   // viewer with no Drive access at all.
@@ -583,7 +584,7 @@ async function loadTrend({ silent = true } = {}) {
     // the session the dashboard has already established; if there is none, it
     // waits quietly and the minute timer tries again.
     if (drive.cachedToken && !drive.cachedToken()) {
-      throw new Error("waiting for the dashboard's Drive session");
+      throw new Error("connect Google Drive once to load the trend");
     }
     const built = await Trend.fromDrive(drive);
     if (!built) throw new Error("no file named Trend in the connected folder");
@@ -608,6 +609,40 @@ let trendPollStarted = false;
 
 // Re-reads the Trend workbook straight from the shared Drive folder using the
 // session already established for the other raw files.
+const TREND_CACHE_KEY = "shwapno-visit-trend-cache-v1";
+
+// Keeps the last successful read on this device, so the chart survives reloads
+// and token expiry. One Drive session is enough; after that it just works.
+function saveTrendCache() {
+  try {
+    localStorage.setItem(TREND_CACHE_KEY, JSON.stringify({
+      fileName: trendState.fileName,
+      maxScore: trendState.maxScore || 0,
+      signature: trendState.driveSignature || "",
+      savedAt: Date.now(),
+      outlets: Object.fromEntries([...trendState.outlets].map(([code, o]) => [code, o])),
+    }));
+  } catch { /* storage full or blocked - not fatal */ }
+}
+
+function restoreTrendCache() {
+  try {
+    const raw = localStorage.getItem(TREND_CACHE_KEY);
+    if (!raw) return false;
+    const cached = JSON.parse(raw);
+    const entries = Object.entries(cached?.outlets || {});
+    if (!entries.length) return false;
+    trendState.outlets = new Map(entries.map(([code, o]) => [
+      String(code).toUpperCase(), { name: o.name || "", visits: o.visits || [] },
+    ]));
+    trendState.fileName = cached.fileName || "Trend workbook";
+    trendState.maxScore = Number(cached.maxScore) || 0;
+    trendState.driveSignature = cached.signature || "";
+    trendState.error = "";
+    return true;
+  } catch { return false; }
+}
+
 async function loadTrendFromDrive() {
   const Trend = window.TrendSource;
   const drive = window.ShwapnoDrive;
@@ -624,6 +659,7 @@ async function loadTrendFromDrive() {
     trendState.outlets = built.outlets;
     trendState.fileName = built.fileName;
     trendState.error = "";
+    saveTrendCache();
     setTrendToggle();
     renderTrend();
   } catch { /* leave whatever is already showing */ }

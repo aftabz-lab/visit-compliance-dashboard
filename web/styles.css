@@ -286,3 +286,12 @@ html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border
 .trend-toggle { grid-column: 1 / -1 !important; display: block !important; visibility: visible !important; }
 .trend-toggle[disabled] { display: block !important; }
 .trend-panel { grid-column: 1 / -1 !important; }
+
+/* The officer table must always own a full row of the summary grid; an added
+   sibling had been allowed to sit beside it, halving its width. */
+#performance-panel { grid-column: 1 / -1 !important; width: 100% !important; }
+.summary-layout > * { min-width: 0; }
+.officer-table-wrap { overflow-x: auto; }
+#performance-table { width: 100% !important; table-layout: auto; }
+/* Outside the grid now, so it needs its own spacing rather than a grid span. */
+.trend-toggle, .trend-panel { grid-column: auto !important; margin: 14px 0 0 !important; }
