@@ -913,6 +913,81 @@ def attach_last_visits(outlet_directory: dict, responses: list[dict], officer_di
     return outlet_directory
 
 
+
+TREND_LAST_N = 6
+TREND_HEADERS = {
+    "code": ("outlet code", "site code", "outlet", "code"),
+    "name": ("outlet name", "name"),
+    "date": ("date", "visit date"),
+    "score": ("score", "total score", "total", "visit score"),
+}
+
+
+def build_trend(data_dir: Path) -> dict:
+    """Reads the workbook named "Trend" and returns per-outlet visit scores.
+
+    Published with the dashboard payload so every viewer sees the chart without
+    needing Google Drive access. Used only for the trend chart - no other figure
+    on either dashboard reads it.
+    """
+    candidates = [
+        p for p in sorted(data_dir.iterdir())
+        if p.is_file() and not p.name.startswith("~$")
+        and p.suffix.lower() in {".xlsx", ".xlsm"}
+        and "trend" in p.stem.lower()
+    ]
+    if not candidates:
+        return {}
+    path = candidates[-1]
+    try:
+        book = XlsxWorkbook(path)
+    except Exception:
+        return {}
+    try:
+        for sheet_name in book.sheets:
+            rows = list(book.iter_rows(sheet_name))
+            if not rows:
+                continue
+            at = None
+            for line in rows[:12]:
+                lower = [normalize_text(v).lower() for v in line]
+                found = {}
+                for key, names in TREND_HEADERS.items():
+                    found[key] = next((i for i, h in enumerate(lower) if h in names), -1)
+                if found["code"] >= 0 and found["date"] >= 0 and found["score"] >= 0:
+                    at = found
+                    header_index = rows.index(line)
+                    break
+            if not at:
+                continue
+            outlets: dict[str, dict] = {}
+            for line in rows[header_index + 1:]:
+                def cell(i):
+                    return line[i] if 0 <= i < len(line) else None
+                code = site_key(cell(at["code"]))
+                if not code:
+                    continue
+                date = parse_date_only(cell(at["date"]), date_1904=book.date_1904)
+                try:
+                    score = float(cell(at["score"]))
+                except (TypeError, ValueError):
+                    continue
+                if not date:
+                    continue
+                entry = outlets.setdefault(code, {"name": normalize_text(cell(at["name"])), "visits": []})
+                if not entry["name"]:
+                    entry["name"] = normalize_text(cell(at["name"]))
+                entry["visits"].append({"date": date, "score": score})
+            for entry in outlets.values():
+                entry["visits"].sort(key=lambda v: v["date"])
+                entry["visits"] = entry["visits"][-TREND_LAST_N:]
+            if outlets:
+                return {"fileName": path.name, "sheet": sheet_name, "outlets": outlets}
+    finally:
+        book.close()
+    return {}
+
+
 def main() -> None:
     cfg = read_json(CONFIG_PATH, {})
     aliases = read_json(ALIAS_PATH, [])
@@ -998,6 +1073,17 @@ def main() -> None:
                 "fullMonthAssignments": len(assignments),
                 "tillDateAssignments": len(due),
                 "acceptedResponses": len(responses),
+                # Full reconciliation chain, so any gap between the row count in
+                # the workbook and the figure on screen can be accounted for.
+                "acceptedInFile": len(parsed_responses),
+                "afterSnapshotIgnored": len(resolved_responses) - len(responses),
+                "unmappedOfficerResponses": sum(
+                    1 for r in responses if r.get("resolutionMethod") == "unmapped"
+                ),
+                "responsesForUnscheduledOutlets": sum(
+                    1 for r in responses
+                    if r["siteCode"] not in {a["siteCode"] for a in assignments}
+                ),
                 **response_diagnostics,
                 "resolutionCounts": resolution_counts,
                 "unmappedResponseNames": unmapped_names,
@@ -1006,6 +1092,7 @@ def main() -> None:
         "officers": officers,
         "details": details,
         "outlets": outlet_directory,
+        "trend": build_trend(DATA_DIR),
         "definitions": {
             "fullMonth": "Total Planned Visits (Full Month) counts every scheduled assignment in the schedule workbook, including dates after the response snapshot.",
             "tillDate": "Total Planned Visits (Till Date) counts scheduled assignments on or before the response snapshot date.",
