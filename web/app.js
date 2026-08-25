@@ -693,7 +693,12 @@ async function loadTrendFromDrive() {
   if (!Trend || !drive?.listFolderFiles) return;
   try {
     const files = await drive.listFolderFiles();
-    const meta = Trend.pickTrendFile(files);
+    // Trend is isolated: search only the Trend workbook in the selected folder.
+    // Keep this independent from all compliance/audit data files.
+    const meta = Trend.pickTrendFile(files) || (files || []).find(f => {
+      const n = String(f.name || "").trim().toLowerCase();
+      return n === "trend.xlsx" || n === "trend.xlsm";
+    });
     if (!meta) return;
     const signature = `${meta.name}|${meta.modifiedTime || meta.md5Checksum || ""}`;
     if (signature === trendState.driveSignature) return;   // unchanged
