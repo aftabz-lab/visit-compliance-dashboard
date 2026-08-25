@@ -469,7 +469,7 @@ function renderTrend() {
     panel.innerHTML = `
       <div class="panel-head"><h2>Visit score trend</h2>
         <p class="panel-caption">Last ${window.TrendSource ? window.TrendSource.LAST_N : 6} visits per outlet</p></div>
-      <div class="trend-empty">${trendState.error
+      <div class="trend-empty">${!trendState.outlets ? "" : `No rows for <b>${esc(state.selectedOutlet || "")}</b> in the Trend workbook.<br>`}${trendState.error
         ? `Could not read the Trend workbook: ${esc(trendState.error)}`
         : "No workbook named <b>Trend</b> was found in the connected Google Drive folder."}</div>
       <div class="trend-pick"><button type="button" id="trend-open">Open the Trend workbook</button></div>`;
@@ -478,7 +478,7 @@ function renderTrend() {
   }
 
   const codes = [...trendState.outlets.keys()].sort();
-  if (!trendState.code || !trendState.outlets.has(trendState.code)) trendState.code = codes[0];
+  trendState.code = state.selectedOutlet ? String(state.selectedOutlet).toUpperCase() : codes[0];
   const entry = trendState.outlets.get(trendState.code);
   const visits = entry?.visits || [];
   const max = Math.max(1, ...visits.map(v => v.score));
@@ -487,12 +487,8 @@ function renderTrend() {
     <div class="panel-head"><h2>Visit score trend</h2>
       <p class="panel-caption">Last ${window.TrendSource.LAST_N} visits · from ${esc(trendState.fileName || "Trend workbook")}</p></div>
     <div class="trend-controls">
-      <label style="font-size:11px;color:var(--muted-text);font-weight:700">Outlet</label>
-      <select id="trend-outlet">${codes.map(c => {
-        const o = trendState.outlets.get(c);
-        return `<option value="${esc(c)}"${c === trendState.code ? " selected" : ""}>${esc(c)}${o.name ? " · " + esc(o.name) : ""}</option>`;
-      }).join("")}</select>
-      <span class="trend-note">${codes.length.toLocaleString()} outlets in the Trend file</span>
+      <b style="font-size:12.5px">${esc(trendState.code)}${entry?.name ? " · " + esc(entry.name) : ""}</b>
+      <span class="trend-note">${codes.length.toLocaleString()} outlets in ${esc(trendState.fileName || "the Trend file")}</span>
     </div>
     ${visits.length ? `<div class="trend-chart">${visits.map(v => {
       const h = Math.max(4, Math.round(140 * v.score / max));
@@ -503,21 +499,25 @@ function renderTrend() {
       </div>`;
     }).join("")}</div>` : `<div class="trend-empty">No visits recorded for this outlet.</div>`}`;
 
-  const sel = $("trend-outlet");
-  if (sel) sel.addEventListener("change", e => { trendState.code = e.target.value; renderTrend(); });
 }
 
 function setTrendToggle() {
   const btn = $("trend-toggle");
   if (!btn) return;
+  // Only meaningful once an outlet is picked, so it stays faded until then.
+  const code = state.selectedOutlet ? String(state.selectedOutlet).toUpperCase() : "";
+  btn.disabled = !code;
+  if (!code) { trendState.open = false; const p = $("trend-panel"); if (p) p.hidden = true; }
   btn.setAttribute("aria-expanded", String(Boolean(trendState.open)));
   const chev = $("trend-chev");
   if (chev) chev.textContent = trendState.open ? "▴" : "▾";
   const note = $("trend-toggle-note");
   if (note) {
-    note.textContent = trendState.outlets?.size
-      ? `${trendState.outlets.size.toLocaleString()} outlets · from ${trendState.fileName}`
-      : "Visit score history per outlet";
+    note.textContent = !code
+      ? "At first select any outlet"
+      : trendState.outlets?.size
+        ? `${code} · last ${window.TrendSource ? window.TrendSource.LAST_N : 6} visits`
+        : `${code} · Trend workbook not loaded yet`;
   }
 }
 
@@ -1023,6 +1023,7 @@ function renderOutletCard() {
   });
 }
 function selectOutlet(code) {
+  setTimeout(() => { setTrendToggle(); renderTrend(); }, 0);
   const outlet = state.data.outlets?.[code];
   if (!outlet) return;
   state.selectedOutlet = code;
