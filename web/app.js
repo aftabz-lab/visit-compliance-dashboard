@@ -456,7 +456,6 @@ const trendState = {
   sheet: "",
   code: "",
   error: "",
-  open: false,
   maxScore: 0,
   maxFromColumn: false,
   published: null,
@@ -474,10 +473,24 @@ function trendTone(v, max) {
   return "#d9534f";
 }
 
+function trendOutletName(code, trendEntry = null) {
+  const dashboardName = code ? state.data?.outlets?.[code]?.outletName : "";
+  return String(dashboardName || trendEntry?.name || "").trim();
+}
+
+function trendOutletLine(code, trendEntry = null) {
+  if (!code) {
+    return '<span style="font-size:13px;color:var(--muted)">Select an outlet to view its trend</span>';
+  }
+  const name = trendOutletName(code, trendEntry);
+  return `<span style="font-size:13.5px;color:var(--text)">${esc(code)}${name ? ` (<strong>${esc(name)}</strong>)` : ""}</span>`;
+}
+
 function renderTrend() {
   const panel = $("trend-panel");
   if (!panel) return;
-  panel.hidden = !trendState.open;
+  panel.hidden = false;
+  const selectedCode = state.selectedOutlet ? String(state.selectedOutlet).toUpperCase() : "";
 
   // No Trend workbook yet: say so plainly and offer to open one directly,
   // rather than leaving an empty space with no explanation.
@@ -485,9 +498,12 @@ function renderTrend() {
     panel.innerHTML = `
       <div class="panel-head"><h2>Visit score trend</h2>
         <p class="panel-caption">Last ${window.TrendSource ? window.TrendSource.LAST_N : 6} visits per outlet</p></div>
-      <div class="trend-empty">${!trendState.outlets ? "" : `No rows for <b>${esc(state.selectedOutlet || "")}</b> in the Trend workbook.<br>`}${trendState.error
-        ? `Could not read the Trend workbook: ${esc(trendState.error)}`
-        : "No workbook named <b>Trend</b> was found in the connected Google Drive folder."}</div>
+      <div class="trend-controls">${trendOutletLine(selectedCode)}</div>
+      <div class="trend-empty">${!selectedCode
+        ? "The last six visits will appear here automatically after an outlet is selected."
+        : trendState.error
+          ? `Could not read the Trend workbook: ${esc(trendState.error)}`
+          : "No workbook named <b>Trend</b> was found in the connected Google Drive folder."}</div>
       <div class="trend-pick">
         <button type="button" id="trend-connect">Connect Google Drive &amp; load Trend</button>
         <button type="button" id="trend-open">Open the Trend workbook</button>
@@ -516,9 +532,22 @@ function renderTrend() {
   }
 
   const codes = [...trendState.outlets.keys()].sort();
-  trendState.code = state.selectedOutlet ? String(state.selectedOutlet).toUpperCase() : codes[0];
+  trendState.code = selectedCode;
   const entry = trendState.outlets.get(trendState.code);
   const visits = entry?.visits || [];
+
+  if (!selectedCode) {
+    panel.innerHTML = `
+      <div class="panel-head"><h2>Visit score trend</h2>
+        <p class="panel-caption">Last ${window.TrendSource ? window.TrendSource.LAST_N : 6} visits · from ${esc(trendState.fileName || "Trend workbook")}</p></div>
+      <div class="trend-controls">
+        ${trendOutletLine("")}
+        <span class="trend-note">${codes.length.toLocaleString()} outlets in ${esc(trendState.fileName || "the Trend file")}</span>
+      </div>
+      <div class="trend-empty">The last six visits will appear here automatically after an outlet is selected.</div>`;
+    return;
+  }
+
   // Percentage of the score available, so bars compare across dates and outlets.
   const denom = Number(trendState.maxScore)
     || Math.max(1, ...visits.map(v => Number(v.max) || 0), ...visits.map(v => v.score));
@@ -528,7 +557,7 @@ function renderTrend() {
     <div class="panel-head"><h2>Visit score trend</h2>
       <p class="panel-caption">Last ${window.TrendSource ? window.TrendSource.LAST_N : 6} visits · from ${esc(trendState.fileName || "Trend workbook")}</p></div>
     <div class="trend-controls">
-      <b style="font-size:12.5px">${esc(trendState.code)}${entry?.name ? " · " + esc(entry.name) : ""}</b>
+      ${trendOutletLine(trendState.code, entry)}
       <span class="trend-note">${codes.length.toLocaleString()} outlets in ${esc(trendState.fileName || "the Trend file")}</span>
     </div>
     ${visits.length ? `<div class="trend-chart">${visits.map(v => {
@@ -545,36 +574,16 @@ function renderTrend() {
 }
 
 function setTrendToggle() {
-  const btn = $("trend-toggle");
-  if (!btn) return;
-  // Only meaningful once an outlet is picked, so it stays faded until then.
-  const code = state.selectedOutlet ? String(state.selectedOutlet).toUpperCase() : "";
-  btn.disabled = !code;
-  if (!code) { trendState.open = false; const p = $("trend-panel"); if (p) p.hidden = true; }
-  btn.setAttribute("aria-expanded", String(Boolean(trendState.open)));
-  const chev = $("trend-chev");
-  if (chev) chev.textContent = trendState.open ? "▴" : "▾";
-  const note = $("trend-toggle-note");
-  if (note) {
-    note.textContent = !code
-      ? "At first select any outlet"
-      : trendState.outlets?.size
-        ? `${code} · last ${window.TrendSource ? window.TrendSource.LAST_N : 6} visits`
-        : `${code} · ${trendState.error ? "Trend: " + trendState.error : "Trend workbook not read yet — open the box"}`;
-  }
+  // Retained as the central visibility hook for existing async callbacks. The
+  // old toggle card is gone; the Trend panel is now permanently visible.
+  const panel = $("trend-panel");
+  if (panel) panel.hidden = false;
 }
 
 let trendWired = false;
 function wireTrendControls() {
   if (trendWired) return;
   trendWired = true;
-  $("trend-toggle")?.addEventListener("click", () => {
-    trendState.open = !trendState.open;
-    setTrendToggle();
-    renderTrend();
-    // Drive often connects after first paint, so try again on demand.
-    if (trendState.open && !trendState.outlets?.size) loadTrend({ silent: false });
-  });
   $("trend-file")?.addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
     if (!file || !window.TrendSource) return;
@@ -1335,7 +1344,6 @@ function renderOutletCard() {
   });
 }
 function selectOutlet(code) {
-  setTimeout(() => { setTrendToggle(); renderTrend(); }, 0);
   const outlet = state.data.outlets?.[code];
   if (!outlet) return;
   state.selectedOutlet = code;
@@ -1385,6 +1393,7 @@ function render() {
   renderDetails(rows);
   renderOutletResults();
   renderOutletCard();
+  renderTrend();
 }
 
 function applyDataLoad(nextLoad) {
