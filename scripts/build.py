@@ -920,6 +920,7 @@ TREND_HEADERS = {
     "name": ("outlet name", "name"),
     "date": ("date", "visit date"),
     "score": ("score", "total score", "total", "visit score"),
+    "max": ("max", "max score", "out of", "total marks", "full marks", "available"),
 }
 
 
@@ -977,12 +978,24 @@ def build_trend(data_dir: Path) -> dict:
                 entry = outlets.setdefault(code, {"name": normalize_text(cell(at["name"])), "visits": []})
                 if not entry["name"]:
                     entry["name"] = normalize_text(cell(at["name"]))
-                entry["visits"].append({"date": date, "score": score})
+                try:
+                    row_max = float(cell(at["max"])) if at.get("max", -1) >= 0 else 0.0
+                except (TypeError, ValueError):
+                    row_max = 0.0
+                entry["visits"].append({"date": date, "score": score, "max": row_max})
             for entry in outlets.values():
                 entry["visits"].sort(key=lambda v: v["date"])
                 entry["visits"] = entry["visits"][-TREND_LAST_N:]
             if outlets:
-                return {"fileName": path.name, "sheet": sheet_name, "outlets": outlets}
+                # Percentages need a denominator. An explicit max column wins;
+                # otherwise the highest score anywhere in the file is used.
+                every = [v for e in outlets.values() for v in e["visits"]]
+                stated_max = max((v["max"] for v in every), default=0.0)
+                max_score = stated_max or max((v["score"] for v in every), default=0.0)
+                return {
+                    "fileName": path.name, "sheet": sheet_name, "outlets": outlets,
+                    "maxScore": max_score, "maxFromColumn": bool(stated_max),
+                }
     finally:
         book.close()
     return {}
