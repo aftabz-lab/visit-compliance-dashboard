@@ -517,7 +517,7 @@ function setTrendToggle() {
       ? "At first select any outlet"
       : trendState.outlets?.size
         ? `${code} · last ${window.TrendSource ? window.TrendSource.LAST_N : 6} visits`
-        : `${code} · Trend workbook not loaded yet`;
+        : `${code} · ${trendState.error ? "Trend: " + trendState.error : "Trend workbook not read yet — open the box"}`;
   }
 }
 
@@ -526,6 +526,8 @@ function wireTrendControls() {
     trendState.open = !trendState.open;
     setTrendToggle();
     renderTrend();
+    // Drive often connects after first paint, so try again on demand.
+    if (trendState.open && !trendState.outlets?.size) loadTrend({ silent: false });
   });
   $("trend-file")?.addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
@@ -543,20 +545,23 @@ function wireTrendControls() {
   });
 }
 
-async function loadTrend() {
+async function loadTrend({ silent = true } = {}) {
   wireTrendControls();
   setTrendToggle();
   const Trend = window.TrendSource;
-  if (!Trend) return;
+  if (!Trend) { trendState.error = "trend-source.js is not loaded"; setTrendToggle(); return; }
+  if (trendState.outlets?.size) return;
   try {
     const drive = window.GoogleDriveSource;
-    const built = drive ? await Trend.fromDrive(drive) : null;
-    if (built?.outlets?.size) {
-      trendState.outlets = built.outlets;
-      trendState.fileName = built.fileName;
-      setTrendToggle();
-      renderTrend();
-    }
+    if (!drive) throw new Error("Google Drive module not loaded");
+    if (drive.getFolder && !drive.getFolder()) throw new Error("no Drive folder connected on this device");
+    const built = await Trend.fromDrive(drive);
+    if (!built) throw new Error("no file named Trend in the connected folder");
+    trendState.outlets = built.outlets;
+    trendState.fileName = built.fileName;
+    trendState.error = "";
+    setTrendToggle();
+    renderTrend();
   } catch (error) {
     trendState.error = error?.message || String(error);
     console.warn("Trend workbook not loaded:", trendState.error);
@@ -1087,6 +1092,7 @@ function applyDataLoad(nextLoad) {
   renderDefinitions();
   renderReconciliation(state.data?.metadata);
   loadTrend();
+  setTimeout(() => { if (!trendState.outlets?.size) loadTrend(); }, 4000);
   render();
 }
 
