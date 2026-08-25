@@ -449,8 +449,8 @@ function renderReconciliation(meta) {
    touches state.data, and no compliance or audit figure reads trendState,
    so this file can never affect any other number on the dashboard.      */
 const TREND_CLOUD_SNAPSHOT_KEY = "visit-trend";
-const TREND_CACHE_KEY = "shwapno-visit-trend-cache-v3-latest-daily";
-const TREND_RULE_VERSION = "latest-daily-v1";
+const TREND_CACHE_KEY = "shwapno-visit-trend-cache-v4-unique-daily";
+const TREND_RULE_VERSION = "latest-daily-v2";
 const trendState = {
   outlets: null,
   fileName: "",
@@ -469,6 +469,32 @@ let trendDriveLoadPromise = null;
 function trendRuleSignature(sourceSignature) {
   const base = String(sourceSignature || "").trim();
   return base ? `${base}|rule:${TREND_RULE_VERSION}` : `rule:${TREND_RULE_VERSION}`;
+}
+
+function trendDayKey(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : text.toLowerCase();
+}
+
+// Legacy published/cache payloads may already contain same-day duplicates.
+// Keep the last stored score for each calendar day as a display-layer safety
+// net; the Trend workbook parser separately uses the latest actual time.
+function normalizeTrendVisits(visits) {
+  const latestByDate = new Map();
+  for (const visit of visits || []) {
+    if (!visit || typeof visit !== "object") continue;
+    const dateKey = trendDayKey(visit.date);
+    if (!dateKey) continue;
+    latestByDate.set(dateKey, { dateKey, visit });
+  }
+  return [...latestByDate.values()]
+    .sort((a, b) => a.dateKey.localeCompare(b.dateKey))
+    .slice(-(window.TrendSource?.LAST_N || 6))
+    .map(item => item.visit);
 }
 
 function trendTone(v, max) {
@@ -540,7 +566,7 @@ function renderTrend() {
   const codes = [...trendState.outlets.keys()].sort();
   trendState.code = selectedCode;
   const entry = trendState.outlets.get(trendState.code);
-  const visits = entry?.visits || [];
+  const visits = normalizeTrendVisits(entry?.visits || []);
 
   if (!selectedCode) {
     panel.innerHTML = `
@@ -630,13 +656,13 @@ function unpackTrendPayload(raw) {
 function trendPayloadSignature(raw) {
   const payload = unpackTrendPayload(raw);
   if (!payload) return "";
-  if (payload.sourceSignature) return `source:${payload.sourceSignature}`;
+  if (payload.sourceSignature) return `source:${payload.sourceSignature}|view:${TREND_RULE_VERSION}`;
   const codes = Object.keys(payload.outlets).sort();
   const visits = codes.map(code => {
-    const rows = payload.outlets[code]?.visits || [];
+    const rows = normalizeTrendVisits(payload.outlets[code]?.visits || []);
     return `${code}:${rows.map(row => `${row.date || ""},${row.score ?? ""},${row.max ?? ""}`).join(";")}`;
   }).join("|");
-  return `${payload.fileName || ""}|${payload.maxScore || 0}|${visits}`;
+  return `${TREND_RULE_VERSION}|${payload.fileName || ""}|${payload.maxScore || 0}|${visits}`;
 }
 
 // Takes a published trend payload and puts it only in trendState. Returns true
@@ -644,19 +670,26 @@ function trendPayloadSignature(raw) {
 function adoptTrendPayload(raw) {
   const published = unpackTrendPayload(raw);
   if (!published) return false;
-  const codes = Object.keys(published.outlets);
-  const signature = trendPayloadSignature(published);
-  trendState.published = published;
+  const normalized = {
+    ...published,
+    outlets: Object.fromEntries(Object.entries(published.outlets).map(([code, entry]) => [
+      code,
+      { ...entry, visits: normalizeTrendVisits(entry?.visits || []) },
+    ])),
+  };
+  const codes = Object.keys(normalized.outlets);
+  const signature = trendPayloadSignature(normalized);
+  trendState.published = normalized;
   if (!signature || signature === trendState.signature) return false;
   trendState.signature = signature;
   trendState.outlets = new Map(codes.map(code => [
     String(code).toUpperCase(),
-    { name: published.outlets[code]?.name || "", visits: published.outlets[code]?.visits || [] },
+    { name: normalized.outlets[code]?.name || "", visits: normalized.outlets[code]?.visits || [] },
   ]));
-  trendState.fileName = published.fileName || "Trend workbook";
-  trendState.sheet = published.sheet || "";
-  trendState.maxScore = Number(published.maxScore) || 0;
-  trendState.maxFromColumn = Boolean(published.maxFromColumn);
+  trendState.fileName = normalized.fileName || "Trend workbook";
+  trendState.sheet = normalized.sheet || "";
+  trendState.maxScore = Number(normalized.maxScore) || 0;
+  trendState.maxFromColumn = Boolean(normalized.maxFromColumn);
   trendState.error = "";
   return true;
 }
@@ -735,7 +768,7 @@ function restoreTrendCache() {
     const entries = Object.entries(cached?.outlets || {});
     if (!entries.length) return false;
     trendState.outlets = new Map(entries.map(([code, o]) => [
-      String(code).toUpperCase(), { name: o.name || "", visits: o.visits || [] },
+      String(code).toUpperCase(), { name: o.name || "", visits: normalizeTrendVisits(o.visits || []) },
     ]));
     trendState.fileName = cached.fileName || "Trend workbook";
     trendState.sheet = cached.sheet || "";
