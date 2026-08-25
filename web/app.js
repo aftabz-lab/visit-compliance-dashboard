@@ -1,5 +1,5 @@
 import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-interactions-v3-trend";
-import { readCloudSnapshot } from "./supabase-sync.js?v=visit-compliance-v12-supabase";
+import { publishIfSignedIn, readCloudSnapshot } from "./supabase-sync.js?v=visit-compliance-v12-supabase";
 
 const ALL_OFFICERS = "__ALL_OFFICERS__";
 const ALL_REMARKS = "__ALL_REMARKS__";
@@ -448,7 +448,23 @@ function renderReconciliation(meta) {
    Fed only by the "Trend" workbook via window.TrendSource. Nothing here
    touches state.data, and no compliance or audit figure reads trendState,
    so this file can never affect any other number on the dashboard.      */
-const trendState = { outlets: null, fileName: "", code: "", error: "", open: false, maxScore: 0, published: null, signature: "", driveSignature: "" };
+const TREND_CLOUD_SNAPSHOT_KEY = "visit-trend";
+const TREND_CACHE_KEY = "shwapno-visit-trend-cache-v2";
+const trendState = {
+  outlets: null,
+  fileName: "",
+  sheet: "",
+  code: "",
+  error: "",
+  open: false,
+  maxScore: 0,
+  maxFromColumn: false,
+  published: null,
+  signature: "",
+  driveSignature: "",
+  publishedSignature: "",
+};
+let trendDriveLoadPromise = null;
 
 function trendTone(v, max) {
   const share = max > 0 ? v / max : 0;
@@ -484,15 +500,13 @@ function renderTrend() {
         trendState.error = "connecting…"; setTrendToggle(); renderTrend();
         await drive.connect({});                 // user asked for it, so the prompt is expected
         trendState.driveSignature = "";
-        trendState.error = "";
-        await loadTrendFromDrive({ reportErrors: true });
-        // Only claim the file is missing when the folder listing really had no
-        // Trend workbook. Any other failure now reports its own reason instead
-        // of hiding behind a wrong "no file named Trend" message.
-        if (!trendState.outlets?.size && !trendState.error) {
-          trendState.error = "connected, but no file named Trend in that folder";
+        await loadTrendFromDrive();
+        if (!trendState.outlets?.size) {
+          if (!trendState.error || trendState.error === "connecting…") {
+            trendState.error = "connected, but no file named Trend in that folder";
+          }
+          setTrendToggle(); renderTrend();
         }
-        if (!trendState.outlets?.size) { setTrendToggle(); renderTrend(); }
       } catch (error) {
         trendState.error = error?.message || "could not connect";
         setTrendToggle(); renderTrend();
@@ -566,10 +580,12 @@ function wireTrendControls() {
     if (!file || !window.TrendSource) return;
     try {
       const built = await window.TrendSource.fromFile(file);
-      trendState.outlets = built.outlets;
-      trendState.fileName = built.fileName;
-      trendState.maxScore = Number(built.maxScore) || 0;
+      const payload = window.TrendSource.toPayload(built, built.fileName, built.sourceSignature);
+      if (!payload) throw new Error("The Trend workbook has no usable visit rows.");
+      adoptTrendPayload(payload);
+      trendState.driveSignature = built.sourceSignature || "";
       trendState.error = "";
+      saveTrendCache();
     } catch (error) {
       trendState.error = error?.message || String(error);
     }
@@ -578,23 +594,54 @@ function wireTrendControls() {
   });
 }
 
-// Takes a published trend payload — from the shared cloud snapshot or from the
-// GitHub build — and puts it on screen. Returns true only when it is different
-// from what is already showing, so a refreshed Trend workbook replaces an older
-// chart in place and an unchanged one is left alone.
-function adoptTrendPayload(published) {
-  const codes = published?.outlets ? Object.keys(published.outlets) : [];
-  if (!codes.length) return false;
-  const signature = `${published.fileName || ""}|${codes.length}|${published.maxScore || 0}`;
-  if (signature === trendState.signature) return false;
+// Accept both the standalone visit-trend snapshot and the legacy
+// dashboard_data.json `trend` property. The shape check prevents a Visit
+// Compliance outlet directory from ever being mistaken for trend rows.
+function unpackTrendPayload(raw) {
+  const candidates = [raw?.data, raw?.trend, raw];
+  for (const candidate of candidates) {
+    const outlets = candidate?.outlets;
+    if (!outlets || typeof outlets !== "object" || Array.isArray(outlets)) continue;
+    if (!Object.values(outlets).some(entry => Array.isArray(entry?.visits))) continue;
+    return {
+      ...candidate,
+      sourceSignature: candidate.sourceSignature || raw?.sourceSignature || "",
+      generatedAt: candidate.generatedAt || raw?.generatedAt || "",
+    };
+  }
+  return null;
+}
+
+function trendPayloadSignature(raw) {
+  const payload = unpackTrendPayload(raw);
+  if (!payload) return "";
+  if (payload.sourceSignature) return `source:${payload.sourceSignature}`;
+  const codes = Object.keys(payload.outlets).sort();
+  const visits = codes.map(code => {
+    const rows = payload.outlets[code]?.visits || [];
+    return `${code}:${rows.map(row => `${row.date || ""},${row.score ?? ""},${row.max ?? ""}`).join(";")}`;
+  }).join("|");
+  return `${payload.fileName || ""}|${payload.maxScore || 0}|${visits}`;
+}
+
+// Takes a published trend payload and puts it only in trendState. Returns true
+// when the chart changed; Visit Compliance state and Audit state are untouched.
+function adoptTrendPayload(raw) {
+  const published = unpackTrendPayload(raw);
+  if (!published) return false;
+  const codes = Object.keys(published.outlets);
+  const signature = trendPayloadSignature(published);
   trendState.published = published;
+  if (!signature || signature === trendState.signature) return false;
   trendState.signature = signature;
   trendState.outlets = new Map(codes.map(code => [
     String(code).toUpperCase(),
     { name: published.outlets[code]?.name || "", visits: published.outlets[code]?.visits || [] },
   ]));
   trendState.fileName = published.fileName || "Trend workbook";
+  trendState.sheet = published.sheet || "";
   trendState.maxScore = Number(published.maxScore) || 0;
+  trendState.maxFromColumn = Boolean(published.maxFromColumn);
   trendState.error = "";
   return true;
 }
@@ -619,12 +666,10 @@ async function loadTrend({ silent = true } = {}) {
   // a Drive error flash into the box before the published chart arrived.
   await pollPublishedTrend();
   if (trendState.outlets?.size) return;
-  if (window.ShwapnoDrive?.cachedToken?.()) { loadTrendFromDrive(); }
-
   const Trend = window.TrendSource;
   if (!Trend) { trendState.error = "trend-source.js is not loaded"; setTrendToggle(); return; }
   try {
-    const drive = window.ShwapnoDrive || window.GoogleDriveSource;
+    const drive = window.ShwapnoDrive;
     if (!drive) throw new Error("Drive module not available on this page");
     if (drive.getFolder && !drive.getFolder()) throw new Error("no Trend data published yet");
     // Strictly passive: the trend never triggers a Google sign-in. It rides on
@@ -633,14 +678,8 @@ async function loadTrend({ silent = true } = {}) {
     if (drive.cachedToken && !drive.cachedToken()) {
       throw new Error("open the box and press Connect Google Drive");
     }
-    const built = await Trend.fromDrive(drive);
-    if (!built) throw new Error("no file named Trend in the connected folder");
-    trendState.outlets = built.outlets;
-    trendState.fileName = built.fileName;
-    trendState.maxScore = Number(built.maxScore) || 0;
-    trendState.error = "";
-    setTrendToggle();
-    renderTrend();
+    await loadTrendFromDrive();
+    if (!trendState.outlets?.size) throw new Error("no file named Trend in the connected folder");
   } catch (error) {
     trendState.error = error?.message || String(error);
     console.warn("Trend workbook not loaded:", trendState.error);
@@ -655,18 +694,18 @@ async function loadTrend({ silent = true } = {}) {
 const TREND_POLL_MS = 60000;
 let trendPollStarted = false;
 
-// Re-reads the Trend workbook straight from the shared Drive folder using the
-// session already established for the other raw files.
-const TREND_CACHE_KEY = "shwapno-visit-trend-cache-v1";
-
 // Keeps the last successful read on this device, so the chart survives reloads
 // and token expiry. One Drive session is enough; after that it just works.
 function saveTrendCache() {
   try {
+    if (!trendState.outlets?.size) return;
     localStorage.setItem(TREND_CACHE_KEY, JSON.stringify({
       fileName: trendState.fileName,
+      sheet: trendState.sheet || "",
       maxScore: trendState.maxScore || 0,
-      signature: trendState.driveSignature || "",
+      maxFromColumn: Boolean(trendState.maxFromColumn),
+      sourceSignature: trendState.published?.sourceSignature || trendState.driveSignature || "",
+      publishedSignature: trendState.publishedSignature || "",
       savedAt: Date.now(),
       outlets: Object.fromEntries([...trendState.outlets].map(([code, o]) => [code, o])),
     }));
@@ -684,85 +723,145 @@ function restoreTrendCache() {
       String(code).toUpperCase(), { name: o.name || "", visits: o.visits || [] },
     ]));
     trendState.fileName = cached.fileName || "Trend workbook";
+    trendState.sheet = cached.sheet || "";
     trendState.maxScore = Number(cached.maxScore) || 0;
-    trendState.driveSignature = cached.signature || "";
+    trendState.maxFromColumn = Boolean(cached.maxFromColumn);
+    trendState.driveSignature = cached.sourceSignature || "";
+    trendState.publishedSignature = cached.publishedSignature || "";
+    trendState.signature = trendPayloadSignature({
+      fileName: trendState.fileName,
+      sheet: trendState.sheet,
+      maxScore: trendState.maxScore,
+      maxFromColumn: trendState.maxFromColumn,
+      sourceSignature: trendState.driveSignature,
+      outlets: cached.outlets,
+    });
     trendState.error = "";
     return true;
   } catch { return false; }
 }
 
-const TREND_SLOW_FILE_BYTES = 8 * 1024 * 1024;   // past this, say it is working
-
-async function loadTrendFromDrive({ reportErrors = false } = {}) {
-  const Trend = window.TrendSource;
-  const drive = window.ShwapnoDrive;
-  if (!Trend || !drive?.listFolderFiles) return;
-  // An empty box must always explain itself. Errors are recorded whenever there
-  // is nothing on screen, and stay silent only when a chart is already showing.
-  const speak = reportErrors || !trendState.outlets?.size;
+async function publishTrendSnapshot(payload, sourceSignature) {
+  if (!payload?.outlets || !Object.keys(payload.outlets).length) return false;
+  const signature = sourceSignature || payload.sourceSignature || trendPayloadSignature(payload);
+  if (signature && signature === trendState.publishedSignature) return true;
   try {
-    const files = await drive.listFolderFiles();
-    const meta = Trend.pickTrendFile(files);
-    if (!meta) {
-      if (speak) {
-        const sheets = (files || []).filter(f => /\.(xlsx|xlsm)$/i.test(String(f.name || ""))).length;
-        trendState.error = sheets
-          ? `no .xlsx named Trend among the ${sheets} workbooks in that folder`
-          : "that folder has no Excel workbooks";
-        setTrendToggle(); renderTrend();
-      }
-      return;
-    }
-    const signature = `${meta.name}|${meta.modifiedTime || meta.md5Checksum || ""}`;
-    if (signature === trendState.driveSignature) return;   // unchanged
-    const size = Number(meta.size) || 0;
-    if (speak && size > TREND_SLOW_FILE_BYTES) {
-      // A big workbook takes a while to download and parse. Say so rather than
-      // leaving the box looking stuck.
-      trendState.error = `reading ${meta.name} (${Math.round(size / 1048576)} MB) — this can take a while`;
-      setTrendToggle(); renderTrend();
-    }
-    const built = await Trend.fromDrive(drive);
-    if (!built?.outlets?.size) {
-      if (speak) {
-        trendState.error = `${meta.name} has no rows with an outlet code, a date and a score`;
-        setTrendToggle(); renderTrend();
-      }
-      return;
-    }
-    trendState.driveSignature = signature;
-    trendState.outlets = built.outlets;
-    trendState.fileName = built.fileName;
-    trendState.maxScore = Number(built.maxScore) || 0;
-    trendState.error = "";
+    const result = await publishIfSignedIn(TREND_CLOUD_SNAPSHOT_KEY, {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      sourceSignature: signature,
+      data: { ...payload, sourceSignature: signature },
+    });
+    if (!result?.published) return false;
+    trendState.publishedSignature = signature;
     saveTrendCache();
-    setTrendToggle();
-    renderTrend();
+    return true;
   } catch (error) {
-    console.warn("Trend workbook not read from Drive:", error);
-    if (speak) {
-      trendState.error = error?.message || String(error);
-      setTrendToggle(); renderTrend();
+    console.warn("Trend snapshot publish failed:", error);
+    return false;
+  }
+}
+
+async function loadTrendFromDrive() {
+  if (trendDriveLoadPromise) return await trendDriveLoadPromise;
+  const run = async () => {
+    const Trend = window.TrendSource;
+    const drive = window.ShwapnoDrive;
+    if (!Trend || !drive?.listFolderFiles || !drive?.downloadFile) return null;
+    try {
+      const files = await drive.listFolderFiles();
+      // Trend is isolated. Detection is by the exact workbook name, never by
+      // sheet similarity or by the ordering of other Drive files.
+      const meta = Trend.pickTrendFile(files);
+      if (!meta) {
+        if (!trendState.outlets?.size) trendState.error = "no file named Trend in the connected folder";
+        return null;
+      }
+
+      const signature = typeof drive.remoteSignature === "function"
+        ? drive.remoteSignature(meta)
+        : [meta.id || "", meta.name || "", meta.size || "", meta.modifiedTime || ""].join("|");
+
+      // A cached parse can be published immediately after the source PC signs
+      // in, without downloading or recalculating the compliance dashboard.
+      if (signature === trendState.driveSignature && trendState.outlets?.size) {
+        const cachedPayload = Trend.toPayload({
+          outlets: trendState.outlets,
+          sheetName: trendState.sheet,
+          maxScore: trendState.maxScore,
+          maxFromColumn: trendState.maxFromColumn,
+          sourceSignature: signature,
+        }, trendState.fileName || meta.name, signature);
+        await publishTrendSnapshot(cachedPayload, signature);
+        return cachedPayload;
+      }
+
+      const built = await Trend.fromDrive(drive, files);
+      if (!built?.outlets?.size) throw new Error("Trend has no usable visit rows.");
+      const payload = Trend.toPayload(built, built.fileName || meta.name, built.sourceSignature || signature);
+      if (!payload) throw new Error("Trend has no usable visit rows.");
+
+      trendState.driveSignature = built.sourceSignature || signature;
+      adoptTrendPayload(payload);
+      trendState.error = "";
+      saveTrendCache();
+      setTrendToggle();
+      renderTrend();
+
+      // This is a separate snapshot key. Publishing Trend cannot replace or
+      // modify the Visit Compliance or Audit snapshots.
+      await publishTrendSnapshot(payload, trendState.driveSignature);
+      return payload;
+    } catch (error) {
+      if (!trendState.outlets?.size) trendState.error = error?.message || String(error);
+      console.warn("Trend Drive load failed:", error);
+      setTrendToggle();
+      renderTrend();
+      return null;
     }
+  };
+  trendDriveLoadPromise = run();
+  try {
+    return await trendDriveLoadPromise;
+  } finally {
+    trendDriveLoadPromise = null;
   }
 }
 
 async function pollPublishedTrend() {
-  // The shared cloud snapshot is the live source when it carries a trend, so the
-  // repository build is only consulted when it does not. This stops the two
-  // published copies from replacing each other every minute.
+  // Primary source: the isolated Supabase row written by the source PC. Every
+  // viewer can read it without Drive permission, exactly like other snapshots.
+  try {
+    const row = await readCloudSnapshot(TREND_CLOUD_SNAPSHOT_KEY);
+    const cloudTrend = unpackTrendPayload(row?.payload);
+    if (cloudTrend) {
+      trendState.publishedSignature = cloudTrend.sourceSignature
+        || row?.payload?.sourceSignature
+        || trendPayloadSignature(cloudTrend);
+      const changed = adoptTrendPayload(cloudTrend);
+      saveTrendCache();
+      if (changed) { setTrendToggle(); renderTrend(); }
+      return;
+    }
+  } catch { /* Use the retained and repository fallbacks below. */ }
+
+  // Compatibility with an older combined Visit snapshot.
   if (state.data?.trend?.outlets && Object.keys(state.data.trend.outlets).length) {
     if (adoptTrendPayload(state.data.trend)) { setTrendToggle(); renderTrend(); }
     return;
   }
+
+  // Final fallback: a Trend workbook uploaded to the GitHub repository's data
+  // folder is still embedded by build.py in dashboard_data.json.
   try {
     const res = await fetch(`data/dashboard_data.json?t=${Date.now()}`, { cache: "no-store" });
     if (!res.ok) return;
     const fresh = (await res.json())?.trend;
-    if (!adoptTrendPayload(fresh)) return;               // missing or unchanged
+    if (!adoptTrendPayload(fresh)) return;
+    saveTrendCache();
     setTrendToggle();
     renderTrend();
-  } catch { /* offline or mid-deploy - try again next minute */ }
+  } catch { /* Offline or mid-deploy — try again next minute. */ }
 }
 
 function startTrendPolling() {
