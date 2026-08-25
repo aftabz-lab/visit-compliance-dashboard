@@ -120,6 +120,11 @@
         <button id="grant-folder" class="btn secondary" type="button">Reconnect Google Drive</button>
         <button id="drive-setup" class="btn secondary" type="button">Drive setup / change folder</button>
       </div>
+      <button id="trend-toggle" class="trend-toggle" type="button" aria-expanded="false">
+        <span><b>Show trend of last 6 visits</b><span id="trend-toggle-note">Visit score history per outlet</span></span>
+        <span class="chev" id="trend-chev">▾</span>
+      </button>
+      <input id="trend-file" type="file" accept=".xlsx,.xlsm" hidden />
       <section id="trend-panel" class="panel trend-panel" hidden></section>
       <section id="reconciliation" class="panel reconciliation"></section>
       <footer id="source-footer" class="source-footer" data-drive-owner-only></footer>

@@ -448,7 +448,7 @@ function renderReconciliation(meta) {
    Fed only by the "Trend" workbook via window.TrendSource. Nothing here
    touches state.data, and no compliance or audit figure reads trendState,
    so this file can never affect any other number on the dashboard.      */
-const trendState = { outlets: null, fileName: "", code: "", error: "" };
+const trendState = { outlets: null, fileName: "", code: "", error: "", open: false };
 
 function trendTone(v, max) {
   const share = max > 0 ? v / max : 0;
@@ -461,12 +461,21 @@ function trendTone(v, max) {
 function renderTrend() {
   const panel = $("trend-panel");
   if (!panel) return;
+  panel.hidden = !trendState.open;
+
+  // No Trend workbook yet: say so plainly and offer to open one directly,
+  // rather than leaving an empty space with no explanation.
   if (!trendState.outlets || !trendState.outlets.size) {
-    panel.hidden = true;
-    panel.innerHTML = "";
+    panel.innerHTML = `
+      <div class="panel-head"><h2>Visit score trend</h2>
+        <p class="panel-caption">Last ${window.TrendSource ? window.TrendSource.LAST_N : 6} visits per outlet</p></div>
+      <div class="trend-empty">${trendState.error
+        ? `Could not read the Trend workbook: ${esc(trendState.error)}`
+        : "No workbook named <b>Trend</b> was found in the connected Google Drive folder."}</div>
+      <div class="trend-pick"><button type="button" id="trend-open">Open the Trend workbook</button></div>`;
+    $("trend-open")?.addEventListener("click", () => $("trend-file")?.click());
     return;
   }
-  panel.hidden = false;
 
   const codes = [...trendState.outlets.keys()].sort();
   if (!trendState.code || !trendState.outlets.has(trendState.code)) trendState.code = codes[0];
@@ -498,7 +507,45 @@ function renderTrend() {
   if (sel) sel.addEventListener("change", e => { trendState.code = e.target.value; renderTrend(); });
 }
 
+function setTrendToggle() {
+  const btn = $("trend-toggle");
+  if (!btn) return;
+  btn.setAttribute("aria-expanded", String(Boolean(trendState.open)));
+  const chev = $("trend-chev");
+  if (chev) chev.textContent = trendState.open ? "▴" : "▾";
+  const note = $("trend-toggle-note");
+  if (note) {
+    note.textContent = trendState.outlets?.size
+      ? `${trendState.outlets.size.toLocaleString()} outlets · from ${trendState.fileName}`
+      : "Visit score history per outlet";
+  }
+}
+
+function wireTrendControls() {
+  $("trend-toggle")?.addEventListener("click", () => {
+    trendState.open = !trendState.open;
+    setTrendToggle();
+    renderTrend();
+  });
+  $("trend-file")?.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !window.TrendSource) return;
+    try {
+      const built = await window.TrendSource.fromFile(file);
+      trendState.outlets = built.outlets;
+      trendState.fileName = built.fileName;
+      trendState.error = "";
+    } catch (error) {
+      trendState.error = error?.message || String(error);
+    }
+    setTrendToggle();
+    renderTrend();
+  });
+}
+
 async function loadTrend() {
+  wireTrendControls();
+  setTrendToggle();
   const Trend = window.TrendSource;
   if (!Trend) return;
   try {
@@ -507,11 +554,14 @@ async function loadTrend() {
     if (built?.outlets?.size) {
       trendState.outlets = built.outlets;
       trendState.fileName = built.fileName;
+      setTrendToggle();
       renderTrend();
     }
   } catch (error) {
     trendState.error = error?.message || String(error);
     console.warn("Trend workbook not loaded:", trendState.error);
+    setTrendToggle();
+    renderTrend();
   }
 }
 
