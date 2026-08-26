@@ -449,8 +449,10 @@ function renderReconciliation(meta) {
    touches state.data, and no compliance or audit figure reads trendState,
    so this file can never affect any other number on the dashboard.      */
 const TREND_CLOUD_SNAPSHOT_KEY = "visit-trend";
-const TREND_CACHE_KEY = "shwapno-visit-trend-cache-v5-mmdd-dates";
-const TREND_RULE_VERSION = "latest-daily-mmdd-v3";
+const TREND_CACHE_KEY = "shwapno-visit-trend-cache-v6-legacy-mmdd-repair";
+const TREND_RULE_VERSION = "latest-daily-mmdd-max-v4";
+const LEGACY_TREND_RULE = "rule:latest-daily-v2";
+const LEGACY_TREND_TOTAL_POSSIBLE = 290;
 const trendState = {
   outlets: null,
   fileName: "",
@@ -480,6 +482,39 @@ function trendDayKey(value) {
   return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : text.toLowerCase();
 }
 
+function isLegacyTrendPayload(sourceSignature) {
+  return String(sourceSignature || "").includes(LEGACY_TREND_RULE);
+}
+
+// The already-published v2 snapshot converted ambiguous MM/DD text as DD/MM.
+// Its ISO values can be repaired deterministically: v2 swapped only dates whose
+// original day was 1-12, while dates with a day above 12 were already correct.
+function repairLegacyTrendDate(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return text;
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (day < 1 || day > 12 || month < 1 || month > 12) return text;
+  return `${match[1]}-${String(day).padStart(2, "0")}-${String(month).padStart(2, "0")}`;
+}
+
+function normalizeTrendPayloadVisits(visits, sourceSignature) {
+  const legacy = isLegacyTrendPayload(sourceSignature);
+  const repaired = legacy ? (visits || []).map((visit) => {
+    if (!visit || typeof visit !== "object") return visit;
+    const max = Number(visit.max) || 0;
+    return {
+      ...visit,
+      date: repairLegacyTrendDate(visit.date),
+      // The v2 reader missed the workbook's "Total Possible Score" header.
+      // The supplied legacy workbook uses 290; new parses retain the row value.
+      max: max > 0 ? max : LEGACY_TREND_TOTAL_POSSIBLE,
+    };
+  }) : visits;
+  return normalizeTrendVisits(repaired);
+}
+
 // Legacy published/cache payloads may already contain same-day duplicates.
 // Keep the last stored score for each calendar day as a display-layer safety
 // net; the Trend workbook parser separately uses the latest actual time.
@@ -503,6 +538,13 @@ function trendTone(v, max) {
   if (share >= 0.7) return "#8cc152";
   if (share >= 0.5) return "#e0a53f";
   return "#d9534f";
+}
+
+function trendShare(visit, denominator) {
+  const direct = Number(visit?.percent);
+  if (Number.isFinite(direct) && direct > 0) return direct <= 1 ? direct * 100 : direct;
+  const own = Number(visit?.max) || denominator;
+  return own > 0 ? (100 * Number(visit?.score || 0) / own) : 0;
 }
 
 function trendOutletName(code, trendEntry = null) {
@@ -593,8 +635,7 @@ function renderTrend() {
       <span class="trend-note">${codes.length.toLocaleString()} outlets in ${esc(trendState.fileName || "the Trend file")}</span>
     </div>
     ${visits.length ? `<div class="trend-chart">${visits.map(v => {
-      const own = Number(v.max) || denom;
-      const share = own > 0 ? (100 * v.score / own) : 0;
+      const share = trendShare(v, denom);
       const h = Math.max(4, Math.round(140 * share / max));
       return `<div class="trend-col">
         <span class="trend-val" style="color:${trendTone(share, max)}">${share.toFixed(0)}%</span>
@@ -660,7 +701,7 @@ function trendPayloadSignature(raw) {
   const codes = Object.keys(payload.outlets).sort();
   const visits = codes.map(code => {
     const rows = normalizeTrendVisits(payload.outlets[code]?.visits || []);
-    return `${code}:${rows.map(row => `${row.date || ""},${row.score ?? ""},${row.max ?? ""}`).join(";")}`;
+    return `${code}:${rows.map(row => `${row.date || ""},${row.score ?? ""},${row.max ?? ""},${row.percent ?? ""}`).join(";")}`;
   }).join("|");
   return `${TREND_RULE_VERSION}|${payload.fileName || ""}|${payload.maxScore || 0}|${visits}`;
 }
@@ -674,7 +715,7 @@ function adoptTrendPayload(raw) {
     ...published,
     outlets: Object.fromEntries(Object.entries(published.outlets).map(([code, entry]) => [
       code,
-      { ...entry, visits: normalizeTrendVisits(entry?.visits || []) },
+      { ...entry, visits: normalizeTrendPayloadVisits(entry?.visits || [], published.sourceSignature) },
     ])),
   };
   const codes = Object.keys(normalized.outlets);
@@ -768,7 +809,10 @@ function restoreTrendCache() {
     const entries = Object.entries(cached?.outlets || {});
     if (!entries.length) return false;
     trendState.outlets = new Map(entries.map(([code, o]) => [
-      String(code).toUpperCase(), { name: o.name || "", visits: normalizeTrendVisits(o.visits || []) },
+      String(code).toUpperCase(), {
+        name: o.name || "",
+        visits: normalizeTrendPayloadVisits(o.visits || [], cached.sourceSignature),
+      },
     ]));
     trendState.fileName = cached.fileName || "Trend workbook";
     trendState.sheet = cached.sheet || "";

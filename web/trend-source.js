@@ -42,7 +42,11 @@
     ],
     max: [
       "max", "maxscore", "maximumscore", "outof", "totalmarks", "fullmarks",
-      "totalpossible", "available",
+      "totalpossible", "totalpossiblescore", "possiblescore",
+      "maximumpossible", "maximumpossiblescore", "available",
+    ],
+    percent: [
+      "scorepercentage", "scorepercent", "scorepct", "percentage", "percent",
     ],
   });
 
@@ -121,6 +125,12 @@
     if (!text) return NaN;
     const number = Number(text);
     return Number.isFinite(number) ? number : NaN;
+  }
+
+  function toPercentage(value) {
+    const number = toNumber(value);
+    if (!Number.isFinite(number)) return NaN;
+    return number >= 0 && number <= 1 ? number * 100 : number;
   }
 
   function toTimeOfDay(value) {
@@ -240,6 +250,7 @@
         if (!code || !date || !Number.isFinite(score)) continue;
 
         const parsedMax = found.at.max >= 0 ? toNumber(row[found.at.max]) : NaN;
+        const parsedPercent = found.at.percent >= 0 ? toPercentage(row[found.at.percent]) : NaN;
         const entry = outlets.get(code) || {
           name: found.at.name >= 0 ? clean(row[found.at.name]) : "",
           visits: [],
@@ -249,6 +260,7 @@
           date,
           score,
           max: Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : 0,
+          percent: Number.isFinite(parsedPercent) && parsedPercent >= 0 ? parsedPercent : 0,
           _time: visitTimeOrder(found.at.time >= 0 ? row[found.at.time] : "", dateValue),
           _row: sourceRow,
         });
