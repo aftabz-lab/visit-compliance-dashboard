@@ -27,6 +27,8 @@ const state = {
   sortDir: -1,
   activeView: null,
   detailRemark: ALL_REMARKS,
+  detailOutletCodeSearch: "",
+  detailOutletNameSearch: "",
   auditScores: new Map(),
   auditScoreStatus: "loading",
   auditScoreSource: "",
@@ -1154,6 +1156,8 @@ function metricTitle(metric) {
 function showView(view) {
   state.activeView = view;
   state.detailRemark = ALL_REMARKS;
+  state.detailOutletCodeSearch = "";
+  state.detailOutletNameSearch = "";
   render();
   requestAnimationFrame(() => $("details-section")?.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
@@ -1186,6 +1190,30 @@ function rowsForDetailRemark(rows, neverVisitedRows, remark) {
   if (remark === ALL_REMARKS) return rows;
   if (remark === NEVER_VISITED_REMARK) return neverVisitedRows;
   return rows.filter(row => (row.remarks || "No remarks") === remark);
+}
+
+function rowsForDetailSearch(rows) {
+  const codeSearch = lower(state.detailOutletCodeSearch).trim();
+  const nameSearch = lower(state.detailOutletNameSearch).trim();
+  return rows.filter(row =>
+    (!codeSearch || lower(row.outletCode).includes(codeSearch))
+    && (!nameSearch || lower(row.outletName).includes(nameSearch))
+  );
+}
+
+function bindDetailSearch(currentRows, inputId, stateKey) {
+  const input = $(inputId);
+  input?.addEventListener("input", event => {
+    state[stateKey] = event.target.value;
+    const selectionStart = event.target.selectionStart;
+    const selectionEnd = event.target.selectionEnd;
+    renderDetails(currentRows);
+    const nextInput = $(inputId);
+    nextInput?.focus({ preventScroll: true });
+    if (selectionStart != null && selectionEnd != null) {
+      nextInput?.setSelectionRange(selectionStart, selectionEnd);
+    }
+  });
 }
 
 function renderDetails(currentRows) {
@@ -1221,7 +1249,7 @@ function renderDetails(currentRows) {
   if (state.detailRemark !== ALL_REMARKS && !remarkOptions.includes(state.detailRemark)) {
     state.detailRemark = ALL_REMARKS;
   }
-  const visibleRows = rowsForDetailRemark(rows, neverVisitedRows, state.detailRemark);
+  const visibleRows = rowsForDetailSearch(rowsForDetailRemark(rows, neverVisitedRows, state.detailRemark));
   const visibleTitle = state.detailRemark === NEVER_VISITED_REMARK && metric !== "never"
     ? `${title} — Never Visited Outlets`
     : title;
@@ -1252,6 +1280,8 @@ function renderDetails(currentRows) {
     state.detailRemark = event.target.value;
     renderDetails(currentRows);
   });
+  bindDetailSearch(currentRows, "detail-outlet-code-search", "detailOutletCodeSearch");
+  bindDetailSearch(currentRows, "detail-outlet-name-search", "detailOutletNameSearch");
 }
 
 function renderDetailTable(rows, remarkOptions = []) {
@@ -1274,8 +1304,8 @@ function renderDetailTable(rows, remarkOptions = []) {
   }).join("");
 
   return `<div class="detail-table-wrap"><table class="detail-table"><thead><tr>
-      <th>Outlet Code</th>
-      <th>Outlet Name</th>
+      <th><label class="remarks-heading detail-search-heading" style="min-width:126px"><span>Outlet Code</span><input id="detail-outlet-code-search" type="search" autocomplete="off" placeholder="Search code" value="${esc(state.detailOutletCodeSearch)}" aria-label="Search detail rows by outlet code" style="min-height:36px;border-radius:10px;padding:0 10px;font-size:12px;font-weight:700"></label></th>
+      <th><label class="remarks-heading detail-search-heading" style="min-width:180px"><span>Outlet Name</span><input id="detail-outlet-name-search" type="search" autocomplete="off" placeholder="Search name" value="${esc(state.detailOutletNameSearch)}" aria-label="Search detail rows by outlet name" style="min-height:36px;border-radius:10px;padding:0 10px;font-size:12px;font-weight:700"></label></th>
       <th>Officer</th>
       <th>Planned Visit Date</th>
       <th>Visit Status</th>
@@ -1285,7 +1315,7 @@ function renderDetailTable(rows, remarkOptions = []) {
       <th>Actual Visit Date</th>
       <th>Response ID</th>
       <th><label class="remarks-heading"><span>Remarks</span><select id="detail-remarks-filter" aria-label="Filter detail rows by remarks"><option value="${ALL_REMARKS}">All remarks</option>${remarkOptions.map(remark => `<option value="${esc(remark)}"${state.detailRemark === remark ? " selected" : ""}>${esc(remark)}</option>`).join("")}</select></label></th>
-    </tr></thead><tbody>${body || `<tr><td colspan="11" class="detail-empty-row">No records match this remark.</td></tr>`}</tbody></table></div>`;
+    </tr></thead><tbody>${body || `<tr><td colspan="11" class="detail-empty-row">No records match the current detail filters.</td></tr>`}</tbody></table></div>`;
 }
 
 function renderDefinitions() {
@@ -1591,6 +1621,8 @@ async function init() {
     $("officer-filter").addEventListener("change", e => {
       state.officerKey = e.target.value;
       state.detailRemark = ALL_REMARKS;
+      state.detailOutletCodeSearch = "";
+      state.detailOutletNameSearch = "";
       state.activeView = state.officerKey === ALL_OFFICERS
         ? null
         : { type: "officer", officerKey: state.officerKey, metric: "all" };
