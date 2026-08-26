@@ -920,7 +920,11 @@ TREND_HEADERS = {
     "name": ("outlet name", "name"),
     "date": ("date", "visit date"),
     "score": ("score", "total score", "total", "visit score"),
-    "max": ("max", "max score", "out of", "total marks", "full marks", "available"),
+    "max": (
+        "max", "max score", "out of", "total marks", "full marks",
+        "total possible", "total possible score", "possible score", "available",
+    ),
+    "percent": ("score percentage", "score percent", "score %", "percentage", "percent"),
 }
 
 
@@ -942,6 +946,15 @@ def parse_trend_date_only(value: object, *, date_1904: bool = False) -> str | No
         except ValueError:
             return None
     return parse_date_only(value, date_1904=date_1904)
+
+
+def parse_trend_percentage(value: object) -> float | None:
+    text = normalize_text(value).removesuffix("%").replace(",", "")
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return None
+    return number * 100 if 0 <= number <= 1 else number
 
 
 def build_trend(data_dir: Path) -> dict:
@@ -1002,7 +1015,16 @@ def build_trend(data_dir: Path) -> dict:
                     row_max = float(cell(at["max"])) if at.get("max", -1) >= 0 else 0.0
                 except (TypeError, ValueError):
                     row_max = 0.0
-                entry["visits"].append({"date": date, "score": score, "max": row_max})
+                row_percent = (
+                    parse_trend_percentage(cell(at["percent"]))
+                    if at.get("percent", -1) >= 0 else None
+                )
+                entry["visits"].append({
+                    "date": date,
+                    "score": score,
+                    "max": row_max,
+                    "percent": row_percent or 0.0,
+                })
             for entry in outlets.values():
                 entry["visits"].sort(key=lambda v: v["date"])
                 entry["visits"] = entry["visits"][-TREND_LAST_N:]
