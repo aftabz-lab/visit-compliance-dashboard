@@ -47,6 +47,128 @@ let savedTheme = "light";
 try { savedTheme = localStorage.getItem(THEME_KEY) || "light"; } catch {}
 applyTheme(savedTheme);
 
+const DASHBOARD_DESKTOP_WIDTH = 1420;
+const DASHBOARD_SIDE_GAP = 12;
+let dashboardFitHost = null;
+let dashboardFitShell = null;
+let dashboardFitFrame = 0;
+let dashboardFitObserver = null;
+let dashboardFitLayoutWidth = DASHBOARD_DESKTOP_WIDTH;
+
+function useDesktopDashboardAutoFit() {
+  const finePointer = window.matchMedia?.("(pointer: fine)")?.matches;
+  const screenWidth = Number(window.screen?.width || window.innerWidth || 0);
+  return Boolean(finePointer || screenWidth >= 900);
+}
+
+function dashboardScaleForWidth(viewportWidth, layoutWidth) {
+  const availableWidth = Math.max(1, Number(viewportWidth || 0) - (DASHBOARD_SIDE_GAP * 2));
+  return Math.min(1, availableWidth / Math.max(1, Number(layoutWidth || DASHBOARD_DESKTOP_WIDTH)));
+}
+
+function fitDashboardToViewport() {
+  dashboardFitFrame = 0;
+  if (!dashboardFitHost || !dashboardFitShell) return;
+
+  dashboardFitShell.style.width = `${dashboardFitLayoutWidth}px`;
+  dashboardFitShell.style.maxWidth = "none";
+  dashboardFitLayoutWidth = Math.max(
+    dashboardFitLayoutWidth,
+    DASHBOARD_DESKTOP_WIDTH,
+    Math.ceil(dashboardFitShell.scrollWidth || 0)
+  );
+  dashboardFitShell.style.width = `${dashboardFitLayoutWidth}px`;
+
+  const viewportWidth = document.documentElement.clientWidth || window.innerWidth || dashboardFitLayoutWidth;
+  const scale = dashboardScaleForWidth(viewportWidth, dashboardFitLayoutWidth);
+  if (scale < 0.999) {
+    dashboardFitShell.style.marginLeft = `${DASHBOARD_SIDE_GAP}px`;
+    dashboardFitShell.style.marginRight = "0";
+    dashboardFitShell.style.transformOrigin = "top left";
+    dashboardFitShell.style.transform = `scale(${scale})`;
+
+    const computed = getComputedStyle(dashboardFitShell);
+    const marginTop = parseFloat(computed.marginTop) || 0;
+    const marginBottom = parseFloat(computed.marginBottom) || 0;
+    const fittedHeight = marginTop + (dashboardFitShell.offsetHeight * scale) + marginBottom;
+    dashboardFitHost.style.height = `${Math.ceil(fittedHeight)}px`;
+  } else {
+    dashboardFitShell.style.removeProperty("margin-left");
+    dashboardFitShell.style.removeProperty("margin-right");
+    dashboardFitShell.style.removeProperty("transform-origin");
+    dashboardFitShell.style.removeProperty("transform");
+    dashboardFitHost.style.removeProperty("height");
+  }
+  dashboardFitHost.dataset.fitScale = scale.toFixed(4);
+  if (window.scrollX) window.scrollTo(0, window.scrollY);
+}
+
+function scheduleDashboardAutoFit() {
+  if (!dashboardFitHost || dashboardFitFrame) return;
+  dashboardFitFrame = requestAnimationFrame(fitDashboardToViewport);
+}
+
+function installDashboardAutoFit() {
+  if (!useDesktopDashboardAutoFit()) return;
+  const shell = $("main-content");
+  if (!shell || $("dashboard-autofit-host")) return;
+
+  document.documentElement.classList.add("dashboard-autofit-desktop");
+  const style = document.createElement("style");
+  style.id = "dashboard-autofit-styles";
+  style.textContent = `
+    html.dashboard-autofit-desktop,
+    html.dashboard-autofit-desktop body { max-width: 100%; overflow-x: hidden !important; }
+    html.dashboard-autofit-desktop #dashboard-autofit-host { width: 100%; max-width: 100%; position: relative; display: flow-root; }
+    html.dashboard-autofit-desktop .dashboard-shell { margin-top: 24px; margin-bottom: 36px; gap: 18px; }
+    html.dashboard-autofit-desktop .hero-card h1 { font-size: clamp(34px, 3vw, 46px); }
+    html.dashboard-autofit-desktop .hero-subtitle { font-size: 20px; }
+    html.dashboard-autofit-desktop .hero-header,
+    html.dashboard-autofit-desktop .panel-head,
+    html.dashboard-autofit-desktop .details-title { flex-direction: row; align-items: flex-start; }
+    html.dashboard-autofit-desktop .outlet-card-head { flex-direction: row; align-items: center; }
+    html.dashboard-autofit-desktop .hero-actions { justify-content: flex-end; }
+    html.dashboard-autofit-desktop .panel-actions,
+    html.dashboard-autofit-desktop .details-actions { justify-content: flex-start; }
+    html.dashboard-autofit-desktop .hero-actions > *,
+    html.dashboard-autofit-desktop .panel-actions > *,
+    html.dashboard-autofit-desktop .details-actions > *,
+    html.dashboard-autofit-desktop .admin-actions > * { width: auto; }
+    html.dashboard-autofit-desktop .summary-layout { grid-template-columns: 390px minmax(0, 1fr); }
+    html.dashboard-autofit-desktop .filter-grid { grid-template-columns: 1.35fr 1fr 1fr 1fr; }
+    html.dashboard-autofit-desktop .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    html.dashboard-autofit-desktop .source-meta { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, .8fr) minmax(0, 1fr); }
+    html.dashboard-autofit-desktop .outlet-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    html.dashboard-autofit-desktop .view-tabs { overflow: visible; flex-wrap: wrap; padding-bottom: 0; }
+    html.dashboard-autofit-desktop .details-summary { display: flex; }
+    html.dashboard-autofit-desktop .detail-table { min-width: 1240px; }
+    html.dashboard-autofit-desktop .trend-col { width: 74px; }
+    html.dashboard-autofit-desktop .trend-chart { gap: 10px !important; }
+    html.dashboard-autofit-desktop .trend-bar-wrap { height: 140px; }
+    html.dashboard-autofit-desktop .trend-date { font-size: 10.5px; }
+  `;
+  document.head.appendChild(style);
+
+  const host = document.createElement("div");
+  host.id = "dashboard-autofit-host";
+  const supportsOverflowClip = typeof CSS !== "undefined" && CSS.supports?.("overflow", "clip");
+  host.style.overflow = supportsOverflowClip ? "clip" : "hidden";
+  shell.parentNode.insertBefore(host, shell);
+  host.appendChild(shell);
+  dashboardFitHost = host;
+  dashboardFitShell = shell;
+
+  window.addEventListener("resize", scheduleDashboardAutoFit, { passive: true });
+  window.addEventListener("orientationchange", scheduleDashboardAutoFit, { passive: true });
+  window.addEventListener("load", scheduleDashboardAutoFit, { once: true });
+  document.fonts?.ready?.then(scheduleDashboardAutoFit).catch(() => {});
+  if ("ResizeObserver" in window) {
+    dashboardFitObserver = new ResizeObserver(scheduleDashboardAutoFit);
+    dashboardFitObserver.observe(shell);
+  }
+  scheduleDashboardAutoFit();
+}
+
 function fmtDate(iso) {
   if (!iso) return "—";
   return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit", timeZone: "UTC" });
@@ -1508,6 +1630,7 @@ function render() {
   renderOutletResults();
   renderOutletCard();
   renderTrend();
+  scheduleDashboardAutoFit();
 }
 
 function applyDataLoad(nextLoad) {
@@ -1589,6 +1712,7 @@ function bindDriveSetupModalFix() {
 }
 
 async function init() {
+  installDashboardAutoFit();
   bindDriveSetupModalFix();
   try {
     const auditScorePromise = loadAuditScores().catch(() => ({ scores: new Map(), source: "" }));
