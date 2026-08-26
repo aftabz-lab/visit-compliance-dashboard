@@ -924,6 +924,26 @@ TREND_HEADERS = {
 }
 
 
+def parse_trend_date_only(value: object, *, date_1904: bool = False) -> str | None:
+    """Parse Trend numeric text dates as month/day/year, independent of locale."""
+    if value is None or isinstance(value, (int, float)):
+        return parse_date_only(value, date_1904=date_1904)
+    text = normalize_text(value)
+    match = re.fullmatch(
+        r"(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})(?:[ T].*)?",
+        text,
+    )
+    if match:
+        month, day, year = (int(part) for part in match.groups())
+        if year < 100:
+            year += 2000
+        try:
+            return date(year, month, day).isoformat()
+        except ValueError:
+            return None
+    return parse_date_only(value, date_1904=date_1904)
+
+
 def build_trend(data_dir: Path) -> dict:
     """Reads the workbook named "Trend" and returns per-outlet visit scores.
 
@@ -968,7 +988,7 @@ def build_trend(data_dir: Path) -> dict:
                 code = site_key(cell(at["code"]))
                 if not code:
                     continue
-                date = parse_date_only(cell(at["date"]), date_1904=book.date_1904)
+                date = parse_trend_date_only(cell(at["date"]), date_1904=book.date_1904)
                 try:
                     score = float(cell(at["score"]))
                 except (TypeError, ValueError):
