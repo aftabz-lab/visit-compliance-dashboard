@@ -449,8 +449,8 @@ function renderReconciliation(meta) {
    touches state.data, and no compliance or audit figure reads trendState,
    so this file can never affect any other number on the dashboard.      */
 const TREND_CLOUD_SNAPSHOT_KEY = "visit-trend";
-const TREND_CACHE_KEY = "shwapno-visit-trend-cache-v4-unique-daily";
-const TREND_RULE_VERSION = "latest-daily-v2";
+const TREND_CACHE_KEY = "shwapno-visit-trend-cache-v5-mmdd-dates";
+const TREND_RULE_VERSION = "latest-daily-mmdd-v3";
 const trendState = {
   outlets: null,
   fileName: "",

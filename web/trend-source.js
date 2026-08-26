@@ -88,14 +88,14 @@
 
     match = text.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})(?:[ T].*)?$/);
     if (match) {
-      const first = Number(match[1]);
-      const second = Number(match[2]);
+      const month = Number(match[1]);
+      const day = Number(match[2]);
       let year = Number(match[3]);
       if (year < 100) year += 2000;
-      // The operational files use day/month/year. Month/day is accepted only
-      // when the second value cannot be a month, making the intent unambiguous.
-      if (second > 12 && first <= 12) return isoDate(year, first, second);
-      return isoDate(year, second, first);
+      // Trend's numeric text dates are always month/day/year (the separator may
+      // be /, - or .). Parse them explicitly instead of relying on the browser's
+      // locale, so 7/2/2026 is 02 Jul and 8/7/2026 is 07 Aug everywhere.
+      return isoDate(year, month, day);
     }
 
     match = text.match(/^(\d{1,2})[- ]([A-Za-z]{3,9})[- ,](\d{2,4})$/);
