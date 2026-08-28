@@ -1542,7 +1542,7 @@ function auditScoreCell(siteCode) {
   const score = pct(audit.score);
   const points = `${numberFmt.format(audit.earned)} / ${numberFmt.format(audit.available)} points`;
   return `<div class="outlet-cell audit-score-cell"><dt>Audit score</dt><dd>
-    <a class="audit-score-link ${scoreClass(audit.score)}" href="./audit.html?outlet=${encodeURIComponent(code)}" aria-label="Open Audit Command Dashboard for outlet ${esc(code)}">${esc(score)}</a>
+    <a class="audit-score-link ${scoreClass(audit.score)}" href="./audit.html?outlet=${encodeURIComponent(code)}" target="_blank" rel="noopener noreferrer" aria-label="Open Audit Command Dashboard for outlet ${esc(code)} in a new tab">${esc(score)}</a>
     <span class="by">${esc(points)} · click score for outlet audit</span>
   </dd></div>`;
 }
