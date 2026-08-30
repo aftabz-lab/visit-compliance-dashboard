@@ -27,6 +27,7 @@ const state = {
   sortDir: -1,
   activeView: null,
   detailRemark: ALL_REMARKS,
+  detailOfficerKey: ALL_OFFICERS,
   detailOutletCodeSearch: "",
   detailOutletNameSearch: "",
   auditScores: new Map(),
@@ -1297,6 +1298,7 @@ function metricTitle(metric) {
 function showView(view) {
   state.activeView = view;
   state.detailRemark = ALL_REMARKS;
+  state.detailOfficerKey = ALL_OFFICERS;
   state.detailOutletCodeSearch = "";
   state.detailOutletNameSearch = "";
   render();
@@ -1333,6 +1335,18 @@ function rowsForDetailRemark(rows, neverVisitedRows, remark) {
   return rows.filter(row => (row.remarks || "No remarks") === remark);
 }
 
+function detailOfficerOptions(rows) {
+  return [...new Map((rows || [])
+    .filter(row => row?.officerKey && row?.officer)
+    .map(row => [row.officerKey, { officerKey: row.officerKey, officer: row.officer }])).values()]
+    .sort((a, b) => a.officer.localeCompare(b.officer, undefined, { sensitivity: "base" }));
+}
+
+function rowsForDetailOfficer(rows) {
+  if (state.detailOfficerKey === ALL_OFFICERS) return rows;
+  return rows.filter(row => row.officerKey === state.detailOfficerKey);
+}
+
 function rowsForDetailSearch(rows) {
   const codeSearch = lower(state.detailOutletCodeSearch).trim();
   const nameSearch = lower(state.detailOutletNameSearch).trim();
@@ -1355,6 +1369,42 @@ function bindDetailSearch(currentRows, inputId, stateKey) {
       nextInput?.setSelectionRange(selectionStart, selectionEnd);
     }
   });
+}
+
+function bindDetailOfficerFilter(currentRows) {
+  const dropdown = $("detail-officer-filter");
+  const search = $("detail-officer-option-search");
+  const options = [...document.querySelectorAll("#detail-officer-options .detail-officer-option")];
+  const noMatch = $("detail-officer-no-match");
+  if (!dropdown || !search) return;
+
+  const filterOptions = () => {
+    const query = lower(search.value).trim();
+    let visible = 0;
+    options.forEach(option => {
+      const match = !query || lower(option.textContent).includes(query);
+      option.hidden = !match;
+      if (match) visible += 1;
+    });
+    if (noMatch) noMatch.hidden = visible > 0;
+  };
+
+  dropdown.addEventListener("toggle", () => {
+    if (!dropdown.open) return;
+    search.value = "";
+    filterOptions();
+    requestAnimationFrame(() => search.focus({ preventScroll: true }));
+  });
+  search.addEventListener("input", filterOptions);
+  search.addEventListener("keydown", event => {
+    if (event.key !== "Escape") return;
+    dropdown.open = false;
+    dropdown.querySelector("summary")?.focus({ preventScroll: true });
+  });
+  options.forEach(option => option.addEventListener("click", () => {
+    state.detailOfficerKey = option.dataset.officerKey || ALL_OFFICERS;
+    renderDetails(currentRows);
+  }));
 }
 
 function renderDetails(currentRows) {
@@ -1390,7 +1440,13 @@ function renderDetails(currentRows) {
   if (state.detailRemark !== ALL_REMARKS && !remarkOptions.includes(state.detailRemark)) {
     state.detailRemark = ALL_REMARKS;
   }
-  const visibleRows = rowsForDetailSearch(rowsForDetailRemark(rows, neverVisitedRows, state.detailRemark));
+  const remarkRows = rowsForDetailRemark(rows, neverVisitedRows, state.detailRemark);
+  const officerOptions = detailOfficerOptions(remarkRows);
+  if (state.detailOfficerKey !== ALL_OFFICERS
+      && !officerOptions.some(option => option.officerKey === state.detailOfficerKey)) {
+    state.detailOfficerKey = ALL_OFFICERS;
+  }
+  const visibleRows = rowsForDetailSearch(rowsForDetailOfficer(remarkRows));
   const visibleTitle = state.detailRemark === NEVER_VISITED_REMARK && metric !== "never"
     ? `${title} — Never Visited Outlets`
     : title;
@@ -1408,9 +1464,14 @@ function renderDetails(currentRows) {
       </div>
       <div class="details-summary" aria-label="Choose detail section">${summary.map(item => `<button type="button" class="summary-pill${metric === item.metric ? " is-active" : ""}" data-detail-metric="${esc(item.metric)}" aria-pressed="${metric === item.metric ? "true" : "false"}">${esc(item.label)}: ${esc(item.value)}</button>`).join("")}</div>
     </div>
-    ${renderDetailTable(visibleRows, remarkOptions)}`;
+    ${renderDetailTable(visibleRows, remarkOptions, officerOptions)}`;
 
-  $("details-close").addEventListener("click", () => { state.activeView = null; state.detailRemark = ALL_REMARKS; render(); });
+  $("details-close").addEventListener("click", () => {
+    state.activeView = null;
+    state.detailRemark = ALL_REMARKS;
+    state.detailOfficerKey = ALL_OFFICERS;
+    render();
+  });
   $("details-download").addEventListener("click", () => downloadDetailCsv(visibleRows, visibleTitle));
   target.querySelectorAll("[data-detail-metric]").forEach(button => button.addEventListener("click", () => {
     state.activeView = { ...state.activeView, metric: button.dataset.detailMetric };
@@ -1421,12 +1482,22 @@ function renderDetails(currentRows) {
     state.detailRemark = event.target.value;
     renderDetails(currentRows);
   });
+  bindDetailOfficerFilter(currentRows);
   bindDetailSearch(currentRows, "detail-outlet-code-search", "detailOutletCodeSearch");
   bindDetailSearch(currentRows, "detail-outlet-name-search", "detailOutletNameSearch");
 }
 
-function renderDetailTable(rows, remarkOptions = []) {
-  if (!rows.length && !remarkOptions.length) return `<div class="details-message">No records found for this drill-down in the current selection.</div>`;
+function renderDetailTable(rows, remarkOptions = [], officerOptions = []) {
+  if (!rows.length && !remarkOptions.length && !officerOptions.length) return `<div class="details-message">No records found for this drill-down in the current selection.</div>`;
+  const selectedOfficer = officerOptions.find(option => option.officerKey === state.detailOfficerKey);
+  const selectedOfficerLabel = selectedOfficer?.officer || "All officers";
+  const officerOptionButtons = [
+    { officerKey: ALL_OFFICERS, officer: "All officers" },
+    ...officerOptions,
+  ].map(option => {
+    const selected = option.officerKey === state.detailOfficerKey;
+    return `<button type="button" class="detail-officer-option${selected ? " is-selected" : ""}" data-officer-key="${esc(option.officerKey)}" role="option" aria-selected="${selected ? "true" : "false"}">${esc(option.officer)}</button>`;
+  }).join("");
   const body = rows.map(r => {
     const flag = timeFlag(r.inTime, r.outTime);
     return `<tr>
@@ -1447,7 +1518,7 @@ function renderDetailTable(rows, remarkOptions = []) {
   return `<div class="detail-table-wrap"><table class="detail-table"><thead><tr>
       <th><label class="remarks-heading detail-search-heading" style="min-width:126px"><span>Outlet Code</span><input id="detail-outlet-code-search" type="search" autocomplete="off" placeholder="Search code" value="${esc(state.detailOutletCodeSearch)}" aria-label="Search detail rows by outlet code" style="min-height:36px;border-radius:10px;padding:0 10px;font-size:12px;font-weight:700"></label></th>
       <th><label class="remarks-heading detail-search-heading" style="min-width:180px"><span>Outlet Name</span><input id="detail-outlet-name-search" type="search" autocomplete="off" placeholder="Search name" value="${esc(state.detailOutletNameSearch)}" aria-label="Search detail rows by outlet name" style="min-height:36px;border-radius:10px;padding:0 10px;font-size:12px;font-weight:700"></label></th>
-      <th>Officer</th>
+      <th class="detail-officer-heading-cell"><div class="remarks-heading detail-officer-heading"><span>Officer</span><details id="detail-officer-filter" class="detail-officer-filter"><summary aria-label="Filter detail rows by officer">${esc(selectedOfficerLabel)}</summary><div class="detail-officer-menu"><input id="detail-officer-option-search" type="search" autocomplete="off" placeholder="Search officer" aria-label="Search officers in dropdown"><div id="detail-officer-options" class="detail-officer-options" role="listbox" aria-label="Officer options">${officerOptionButtons}</div><div id="detail-officer-no-match" class="detail-officer-no-match" hidden>No matching officer</div></div></details></div></th>
       <th>Planned Visit Date</th>
       <th>Visit Status</th>
       <th>In Time</th>
@@ -1764,6 +1835,7 @@ async function init() {
     $("officer-filter").addEventListener("change", e => {
       state.officerKey = e.target.value;
       state.detailRemark = ALL_REMARKS;
+      state.detailOfficerKey = ALL_OFFICERS;
       state.detailOutletCodeSearch = "";
       state.detailOutletNameSearch = "";
       state.activeView = state.officerKey === ALL_OFFICERS
@@ -1783,6 +1855,7 @@ async function init() {
       state.search = "";
       state.activeView = null;
       state.detailRemark = ALL_REMARKS;
+      state.detailOfficerKey = ALL_OFFICERS;
       state.outletSearch = "";
       state.selectedOutlet = null;
       $("status-filter").value = state.status;

@@ -145,6 +145,33 @@ select option { background: var(--surface); color: var(--text); }
 .detail-table { min-width: 1240px; }
 .remarks-heading { min-width: 190px; display: grid; gap: 6px; white-space: normal; }
 .remarks-heading select { min-height: 36px; border-radius: 10px; padding: 0 32px 0 10px; font-size: 12px; font-weight: 700; }
+.detail-officer-heading-cell { z-index: 5 !important; overflow: visible; }
+.detail-officer-heading { min-width: 180px; position: relative; }
+.detail-officer-filter { position: relative; font-size: 12px; font-weight: 700; }
+.detail-officer-filter summary {
+  position: relative; display: flex; align-items: center; min-height: 36px; padding: 0 30px 0 10px;
+  overflow: hidden; border: 1px solid var(--border-strong); border-radius: 10px;
+  background: var(--surface-2); color: var(--text); cursor: pointer; list-style: none;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.detail-officer-filter summary::-webkit-details-marker { display: none; }
+.detail-officer-filter summary::after { content: '▾'; position: absolute; right: 10px; color: var(--muted); }
+.detail-officer-filter[open] summary { border-color: var(--accent-2); box-shadow: 0 0 0 3px rgba(14,149,184,.14); }
+.detail-officer-filter[open] summary::after { content: '▴'; }
+.detail-officer-menu {
+  position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; width: 240px; padding: 8px;
+  border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow);
+}
+.detail-officer-menu input { min-height: 36px; padding: 0 10px; border-radius: 9px; font-size: 12px; font-weight: 700; }
+.detail-officer-options { display: grid; gap: 2px; max-height: 220px; margin-top: 7px; overflow-y: auto; }
+.detail-officer-option {
+  width: 100%; border: 0; border-radius: 8px; padding: 8px 9px; background: transparent;
+  color: var(--text); cursor: pointer; font-size: 12px; font-weight: 700; text-align: left;
+}
+.detail-officer-option:hover, .detail-officer-option:focus-visible { background: var(--surface-3); outline: none; }
+.detail-officer-option.is-selected { background: var(--accent); color: #fff; }
+.detail-officer-option[hidden] { display: none; }
+.detail-officer-no-match { padding: 10px 8px; color: var(--muted); font-size: 12px; text-align: center; }
 .detail-empty-row { text-align: center !important; color: var(--muted); font-weight: 700; }
 .detail-table td.flag-missing { color: var(--danger); font-weight: 800; }
 .detail-table td.flag-short { color: #b07300; font-weight: 800; }
