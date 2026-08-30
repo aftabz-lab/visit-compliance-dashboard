@@ -409,6 +409,23 @@ function distinctNeverOutlets(rows) {
 function total(rows, key) { return rows.reduce((t, r) => t + (Number(r[key]) || 0), 0); }
 function totalCompleted(rows) { return rows.reduce((t, r) => t + ((Number(r.distinctPlannedVisitsCompleted) || 0) + (Number(r.otherUnplannedResponses) || 0)), 0); }
 
+function kpiScopeLabel(rows) {
+  const officers = [...new Map((rows || [])
+    .filter(row => row?.officer)
+    .map(row => [row.officerKey || `${row.status}::${row.officer}`, row])).values()];
+  if (officers.length === 1) return officers[0].officer;
+
+  const statuses = new Set(officers.map(row => lower(row.status)));
+  if (statuses.size === 1 && statuses.has("zonal")) return "All Zonal";
+  if (statuses.size === 1 && statuses.has("rho")) return "All RHO";
+
+  if (!officers.length) {
+    if (lower(state.status) === "zonal") return "All Zonal";
+    if (lower(state.status) === "rho") return "All RHO";
+  }
+  return "National";
+}
+
 function rowsWithDerived(rows) {
   return rows.map(r => ({
     ...r,
@@ -499,6 +516,7 @@ function renderKpis(rows, officerKey = null) {
   const pending = total(rows, "remainingVisits");
   const never = distinctNeverOutlets(rows);
   const completion = planned ? (completed / planned) * 100 : null;
+  const scopeLabel = kpiScopeLabel(rows);
 
   const cards = [
     { id: "completion", tone: "success", label: "Visit Completion %", value: completion == null ? "—" : `${completion.toFixed(1)}%`, meta: "Completed visits ÷ planned visits (till date)" },
@@ -514,6 +532,7 @@ function renderKpis(rows, officerKey = null) {
       <div class="kpi-label">${card.label}</div>
       <button type="button" class="kpi-action" data-kpi="${card.id}">${card.value}</button>
       <div class="kpi-meta">${card.meta}</div>
+      <div class="kpi-meta">${esc(scopeLabel)}</div>
     </div>`).join("");
 
   $("kpis").querySelectorAll(".kpi-action").forEach(btn => btn.addEventListener("click", () => {
