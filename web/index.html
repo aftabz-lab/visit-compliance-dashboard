@@ -51,6 +51,7 @@
         </div>
         <div class="panel-actions">
           <button id="reset-btn" class="btn secondary" type="button">Reset all filters</button>
+          <button id="backup-download-btn" class="btn secondary" type="button">Download backup Excel (2 sheets)</button>
           <button id="download-btn" class="btn primary" type="button">Download visible CSV</button>
         </div>
       </div>
@@ -152,9 +153,10 @@
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script src="attendance-source.js?v=visit-attendance-v2-time-fix"></script>
   <script src="google-drive-source.js?v=shared-drive-v1"></script>
   <script src="trend-source.js?v=trend-mmdd-max-v22"></script>
-  <script type="module" src="app.js?v=detail-officer-filter-v27"></script>
+  <script type="module" src="app.js?v=compiled-backup-v28"></script>
 </body>
 </html>

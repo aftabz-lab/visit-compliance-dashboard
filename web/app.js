@@ -1,5 +1,6 @@
 import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-interactions-v3-trend";
 import { publishIfSignedIn, readCloudSnapshot } from "./supabase-sync.js?v=visit-compliance-v12-supabase";
+import { downloadCompiledBackupWorkbook } from "./backup-export.js?v=compiled-backup-v1";
 
 const ALL_OFFICERS = "__ALL_OFFICERS__";
 const ALL_REMARKS = "__ALL_REMARKS__";
@@ -31,6 +32,8 @@ const state = {
   detailOutletCodeSearch: "",
   detailOutletNameSearch: "",
   auditScores: new Map(),
+  auditRows: [],
+  auditLoadPromise: null,
   auditScoreStatus: "loading",
   auditScoreSource: "",
 };
@@ -364,8 +367,12 @@ async function loadAuditScores() {
     } catch {}
   }
 
-  if (!selected) return { scores: new Map(), source: "" };
-  return { scores: calculateLatestAuditScores(selected.packedRows), source: selected.source };
+  if (!selected) return { scores: new Map(), packedRows: [], source: "" };
+  return {
+    scores: calculateLatestAuditScores(selected.packedRows),
+    packedRows: selected.packedRows,
+    source: selected.source,
+  };
 }
 
 function normalizedOfficerName(value) {
@@ -1590,6 +1597,28 @@ function saveCsv(lines, filename) {
   URL.revokeObjectURL(a.href);
 }
 
+async function downloadBackupExcel() {
+  const button = $("backup-download-btn");
+  if (!button || !state.data) return;
+  const originalLabel = button.textContent;
+  try {
+    button.disabled = true;
+    button.textContent = "Preparing 2-sheet backup…";
+    if (state.auditLoadPromise) await state.auditLoadPromise;
+    await downloadCompiledBackupWorkbook({
+      data: state.data,
+      auditRows: state.auditRows,
+      auditSource: state.auditScoreSource,
+      generatedAt: new Date(),
+    });
+  } catch (error) {
+    alert(error?.message || "Could not create the compiled backup workbook.");
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
 const OUTLET_LIMIT = 40;
 function outletList() { return state.data?.outlets ? Object.values(state.data.outlets) : []; }
 function matchingOutlets(term) {
@@ -1805,7 +1834,8 @@ async function init() {
   installDashboardAutoFit();
   bindDriveSetupModalFix();
   try {
-    const auditScorePromise = loadAuditScores().catch(() => ({ scores: new Map(), source: "" }));
+    const auditScorePromise = loadAuditScores().catch(() => ({ scores: new Map(), packedRows: [], source: "" }));
+    state.auditLoadPromise = auditScorePromise;
     state.dataLoad = await loadDashboardData();
     state.data = state.dataLoad.data;
     renderHeader();
@@ -1820,6 +1850,7 @@ async function init() {
 
     auditScorePromise.then(result => {
       state.auditScores = result.scores;
+      state.auditRows = result.packedRows || [];
       state.auditScoreSource = result.source;
       state.auditScoreStatus = result.scores.size ? "ready" : "unavailable";
       renderOutletCard();
@@ -1865,6 +1896,7 @@ async function init() {
       render();
     });
     $("download-btn").addEventListener("click", downloadCsv);
+    $("backup-download-btn").addEventListener("click", downloadBackupExcel);
     $("clear-officer-selection").addEventListener("click", clearOfficerSelection);
     $("theme-toggle").addEventListener("click", () => {
       const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
