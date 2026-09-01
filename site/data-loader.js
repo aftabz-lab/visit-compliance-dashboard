@@ -1,14 +1,17 @@
 /*
  * Visit Compliance Dashboard data loader
  *
- * STRICT PC RAW-DATA MODE
+ * PC RESPONSE + DASHBOARD VISIT-PLAN MODE
  *
- * The dashboard reads the current workbooks only from the PC folder selected
- * by the user. Repository Excel/JSON files and previously calculated dashboard
- * snapshots are not used as a data source. The browser may remember only the
- * folder handle so it can reopen the same local folder after permission is
- * granted.
+ * The response source is always the Store_Operations_Compliance_Audit_responses
+ * workbook inside the PC folder selected by the user, and only its
+ * "Response Summary" sheet is read. A valid Zonal/RHO visit-plan workbook in
+ * that same folder is used when present. Otherwise the dashboard reuses the
+ * visit-plan assignments already published with the dashboard build. Published
+ * response values are never used in place of the selected PC response file.
  */
+
+import { publishIfSignedIn, readCloudSnapshot } from "./supabase-sync.js?v=visit-compliance-v12-supabase";
 
 const RESPONSE_SHEET = "Response Summary";
 const RESPONSE_HEADERS = ["Response ID", "Date", "Time", "Site Code", "Created By User ID"];
@@ -24,10 +27,13 @@ const OFFICER_ALIASES = [
 
 const PC_DB = "visit-compliance-pc-raw-data";
 const PC_DB_VERSION = 1;
-const PC_READER_VERSION = "pc-raw-folder-v7";
+const PC_READER_VERSION = "pc-response-dashboard-plan-v15-officer-detail-times";
+const DRIVE_WATCH_MS = 1000;
+const LEGACY_SHARED_SNAPSHOT_URL = "./data/shared_snapshot.json";
+const attendanceApi = () => globalThis.ShwapnoAttendance || null;
 
 const DEFAULT_DEFINITIONS = Object.freeze({
-  fullMonth: "Total Planned Visits (Full Month) counts every scheduled assignment in the selected PC visit-plan workbook.",
+  fullMonth: "Total Planned Visits (Full Month) counts every scheduled assignment in the current visit plan (local Zonal/RHO workbook when present, otherwise the dashboard visit plan).",
   tillDate: "Total Planned Visits (Till Date) counts scheduled assignments on or before the response snapshot date.",
   accepted: "Accepted Responses counts unique Response Summary rows with Response ID, Date, Site Code and Created By User ID.",
   plannedDate: "Planned-Date Responses match the same officer, outlet code and planned date.",
@@ -43,10 +49,10 @@ function emptyDashboardData() {
   return {
     metadata: {
       title: "Visit Compliance Dashboard",
-      subtitle: "Choose your PC raw-data folder to load the dashboard",
+      subtitle: "No published snapshot is currently available",
       snapshotDate: null,
       reportMonth: "the selected reporting month",
-      scheduleFile: "No PC schedule workbook selected",
+      scheduleFile: "Dashboard visit plan",
       responseFile: "No PC response workbook selected",
       responseSheet: RESPONSE_SHEET,
       generatedAt: now,
@@ -273,6 +279,8 @@ async function readResponseWorkbookWithSheetJs(file) {
     const get = (header) => row[map.get(header)];
     const responseId = cleanText(get("Response ID"));
     const responseDate = parseDateOnly(get("Date"));
+    const responseTimeRaw = get("Time");
+    const responseTime = cleanText(responseTimeRaw);
     const siteCode = siteKey(get("Site Code"));
     const officer = cleanText(get("Created By User ID"));
     if (!responseId && !responseDate && !siteCode && !officer) continue;
@@ -288,6 +296,8 @@ async function readResponseWorkbookWithSheetJs(file) {
     accepted.push({
       responseId,
       responseDate,
+      responseTime,
+      responseTimeMinutes: attendanceApi()?.parseClockMinutes(responseTimeRaw) ?? null,
       siteCode,
       officer,
       officerNameKey: nameKey(officer),
@@ -680,6 +690,7 @@ async function parseFastResponseSummary(zip, sheetXml) {
   const wantedColumns = new Set([
     headerMap.get("Response ID"),
     headerMap.get("Date"),
+    headerMap.get("Time"),
     headerMap.get("Site Code"),
     headerMap.get("Created By User ID"),
   ]);
@@ -707,6 +718,8 @@ async function parseFastResponseSummary(zip, sheetXml) {
     const get = (header) => resolveToken(row.get(headerMap.get(header)), shared);
     const responseId = cleanText(get("Response ID"));
     const responseDate = parseDateOnly(get("Date"));
+    const responseTimeRaw = get("Time");
+    const responseTime = cleanText(responseTimeRaw);
     const siteCode = siteKey(get("Site Code"));
     const officer = cleanText(get("Created By User ID"));
     if (!responseId && !responseDate && !siteCode && !officer) continue;
@@ -722,6 +735,8 @@ async function parseFastResponseSummary(zip, sheetXml) {
     accepted.push({
       responseId,
       responseDate,
+      responseTime,
+      responseTimeMinutes: attendanceApi()?.parseClockMinutes(responseTimeRaw) ?? null,
       siteCode,
       officer,
       officerNameKey: nameKey(officer),
@@ -1068,10 +1083,17 @@ function dateLabel(iso) {
   return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" }).format(date);
 }
 
-function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFile, sourceMode) {
+function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFile, sourceMode, attendanceData = null) {
   const snapshotDate = parsedResponse.responses.reduce((latest, response) => response.responseDate > latest ? response.responseDate : latest, "0000-00-00");
   const resolved = resolveResponses(parsedResponse.responses, schedule.assignments);
-  const responses = resolved.responses.filter((response) => response.responseDate <= snapshotDate);
+  const attendanceMatch = attendanceApi()?.matchResponses(resolved.responses, attendanceData?.entries || []) || {
+    responses: resolved.responses,
+    matchedCount: 0,
+    missingCount: resolved.responses.length,
+    ambiguousCount: 0,
+    inferredOfficerCodes: 0,
+  };
+  const responses = attendanceMatch.responses.filter((response) => response.responseDate <= snapshotDate);
   const planKey = (assignment) => assignment.officerKey + "|" + assignment.siteCode + "|" + assignment.plannedDate;
   const responsePlanKey = (response) => response.officerKey + "|" + response.siteCode + "|" + response.responseDate;
   const fullPlanKeys = new Set(schedule.assignments.map(planKey));
@@ -1143,17 +1165,45 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
     const full = assignmentsByOfficer.get(officerKey) || [];
     const dueOfficer = dueByOfficer.get(officerKey) || [];
     const officerResponses = responsesByOfficer.get(officerKey) || [];
-    const planned = full.map((assignment) => ({ plannedDate: assignment.plannedDate, siteCode: assignment.siteCode, outletName: assignment.outletName }));
-    const remaining = dueOfficer.filter((assignment) => !completedKeys.has(planKey(assignment))).map((assignment) => ({ plannedDate: assignment.plannedDate, siteCode: assignment.siteCode, outletName: assignment.outletName }));
-    const completed = dueOfficer.filter((assignment) => completedKeys.has(planKey(assignment))).map((assignment) => ({ plannedDate: assignment.plannedDate, siteCode: assignment.siteCode, outletName: assignment.outletName }));
+    const responsesByExactPlan = new Map();
+    officerResponses.forEach((response) => pushGrouped(responsesByExactPlan, responsePlanKey(response), response));
+    const attendanceForAssignment = (assignment) => {
+      const candidates = responsesByExactPlan.get(planKey(assignment)) || [];
+      const selected = candidates.find((response) => response.attendanceInTime || response.attendanceOutTime) || candidates[0] || null;
+      return {
+        inTime: selected?.attendanceInTime || "",
+        outTime: selected?.attendanceOutTime || "",
+      };
+    };
+    const planItem = (assignment) => ({
+      plannedDate: assignment.plannedDate,
+      siteCode: assignment.siteCode,
+      outletName: assignment.outletName,
+      ...attendanceForAssignment(assignment),
+    });
+    const planned = full.map(planItem);
+    const remaining = dueOfficer.filter((assignment) => !completedKeys.has(planKey(assignment))).map(planItem);
+    const completed = dueOfficer.filter((assignment) => completedKeys.has(planKey(assignment))).map(planItem);
     const neverMap = new Map();
     dueOfficer.forEach((assignment) => {
-      if (!visitedPairs.has(officerKey + "|" + assignment.siteCode)) neverMap.set(assignment.siteCode, { siteCode: assignment.siteCode, outletName: assignment.outletName });
+      if (!visitedPairs.has(officerKey + "|" + assignment.siteCode)) neverMap.set(assignment.siteCode, {
+        siteCode: assignment.siteCode,
+        outletName: assignment.outletName,
+        inTime: "",
+        outTime: "",
+      });
     });
     const plannedDateResponseList = [];
     const otherUnplannedResponseList = [];
     officerResponses.forEach((response) => {
-      const item = { responseDate: response.responseDate, siteCode: response.siteCode, outletName: outletNameBySite.get(response.siteCode) || "", responseId: response.responseId };
+      const item = {
+        responseDate: response.responseDate,
+        siteCode: response.siteCode,
+        outletName: outletNameBySite.get(response.siteCode) || "",
+        responseId: response.responseId,
+        inTime: response.attendanceInTime || "",
+        outTime: response.attendanceOutTime || "",
+      };
       if (fullPlanKeys.has(responsePlanKey(response))) plannedDateResponseList.push(item);
       else otherUnplannedResponseList.push(item);
     });
@@ -1173,28 +1223,51 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
   Object.values(outlets).forEach((outlet) => {
     outlet.lastVisit = null;
     outlet.lastVisitBy = "";
+    outlet.lastVisitTime = "";
+    outlet.lastVisitInTime = "";
+    outlet.lastVisitOutTime = "";
     outlet.lastVisitZonal = null;
     outlet.lastVisitZonalBy = "";
+    outlet.lastVisitZonalTime = "";
+    outlet.lastVisitZonalInTime = "";
+    outlet.lastVisitZonalOutTime = "";
     outlet.lastVisitRho = null;
     outlet.lastVisitRhoBy = "";
+    outlet.lastVisitRhoTime = "";
+    outlet.lastVisitRhoInTime = "";
+    outlet.lastVisitRhoOutTime = "";
   });
   responses.forEach((response) => {
     const outlet = outlets[response.siteCode] || {
       siteCode: response.siteCode, outletName: "", rhoName: "", zonalName: "", unscheduled: true,
-      lastVisit: null, lastVisitBy: "", lastVisitZonal: null, lastVisitZonalBy: "", lastVisitRho: null, lastVisitRhoBy: "",
+      lastVisit: null, lastVisitBy: "", lastVisitTime: "", lastVisitInTime: "", lastVisitOutTime: "",
+      lastVisitZonal: null, lastVisitZonalBy: "", lastVisitZonalTime: "", lastVisitZonalInTime: "", lastVisitZonalOutTime: "",
+      lastVisitRho: null, lastVisitRhoBy: "", lastVisitRhoTime: "", lastVisitRhoInTime: "", lastVisitRhoOutTime: "",
     };
     const status = resolved.officers.get(response.officerKey)?.status || "";
-    if (!outlet.lastVisit || response.responseDate > outlet.lastVisit) {
+    if (!outlet.lastVisit || response.responseDate > outlet.lastVisit
+      || (response.responseDate === outlet.lastVisit && !outlet.lastVisitTime && response.outletTimeRange)) {
       outlet.lastVisit = response.responseDate;
       outlet.lastVisitBy = response.officer;
+      outlet.lastVisitTime = response.outletTimeRange || "";
+      outlet.lastVisitInTime = response.attendanceInTime || "";
+      outlet.lastVisitOutTime = response.attendanceOutTime || "";
     }
-    if (status === "Zonal" && (!outlet.lastVisitZonal || response.responseDate > outlet.lastVisitZonal)) {
+    if (status === "Zonal" && (!outlet.lastVisitZonal || response.responseDate > outlet.lastVisitZonal
+      || (response.responseDate === outlet.lastVisitZonal && !outlet.lastVisitZonalTime && response.outletTimeRange))) {
       outlet.lastVisitZonal = response.responseDate;
       outlet.lastVisitZonalBy = response.officer;
+      outlet.lastVisitZonalTime = response.outletTimeRange || "";
+      outlet.lastVisitZonalInTime = response.attendanceInTime || "";
+      outlet.lastVisitZonalOutTime = response.attendanceOutTime || "";
     }
-    if (status === "RHO" && (!outlet.lastVisitRho || response.responseDate > outlet.lastVisitRho)) {
+    if (status === "RHO" && (!outlet.lastVisitRho || response.responseDate > outlet.lastVisitRho
+      || (response.responseDate === outlet.lastVisitRho && !outlet.lastVisitRhoTime && response.outletTimeRange))) {
       outlet.lastVisitRho = response.responseDate;
       outlet.lastVisitRhoBy = response.officer;
+      outlet.lastVisitRhoTime = response.outletTimeRange || "";
+      outlet.lastVisitRhoInTime = response.attendanceInTime || "";
+      outlet.lastVisitRhoOutTime = response.attendanceOutTime || "";
     }
     outlets[response.siteCode] = outlet;
   });
@@ -1213,9 +1286,10 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
       snapshotDate,
       reportMonth,
       scheduleFile: schedule.fileName,
-      scheduleSource: sourceMode === "pc-folder" && schedule.isRaw ? "PC raw-data folder" : "retained local schedule snapshot",
+      scheduleSource: schedule.isRaw ? "selected PC raw-data folder" : "dashboard visit-plan snapshot",
       responseFile: responseFile.name,
       responseSheet: RESPONSE_SHEET,
+      attendanceFiles: attendanceData?.fileNames || [],
       supersededFiles: [],
       generatedAt: now,
       snapshotTakenAt: now,
@@ -1230,6 +1304,14 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
         rejectedResponseRows: parsedResponse.diagnostics.rejectedResponseRows,
         resolutionCounts: resolved.resolutionCounts,
         unmappedResponseNames: uniqueUnmapped,
+        attendanceSourceRows: Number(attendanceData?.sourceRows || 0),
+        attendanceSourceColumns: Number(attendanceData?.sourceColumns || 0),
+        attendanceRowsWithOutletRanges: Number(attendanceData?.rowsWithOutletRanges || 0),
+        attendanceOutletRanges: Number(attendanceData?.entries?.length || 0),
+        attendanceMatches: Number(attendanceMatch.matchedCount || 0),
+        attendanceMissing: Number(attendanceMatch.missingCount || 0),
+        attendanceAmbiguous: Number(attendanceMatch.ambiguousCount || 0),
+        attendanceOfficerCodesInferred: Number(attendanceMatch.inferredOfficerCodes || 0),
       },
     },
     officers,
@@ -1244,9 +1326,9 @@ function fileSignature(file) {
 }
 
 function folderSignature(files) {
-  return files
+  return [PC_READER_VERSION, ...files
     .map((file) => fileSignature(file))
-    .sort()
+    .sort()]
     .join("||");
 }
 
@@ -1280,6 +1362,17 @@ function scheduleFilePriority(file) {
   return 99;
 }
 
+function isAttendanceFilename(file) {
+  const name = String(file?.name || "");
+  if (!/\.(csv|xlsx|xlsm|xls)$/i.test(name) || name.startsWith("~$")) return false;
+  // Attendance CSV names can change with the reporting period. Treat every
+  // non-stock CSV as a candidate and let attendance-source.js validate the
+  // Date / Employee Code / Outlet Time Range headers. Excel candidates use
+  // common attendance/time-log words to avoid downloading unrelated workbooks.
+  if (/\.csv$/i.test(name)) return !/stock.*extraction.*report/i.test(name);
+  return /attend|punch|outlet[\s_-]*time|employee[\s_-]*(?:time|movement)|time[\s_-]*(?:log|range)/i.test(name);
+}
+
 function orderFilesByPriority(files, priority) {
   return [...files].sort((a, b) =>
     priority(a) - priority(b)
@@ -1309,14 +1402,22 @@ async function findResponseFile(files) {
 }
 
 async function findScheduleFile(files, responseFile) {
-  const candidates = files.filter((file) => file !== responseFile && scheduleFilePriority(file) < 99);
-  const ordered = orderFilesByPriority(candidates, scheduleFilePriority);
-  for (const file of ordered) {
+  // Prefer filenames that clearly look like a visit plan, but also probe the
+  // remaining Excel workbooks for the required Zonal/RHO sheets.  This avoids
+  // rejecting a perfectly valid plan just because the user renamed the file.
+  const all = files.filter((file) => file !== responseFile);
+  const preferred = orderFilesByPriority(
+    all.filter((file) => scheduleFilePriority(file) < 99),
+    scheduleFilePriority,
+  );
+  const remaining = all
+    .filter((file) => scheduleFilePriority(file) >= 99)
+    .sort((a, b) => b.lastModified - a.lastModified || a.name.localeCompare(b.name));
+  for (const file of [...preferred, ...remaining]) {
     try {
       return { file, schedule: await readScheduleWorkbook(file) };
     } catch {
-      // Try the next local visit-plan candidate only. Unrelated workbooks are
-      // intentionally never scanned.
+      // Not a usable Zonal/RHO visit-plan workbook. Try the next workbook.
     }
   }
   return null;
@@ -1330,6 +1431,7 @@ class PcRawDataSource {
     this.currentFolderSignature = "";
     this.savedAt = null;
     this.baseData = null;
+    this.scheduleBaseData = null;
     this.onData = null;
     this.onStatus = null;
     this.watchTimer = null;
@@ -1351,9 +1453,25 @@ class PcRawDataSource {
   }
 
   async initialize() {
-    // Remember only the folder handle. Never restore old calculated data.
+    // Remember the selected folder AND the last successfully calculated local
+    // dashboard snapshot.  The snapshot is only a retained copy of data that
+    // was previously read from the user's PC Response Summary workbook; it is
+    // never replaced by repository response data.  This allows the dashboard
+    // to keep showing the last good numbers when the raw-data folder is later
+    // emptied or the page is refreshed.
     this.dirHandle = await pcDbGet("handles", "folder");
-    try { await pcDbPut("snapshots", "latest", null); } catch { /* no-op */ }
+    const saved = await pcDbGet("snapshots", "latest");
+    const data = saved?.data;
+    if (validDashboardData(data) && data?.metadata?.localSource) {
+      this.currentData = data;
+      this.currentSignature = String(saved?.signature || "");
+      this.currentFolderSignature = String(saved?.folderStateSignature || "");
+      this.savedAt = saved?.savedAt || data.metadata?.snapshotTakenAt || null;
+      return this.result(data, "local-cache", true, {
+        kind: "retained",
+        message: "Showing the retained data. Rechecking the selected PC raw-data folder…",
+      });
+    }
     this.currentData = null;
     this.currentSignature = "";
     this.currentFolderSignature = "";
@@ -1362,7 +1480,9 @@ class PcRawDataSource {
   }
 
   attach({ baseData, onData, onStatus }) {
-    this.baseData = baseData;
+    // The visible page starts empty until the PC response workbook is read.
+    // Keep a separate published baseline only for reconstructing the visit plan.
+    this.baseData = this.scheduleBaseData || baseData;
     this.onData = onData;
     this.onStatus = onStatus;
     this.bindControls();
@@ -1389,12 +1509,28 @@ class PcRawDataSource {
   }
 
   async saveLatest(data, signature, folderStateSignature = "") {
-    // Keep only the current-session result.  Strict PC-folder mode never
-    // persists calculated dashboard data for use on a later page load.
+    // Persist the last successful PC-derived result in this browser.  If the
+    // user removes the raw workbook afterwards, this retained snapshot remains
+    // visible until a newer valid PC workbook is read.
     this.currentData = data;
     this.currentSignature = signature;
     this.currentFolderSignature = folderStateSignature;
     this.savedAt = data.metadata?.snapshotTakenAt || new Date().toISOString();
+    await pcDbPut("snapshots", "latest", {
+      data,
+      signature: this.currentSignature,
+      folderStateSignature: this.currentFolderSignature,
+      savedAt: this.savedAt,
+    });
+
+    // v12: if this source PC has been signed in once on Cloud Sync, every new
+    // successful local snapshot is published automatically to Supabase.  This
+    // never blocks the local dashboard if the network/cloud is unavailable.
+    void publishIfSignedIn("visit", {
+      version: 2,
+      generatedAt: this.savedAt,
+      data,
+    });
   }
 
   bindControls() {
@@ -1460,12 +1596,13 @@ class PcRawDataSource {
     }
   }
 
-  fallback(reason, kind = "error") {
+  fallback(reason, kind = "retained") {
     if (!this.currentData) return false;
-    // The currently displayed data came from the selected local folder in
-    // this same browser session. Keep it visible, but never re-label it as a
-    // saved/repository copy.
-    this.setStatus({ kind, message: reason });
+    // Keep the last successful PC-derived calculation visible and explicitly
+    // mark it as retained rather than live.
+    const status = { kind, message: reason };
+    this.setStatus(status);
+    if (this.onData) this.onData(this.result(this.currentData, "local-cache", true, status));
     return true;
   }
 
@@ -1507,26 +1644,35 @@ class PcRawDataSource {
       const files = await folderWorkbookFiles(this.dirHandle);
       const currentFolderSignature = folderSignature(files);
 
+      // Check emptiness BEFORE the unchanged-folder shortcut.  An empty folder
+      // has an empty signature, so doing the signature check first could
+      // incorrectly label an empty folder as LIVE after Change folder.
+      if (!files.length) {
+        this.currentFolderSignature = currentFolderSignature;
+        const retainedMessage = "Showing the retained data. The raw data folder is empty.";
+        if (this.fallback(retainedMessage, "retained")) return;
+        throw new Error("The raw data folder is empty.");
+      }
+
       // A silent background check must stay visually silent when the folder
       // has not changed.  The previous v5 code changed the badge to “Reading”
       // and back every five seconds, which looked like the dashboard was
       // blinking even though nothing had changed.
       if (this.currentData && currentFolderSignature === this.currentFolderSignature) {
-        if (!silent) this.setStatus({ kind: "live", message: "Live from the selected PC raw-data folder. Response Summary only; repository data is ignored." });
+        if (!silent) this.setStatus({ kind: "live", message: "Response live from the selected PC raw-data folder. Only Response Summary is read." });
         return;
       }
 
       this.setStatus({ kind: "reading", message: "Finding Store_Operations_Compliance_Audit_responses… and reading Response Summary only…" });
       await browserYield();
-      if (!files.length) throw new Error("The selected PC raw-data folder is empty.");
       const responseSource = await findResponseFile(files);
-      this.setStatus({ kind: "reading", message: "Response Summary loaded (" + responseSource.parsed.responses.length.toLocaleString() + " responses). Reading the Zonal/RHO visit plan…" });
+      this.setStatus({ kind: "reading", message: "Response Summary loaded (" + responseSource.parsed.responses.length.toLocaleString() + " responses). Checking for a local Zonal/RHO visit plan…" });
       await browserYield();
       const scheduleSource = await findScheduleFile(files, responseSource.file);
-      const signature = fileSignature(responseSource.file) + "|" + (scheduleSource ? fileSignature(scheduleSource.file) : "retained-plan");
+      const signature = PC_READER_VERSION + "|" + fileSignature(responseSource.file) + "|" + (scheduleSource ? fileSignature(scheduleSource.file) : "retained-plan");
       if (signature === this.currentSignature && this.currentData) {
         this.currentFolderSignature = currentFolderSignature;
-        this.setStatus({ kind: "live", message: "Live from the selected PC raw-data folder. Response Summary only; repository data is ignored." });
+        this.setStatus({ kind: "live", message: "Response live from the selected PC raw-data folder. Only Response Summary is read." });
         return;
       }
       this.setStatus({ kind: "reading", message: "Reading Response Summary directly from " + responseSource.file.name + " (answer tabs are skipped)…" });
@@ -1586,11 +1732,17 @@ class PcRawDataSource {
     const responseData = parsedResponse || await readResponseWorkbook(responseFile);
     let schedule;
     if (scheduleFile) {
-      this.setStatus({ kind: "reading", message: "Reading the visit plan after Response Summary was loaded…" });
+      this.setStatus({ kind: "reading", message: "Reading the local Zonal/RHO visit plan after Response Summary was loaded…" });
       schedule = parsedSchedule || await readScheduleWorkbook(scheduleFile);
       schedule.isRaw = true;
     } else {
-      throw new Error("No Visit Schedule workbook was found in the selected PC raw-data folder. Keep the current Visit Schedule workbook in the same folder as the Store_Operations_Compliance_Audit_responses workbook.");
+      // The selected PC folder is required for the response workbook only.
+      // When no plan workbook is present there, reconstruct the current plan
+      // from the dashboard's published schedule snapshot.  No published
+      // response rows are reused; all response KPIs still come from the PC file.
+      this.setStatus({ kind: "reading", message: "No local Visit Schedule workbook found. Using the dashboard visit plan; response data remains live from your selected PC folder…" });
+      schedule = retainedSchedule(this.scheduleBaseData || this.baseData);
+      schedule.isRaw = false;
     }
     const baseline = this.currentData || this.baseData;
     this.setStatus({ kind: "reading", message: "Calculating dashboard from the loaded Response Summary and visit plan…" });
@@ -1602,7 +1754,7 @@ class PcRawDataSource {
     this.sendData(data, source, false, {
       kind: "live",
       message: source === "pc-folder"
-        ? "Live from your selected PC raw-data folder. Only the Response Summary sheet is read."
+        ? "Response live from your selected PC raw-data folder. Only the Response Summary sheet is read."
         : source === "pc-folder-selection"
           ? "Loaded from the selected PC raw-data folder. Use Change folder again whenever the raw files are replaced."
           : "Live from the response workbook selected on your PC. The snapshot is saved in this browser.",
@@ -1630,10 +1782,412 @@ class PcRawDataSource {
   }
 }
 
+/*
+ * Google Drive source (v14)
+ *
+ * This replaces the visible PC-folder workflow while retaining the proven
+ * workbook parsers and calculation rules above. The selected folder and Google
+ * Cloud values use the same localStorage keys as Zone Distribution.
+ */
+class GoogleDriveRawDataSource {
+  constructor() {
+    this.currentData = null;
+    this.currentSignature = "";
+    this.savedAt = null;
+    this.baseData = null;
+    this.scheduleBaseData = null;
+    this.onData = null;
+    this.onStatus = null;
+    this.watchTimer = null;
+    this.refreshPromise = null;
+    this.lastStatusKey = "";
+  }
+
+  get drive() { return window.ShwapnoDrive; }
+
+  result(data, source, usingLastData, status) {
+    return {
+      data,
+      source,
+      usingLastData,
+      lastFetched: this.savedAt || data?.metadata?.snapshotTakenAt || null,
+      localStatus: status || null,
+      localSource: this,
+    };
+  }
+
+  async initialize() {
+    const saved = await pcDbGet("snapshots", "google-drive-latest-v1");
+    const data = saved?.data;
+    if (validDashboardData(data) && data?.metadata?.localSource) {
+      this.currentData = data;
+      this.currentSignature = String(saved?.signature || "");
+      this.savedAt = saved?.savedAt || data.metadata?.snapshotTakenAt || null;
+      const folder = this.drive?.getFolder?.();
+      return this.result(data, "local-cache", true, {
+        kind: this.drive?.cachedToken?.() ? "retained" : "needs-drive-auth",
+        message: folder
+          ? `Showing the retained data. Google Drive folder “${folder.name}” is remembered; reconnect to check for updates.`
+          : "Showing the retained data. Use Drive setup to select the shared Google Drive folder.",
+      });
+    }
+    return null;
+  }
+
+  attach({ baseData, onData, onStatus }) {
+    this.baseData = this.scheduleBaseData || baseData;
+    this.onData = onData;
+    this.onStatus = onStatus;
+    this.bindControls();
+    if (this.drive?.cachedToken?.() && this.drive?.getFolder?.()) {
+      this.refreshDrive({ silent: true }).catch(() => {});
+    } else {
+      const folder = this.drive?.getFolder?.();
+      this.setStatus({
+        kind: folder ? "needs-drive-auth" : "needs-drive-setup",
+        message: folder
+          ? `Google Drive folder “${folder.name}” is already shared from Zone Distribution. Click Reconnect Google Drive to authorize this page.`
+          : "Use Drive setup to select the shared Google Drive folder.",
+      });
+    }
+  }
+
+  setStatus(status) {
+    const key = `${status?.kind || ""}|${status?.message || ""}`;
+    if (key === this.lastStatusKey) return;
+    this.lastStatusKey = key;
+    if (this.onStatus) this.onStatus(status);
+  }
+
+  sendData(data, source, usingLastData, status) {
+    this.currentData = data;
+    this.savedAt = data.metadata?.snapshotTakenAt || new Date().toISOString();
+    if (this.onData) this.onData(this.result(data, source, usingLastData, status));
+  }
+
+  async saveLatest(data, signature) {
+    this.currentData = data;
+    this.currentSignature = signature;
+    this.savedAt = data.metadata?.snapshotTakenAt || new Date().toISOString();
+    await pcDbPut("snapshots", "google-drive-latest-v1", {
+      data,
+      signature,
+      savedAt: this.savedAt,
+      folder: this.drive.getFolder(),
+    });
+    void publishIfSignedIn("visit", { version: 2, generatedAt: this.savedAt, data });
+  }
+
+  bindControls() {
+    document.getElementById("grant-folder")?.addEventListener("click", () => {
+      if (this.drive.configReady()) this.connectDrive({ pickFolder: false });
+      else this.openSetup();
+    });
+    document.getElementById("drive-setup")?.addEventListener("click", () => this.openSetup());
+    document.getElementById("drive-modal-close")?.addEventListener("click", () => this.closeSetup());
+    document.getElementById("drive-modal")?.addEventListener("click", event => {
+      if (event.target === document.getElementById("drive-modal")) this.closeSetup();
+    });
+    document.getElementById("drive-save")?.addEventListener("click", () => {
+      try {
+        this.drive.saveConfig({
+          clientId: document.getElementById("google-client-id").value,
+          apiKey: document.getElementById("google-api-key").value,
+          appId: document.getElementById("google-app-id").value,
+        });
+        this.closeSetup();
+        const modal = document.getElementById("drive-modal");
+        if (modal) modal.hidden = true;
+        setTimeout(() => this.connectDrive({ pickFolder: true }), 0);
+      } catch (error) { alert(error.message); }
+    });
+    document.getElementById("drive-clear")?.addEventListener("click", () => {
+      if (!confirm("Clear the shared Google Drive setup for all supported dashboards on this browser?")) return;
+      this.drive.clearSetup();
+      this.closeSetup();
+      this.setStatus({ kind: "needs-drive-setup", message: this.currentData ? "Shared Drive setup was cleared. Showing the retained snapshot." : "Shared Drive setup was cleared." });
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && this.drive.cachedToken() && this.drive.getFolder()) this.refreshDrive({ silent: true });
+    });
+  }
+
+  openSetup() {
+    const config = this.drive.getConfig();
+    document.getElementById("google-client-id").value = config.clientId;
+    document.getElementById("google-api-key").value = config.apiKey;
+    document.getElementById("google-app-id").value = config.appId;
+    document.getElementById("drive-modal").hidden = false;
+  }
+
+  closeSetup() { document.getElementById("drive-modal").hidden = true; }
+
+  async connectDrive({ pickFolder = false } = {}) {
+    try {
+      this.setStatus({ kind: "reading", message: "Connecting to Google Drive…" });
+      const result = await this.drive.connect({
+        pickFolder: pickFolder || !this.drive.getFolder(),
+        title: "Select shared Shwapno dashboard data folder",
+      });
+      if (!result) {
+        this.setStatus({ kind: this.currentData ? "retained" : "needs-drive-setup", message: this.currentData ? "Folder selection was cancelled. Showing the retained snapshot." : "Google Drive folder selection was cancelled." });
+        return;
+      }
+      this.currentSignature = "";
+      await this.refreshDrive({ silent: false });
+      this.closeSetup();
+      const modal = document.getElementById("drive-modal");
+      if (modal) modal.hidden = true;
+      this.startWatching();
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      const message = error?.message || "Google Drive connection failed.";
+      if (!this.fallback(message)) this.setStatus({ kind: "error", message });
+    }
+  }
+
+  fallback(reason) {
+    if (!this.currentData) return false;
+    const status = { kind: "retained", message: `Showing the retained data. ${reason}` };
+    this.setStatus(status);
+    if (this.onData) this.onData(this.result(this.currentData, "local-cache", true, status));
+    return true;
+  }
+
+  async refreshDrive(options = {}) {
+    if (this.refreshPromise) return this.refreshPromise;
+    const run = this.refreshDriveNow(options);
+    this.refreshPromise = run;
+    try { return await run; }
+    finally { if (this.refreshPromise === run) this.refreshPromise = null; }
+  }
+
+  async refreshDriveNow({ silent = true } = {}) {
+    const folder = this.drive.getFolder();
+    if (!folder) {
+      if (!this.fallback("No shared Google Drive folder is selected.")) this.setStatus({ kind: "needs-drive-setup", message: "Use Drive setup to select the shared Google Drive folder." });
+      return;
+    }
+    if (!this.drive.cachedToken()) {
+      if (!this.fallback(`Google Drive folder “${folder.name}” is remembered; click Reconnect Google Drive to check for updates.`)) this.setStatus({ kind: "needs-drive-auth", message: `Folder “${folder.name}” is remembered. Click Reconnect Google Drive.` });
+      return;
+    }
+    try {
+      if (!silent || !this.currentData) this.setStatus({ kind: "reading", message: `Checking Google Drive folder “${folder.name}”…` });
+      const folderMetas = (await this.drive.listFolderFiles(folder.id))
+        .filter(meta => /\.(csv|xlsx|xlsm|xls)$/i.test(meta.name || "") && !String(meta.name || "").startsWith("~$") && meta.capabilities?.canDownload !== false)
+        .sort((a, b) => Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || "") || String(a.name).localeCompare(String(b.name)));
+      const metas = folderMetas.filter(meta => /\.(xlsx|xlsm|xls)$/i.test(meta.name || ""));
+      const responseMeta = metas.filter(isTargetResponseFilename)[0];
+      if (!responseMeta) throw new Error('No workbook named like “Store_Operations_Compliance_Audit_responses…xlsx” was found in the shared Drive folder.');
+      const scheduleMetas = metas
+        .filter(meta => meta !== responseMeta && scheduleFilePriority(meta) < 99)
+        .sort((a, b) => scheduleFilePriority(a) - scheduleFilePriority(b) || Date.parse(b.modifiedTime || "") - Date.parse(a.modifiedTime || ""));
+      const attendanceMetas = folderMetas.filter(isAttendanceFilename).slice(0, 12);
+      const signature = [
+        PC_READER_VERSION,
+        this.drive.remoteSignature(responseMeta),
+        scheduleMetas.length ? scheduleMetas.map(meta => this.drive.remoteSignature(meta)).sort().join("||") : "dashboard-plan",
+        attendanceMetas.length ? attendanceMetas.map(meta => this.drive.remoteSignature(meta)).sort().join("||") : "no-attendance",
+      ].join("|");
+      if (this.currentData && signature === this.currentSignature) {
+        if (!silent) this.setStatus({ kind: "live", message: `Live from Google Drive folder “${folder.name}”. Response Summary and attendance Outlet Time Range are matched.` });
+        this.startWatching();
+        return;
+      }
+      this.setStatus({ kind: "reading", message: `Downloading ${responseMeta.name} from Google Drive…` });
+      const responseFile = await this.drive.downloadFile(responseMeta);
+      const parsedResponse = await readResponseWorkbook(responseFile);
+      let parsedAttendance = { entries: [], fileNames: [], sourceRows: 0, errors: [] };
+      if (attendanceMetas.length && attendanceApi()) {
+        const attendanceFiles = [];
+        for (const meta of attendanceMetas) {
+          this.setStatus({ kind: "reading", message: `Reading outlet In/Out times from ${meta.name}…` });
+          attendanceFiles.push(await this.drive.downloadFile(meta));
+        }
+        parsedAttendance = await attendanceApi().readAttendanceFiles(attendanceFiles);
+      }
+      let scheduleFile = null;
+      let parsedSchedule = null;
+      for (const meta of scheduleMetas.slice(0, 4)) {
+        try {
+          this.setStatus({ kind: "reading", message: `Checking visit plan ${meta.name}…` });
+          const file = await this.drive.downloadFile(meta);
+          const parsed = await readScheduleWorkbook(file);
+          scheduleFile = file;
+          parsedSchedule = parsed;
+          break;
+        } catch { /* Try the next clearly named visit-plan workbook. */ }
+      }
+      await this.applyResponseFile(responseFile, scheduleFile, signature, parsedResponse, parsedSchedule, parsedAttendance, folder);
+      this.startWatching();
+    } catch (error) {
+      const message = error?.message || "Could not read Google Drive.";
+      if (!this.fallback(message)) this.setStatus({ kind: "error", message });
+    }
+  }
+
+  async applyResponseFile(responseFile, scheduleFile, signature, parsedResponse, parsedSchedule, parsedAttendance, folder) {
+    let schedule;
+    if (scheduleFile && parsedSchedule) {
+      schedule = parsedSchedule;
+      schedule.isRaw = true;
+    } else {
+      this.setStatus({ kind: "reading", message: "No Drive visit-plan workbook found. Reusing the dashboard visit plan…" });
+      schedule = retainedSchedule(this.scheduleBaseData || this.baseData);
+      schedule.isRaw = false;
+    }
+    this.setStatus({ kind: "reading", message: "Calculating Visit Compliance and matching outlet In/Out times…" });
+    await browserYield();
+    const data = calculateLocalDashboard(this.currentData || this.baseData, schedule, parsedResponse, responseFile, "google-drive", parsedAttendance);
+    data.metadata.driveFolderName = folder.name;
+    data.metadata.driveFolderId = folder.id;
+    data.metadata.scheduleSource = schedule.isRaw ? "selected Google Drive folder" : "dashboard visit-plan snapshot";
+    await this.saveLatest(data, signature);
+    this.sendData(data, "google-drive", false, { kind: "live", message: `Live from Google Drive folder “${folder.name}”. Response Summary and attendance Outlet Time Range are matched.` });
+  }
+
+  startWatching() {
+    if (this.watchTimer) return;
+    this.watchTimer = window.setInterval(() => {
+      if (this.drive.cachedToken()) this.refreshDrive({ silent: true });
+    }, DRIVE_WATCH_MS);
+  }
+}
+
+async function loadPublishedSharedDashboard() {
+  // v12 primary cross-PC source: Supabase. The old GitHub JSON is retained
+  // only as a migration fallback for deployments that have not published a
+  // cloud snapshot yet.
+  try {
+    const row = await readCloudSnapshot("visit");
+    const payload = row?.payload || null;
+    const data = payload?.data || payload?.visitDashboard || null;
+    if (validDashboardData(data) && data?.officers?.length && data?.metadata?.snapshotDate) {
+      return {
+        data,
+        generatedAt: row?.updated_at || payload?.generatedAt || data?.metadata?.snapshotTakenAt || data?.metadata?.generatedAt || null,
+        sourceFile: data?.metadata?.responseFile || "Supabase shared snapshot",
+      };
+    }
+  } catch (error) {
+    console.warn("Supabase Visit snapshot unavailable:", error);
+  }
+
+  try {
+    const response = await fetch(`${LEGACY_SHARED_SNAPSHOT_URL}?_=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const data = payload?.visitDashboard;
+    if (!validDashboardData(data) || !data?.officers?.length || !data?.metadata?.snapshotDate) return null;
+    return {
+      data,
+      generatedAt: payload?.generatedAt || data?.metadata?.snapshotTakenAt || data?.metadata?.generatedAt || null,
+      sourceFile: data?.metadata?.responseFile || "Legacy published shared snapshot",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function loadPublishedScheduleBaseline() {
+  // Read the deployed dashboard snapshot only to recover planned assignments.
+  // It is never displayed as response data and never substitutes for the PC
+  // Response Summary workbook.
+  const urls = [
+    "./data/dashboard_data.json?plan=" + encodeURIComponent(PC_READER_VERSION),
+    "./data/dashboard_data_last_good.json?plan=" + encodeURIComponent(PC_READER_VERSION),
+  ];
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) continue;
+      const data = await response.json();
+      // Validate that the snapshot really contains reusable planned visits.
+      retainedSchedule(data);
+      return data;
+    } catch {
+      // Try the last-good published plan next.
+    }
+  }
+  return null;
+}
+
+function parsedSnapshotTime(value) {
+  const time = Date.parse(value || "");
+  return Number.isFinite(time) ? time : 0;
+}
+
+function newestVisitSnapshotTime(data, fallback) {
+  return Math.max(
+    parsedSnapshotTime(data?.metadata?.snapshotTakenAt),
+    parsedSnapshotTime(data?.metadata?.generatedAt),
+    parsedSnapshotTime(fallback),
+  );
+}
+
+// Exported only to keep the freshness rule independently testable. The shared
+// cloud copy wins ties because it is the version available to every device.
+export function shouldUseSharedVisitSnapshot(local, shared) {
+  if (!shared) return false;
+  if (!local) return true;
+  return newestVisitSnapshotTime(shared.data, shared.generatedAt)
+    >= newestVisitSnapshotTime(local.data, local.lastFetched);
+}
+
 export async function loadDashboardData() {
-  const localSource = new PcRawDataSource();
-  const local = await localSource.initialize();
+  const localSource = new GoogleDriveRawDataSource();
+  // The published visit-plan skeleton is used only as a plan fallback when the
+  // shared Drive folder does not contain a Zonal/RHO visit-plan workbook.
+  localSource.scheduleBaseData = await loadPublishedScheduleBaseline();
+
+  // Compare the retained browser copy with the shared cloud copy on every
+  // startup. The older implementation returned IndexedDB first and never
+  // checked Supabase, which could leave this browser showing an older response
+  // total and timestamp after the unattended worker had already published a
+  // newer snapshot for everyone else.
+  const [local, shared] = await Promise.all([
+    localSource.initialize(),
+    loadPublishedSharedDashboard(),
+  ]);
+
+  if (shouldUseSharedVisitSnapshot(local, shared)) {
+    // Keep the shared copy as the in-memory baseline while Drive reconnects.
+    localSource.currentData = shared.data;
+    localSource.currentSignature = "published-shared";
+    localSource.savedAt = shared.generatedAt || null;
+
+    // Replace an older retained browser copy as well. If the cloud is briefly
+    // unavailable on a later visit, this browser will still retain the newest
+    // successfully published figures rather than reverting to stale data.
+    try {
+      await pcDbPut("snapshots", "google-drive-latest-v1", {
+        data: shared.data,
+        signature: "published-shared",
+        savedAt: shared.generatedAt || shared.data?.metadata?.snapshotTakenAt || null,
+        folder: localSource.drive?.getFolder?.() || null,
+      });
+    } catch {
+      // IndexedDB persistence is optional; the shared snapshot is still usable.
+    }
+
+    return {
+      data: shared.data,
+      source: "published-shared",
+      usingLastData: true,
+      lastFetched: shared.generatedAt,
+      localStatus: {
+        kind: "published",
+        message: "Showing the latest shared cloud snapshot. Connect the shared Google Drive folder to check for a newer Response Summary.",
+      },
+      localSource,
+    };
+  }
+
+  // Keep a genuinely newer local Drive read while its cloud publication is
+  // still completing. It will be published automatically by the source logic.
   if (local) return local;
+
   return {
     data: emptyDashboardData(),
     source: "awaiting-local",
@@ -1641,19 +2195,21 @@ export async function loadDashboardData() {
     lastFetched: null,
     localStatus: {
       kind: "idle",
-      message: "Choose your PC raw-data folder. The dashboard will read the local Store_Operations_Compliance_Audit_responses workbook (Response Summary only) and the local Visit Schedule workbook. Repository data is ignored.",
+      message: localSource.scheduleBaseData
+        ? "Connect the shared Google Drive folder. The dashboard will read Store_Operations_Compliance_Audit_responses…xlsx and only its Response Summary sheet."
+        : "Connect the shared Google Drive folder containing the response export and a Zonal/RHO visit-plan workbook.",
     },
     localSource,
   };
 }
 
-export function attachPcRawDataSource(localSource, options) {
+export function attachGoogleDriveDataSource(localSource, options) {
   if (localSource) localSource.attach(options);
 }
 
 export function getDataStatus(result) {
-  if (result?.source === "pc-folder") return { type: "pc-folder", text: "Showing a live snapshot from the selected PC raw-data folder." };
-  if (result?.source === "pc-folder-selection") return { type: "pc-folder-selection", text: "Showing data loaded from the selected PC raw-data folder." };
-  if (result?.source === "pc-file") return { type: "pc-file", text: "Showing a live snapshot from the response workbook selected on this PC." };
-  return { type: "awaiting-local", text: "Choose your PC raw-data folder to load the current local workbooks." };
+  if (result?.source === "google-drive") return { type: "google-drive", text: "Showing a live snapshot from the shared Google Drive folder." };
+  if (result?.source === "local-cache") return { type: "local-cache", text: "Showing the retained data from the last successful Google Drive read." };
+  if (result?.source === "published-shared") return { type: "published-shared", text: "Showing the latest shared cloud snapshot from Supabase. It is available to other PCs and networks without folder access." };
+  return { type: "awaiting-drive", text: "Connect the shared Google Drive folder to load the current Response Summary." };
 }
