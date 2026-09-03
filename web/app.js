@@ -519,6 +519,7 @@ function updateOfficerOptions() {
 }
 
 function renderKpis(rows, officerKey = null) {
+  const month = total(rows, "totalPlannedFullMonth");
   const planned = total(rows, "totalPlannedTillDate");
   const completed = totalCompleted(rows);
   const pending = total(rows, "remainingVisits");
@@ -532,7 +533,8 @@ function renderKpis(rows, officerKey = null) {
     { id: "never", tone: "warning", label: "Never Visited Outlets", value: numberFmt.format(never), meta: "Till date" },
     { id: "completed", tone: "success", label: "Completed Visits (Till Date)", value: numberFmt.format(completed), meta: "Completed planned visits + extra / unplanned responses" },
     { id: "planned", tone: "info", label: "Planned Visits (Till Date)", value: numberFmt.format(planned), meta: "Visits scheduled up to the snapshot date" },
-    { id: "accepted", tone: "info", label: "Accepted Responses", value: numberFmt.format(total(rows, "acceptedResponses")), meta: "Survey responses accepted from the workbook" }
+    { id: "accepted", tone: "info", label: "Accepted Responses", value: numberFmt.format(total(rows, "acceptedResponses")), meta: "Survey responses accepted from the workbook" },
+    { id: "month", tone: "info", label: "Total Visit (Month)", value: numberFmt.format(month), meta: "All visits scheduled for the report month" }
   ];
 
   $("kpis").innerHTML = cards.map(card => `
@@ -1200,6 +1202,7 @@ function statusClass(status) {
   if (s.includes("extra")) return "status-extra";
   if (s.includes("never")) return "status-never";
   if (s.includes("pending")) return "status-pending";
+  if (s.includes("upcoming")) return "status-upcoming";
   return "status-completed";
 }
 
@@ -1217,7 +1220,8 @@ function findPlanDateForSite(detail, siteCode) {
 
 function buildOfficerRows(officerRow, metric = "all") {
   const detail = state.data.details[officerRow.officerKey] || { planned: [], plannedDateResponseList: [], otherUnplannedResponseList: [], neverVisited: [] };
-  const duePlans = (detail.planned || []).filter(p => !state.data.metadata.snapshotDate || p.plannedDate <= state.data.metadata.snapshotDate);
+  const fullMonthPlans = detail.planned || [];
+  const duePlans = fullMonthPlans.filter(p => !state.data.metadata.snapshotDate || p.plannedDate <= state.data.metadata.snapshotDate);
   const respMap = plannedMap(detail);
 
   const plannedRows = duePlans.map(p => {
@@ -1237,6 +1241,27 @@ function buildOfficerRows(officerRow, metric = "all") {
       actualVisitDate: match?.responseDate || "",
       responseId: match?.responseId || "",
       remarks: match ? "Planned-date response" : "Pending visit"
+    };
+  });
+
+  const monthRows = fullMonthPlans.map(p => {
+    const match = respMap.get(`${p.siteCode}|${p.plannedDate}`);
+    const inTime = match?.inTime || "—";
+    const outTime = match?.outTime || "—";
+    const isDue = !state.data.metadata.snapshotDate || p.plannedDate <= state.data.metadata.snapshotDate;
+    return {
+      officerKey: officerRow.officerKey,
+      officer: officerRow.officer,
+      outletCode: p.siteCode,
+      outletName: p.outletName || getOutletMeta(p.siteCode).outletName || "",
+      plannedVisitDate: p.plannedDate,
+      visitStatus: match ? "Completed" : isDue ? "Pending" : "Upcoming",
+      inTime,
+      outTime,
+      visitDuration: durationLabel(inTime, outTime),
+      actualVisitDate: match?.responseDate || "",
+      responseId: match?.responseId || "",
+      remarks: match ? "Planned-date response" : isDue ? "Pending visit" : "Upcoming planned visit"
     };
   });
 
@@ -1275,6 +1300,7 @@ function buildOfficerRows(officerRow, metric = "all") {
   }));
 
   switch (metric) {
+    case "month": return monthRows;
     case "planned": return plannedRows;
     case "completed": return [...plannedRows.filter(r => r.visitStatus === "Completed"), ...extraRows];
     case "pending": return plannedRows.filter(r => r.visitStatus === "Pending");
@@ -1293,6 +1319,7 @@ function aggregateRows(metric, rows) {
 
 function metricTitle(metric) {
   return ({
+    month: "Total Visit (Month)",
     planned: "Planned Visits (Till Date)",
     completed: "Completed Visits (Till Date)",
     pending: "Pending Visits",
@@ -1313,6 +1340,7 @@ function showView(view) {
 }
 
 function summaryPills(officerRows, metric) {
+  const month = total(officerRows, "totalPlannedFullMonth");
   const planned = total(officerRows, "totalPlannedTillDate");
   const completed = totalCompleted(officerRows);
   const pending = total(officerRows, "remainingVisits");
@@ -1325,6 +1353,9 @@ function summaryPills(officerRows, metric) {
   ];
   if (metric === "never") {
     pills.unshift({ metric: "never", label: "Never Visited", value: numberFmt.format(distinctNeverOutlets(officerRows)) });
+  }
+  if (metric === "month") {
+    pills.unshift({ metric: "month", label: "Total Visit (Month)", value: numberFmt.format(month) });
   }
   return pills;
 }

@@ -182,6 +182,7 @@ select option { background: var(--surface); color: var(--text); }
 .status-pending::before { background: var(--danger); }
 .status-extra::before { background: var(--info); }
 .status-never::before { background: var(--warning); }
+.status-upcoming::before { background: var(--info); }
 .definitions-text, .definitions-note, .source-footer { font-size: 14px; line-height: 1.65; color: var(--muted); }
 .admin-actions { margin-top: 16px; display: flex; gap: 10px; flex-wrap: wrap; }
 .source-footer { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
@@ -235,16 +236,19 @@ html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border
 .reconciliation .recon-why { font-size: 11px; color: var(--muted-text); }
 .reconciliation .recon-note { margin: 10px 14px 14px; font-size: 11.5px; color: var(--muted-text); line-height: 1.6; }
 
-/* Planned Visits (Till Date) only — reduced to a quarter of its previous
-   footprint. Every other KPI card is untouched. */
+/* The compact KPI cards use the same typography and footprint. */
 .kpi-card[data-kpi-card="planned"],
-.kpi-card[data-kpi-card="accepted"] { padding: 7px 9px !important; min-height: 0 !important; }
+.kpi-card[data-kpi-card="accepted"],
+.kpi-card[data-kpi-card="month"] { padding: 7px 9px !important; min-height: 0 !important; }
 .kpi-card[data-kpi-card="planned"] .kpi-label,
-.kpi-card[data-kpi-card="accepted"] .kpi-label { font-size: 8px !important; letter-spacing: .05em !important; min-height: 0 !important; margin-bottom: 2px !important; }
+.kpi-card[data-kpi-card="accepted"] .kpi-label,
+.kpi-card[data-kpi-card="month"] .kpi-label { font-size: 8px !important; letter-spacing: .05em !important; min-height: 0 !important; margin-bottom: 2px !important; }
 .kpi-card[data-kpi-card="planned"] .kpi-action,
-.kpi-card[data-kpi-card="accepted"] .kpi-action { font-size: 17px !important; line-height: 1.1 !important; }
+.kpi-card[data-kpi-card="accepted"] .kpi-action,
+.kpi-card[data-kpi-card="month"] .kpi-action { font-size: 17px !important; line-height: 1.1 !important; }
 .kpi-card[data-kpi-card="planned"] .kpi-meta,
-.kpi-card[data-kpi-card="accepted"] .kpi-meta { font-size: 8px !important; line-height: 1.3 !important; }
+.kpi-card[data-kpi-card="accepted"] .kpi-meta,
+.kpi-card[data-kpi-card="month"] .kpi-meta { font-size: 8px !important; line-height: 1.3 !important; }
 
 
 /* ── Visit-score trend (Trend workbook only) ─────────────────────────────
@@ -332,13 +336,13 @@ html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border
 .trend-pick { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 .trend-pick button + button { background: var(--surface) !important; color: var(--accent) !important; }
 
-/* Keep all six headline KPI cards in one row. On a narrow screen the row
+/* Keep all seven headline KPI cards in one row. On a narrow screen the row
    scrolls horizontally instead of wrapping; card contents and sizing rules
    (including the reduced Planned/Accepted cards) remain unchanged. */
 #summary-anchor > #kpis {
   grid-column: 1 / -1 !important;
   width: 100% !important;
-  grid-template-columns: repeat(6, minmax(150px, 1fr)) !important;
+  grid-template-columns: repeat(7, minmax(150px, 1fr)) !important;
   overflow-x: auto;
   overflow-y: hidden;
 }
