@@ -185,3 +185,7 @@ html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border
   .detail-table { min-width: 1100px; }
   .details-summary { display: grid; grid-template-columns: 1fr; }
 }
+
+
+/* Only change: internal vertical scroll for Officer performance */
+.officer-table-wrap { max-height: 520px; }
