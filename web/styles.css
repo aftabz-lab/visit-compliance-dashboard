@@ -63,9 +63,8 @@ html[data-theme="light"] .hero-card { background: linear-gradient(135deg, #0f4e6
 .hero-meta { margin-top: 18px; display: grid; gap: 6px; }
 .hero-meta-line { font-size: 15px; font-weight: 700; }
 .hero-meta-note { font-size: 14px; color: rgba(255,255,255,.82); max-width: 960px; }
-.source-meta { margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.18); display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, .8fr) minmax(0, 1fr); gap: 18px; }
-.source-meta-item { min-width: 0; display: grid; align-content: start; gap: 4px; }
-.source-meta-item > span:last-child { min-width: 0; line-height: 1.3; overflow-wrap: anywhere; word-break: break-word; }
+.source-meta { margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.18); display: grid; grid-template-columns: repeat(4, minmax(140px, 1fr)); gap: 12px; }
+.source-meta-item { display: grid; gap: 4px; }
 .meta-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: rgba(255,255,255,.72); }
 .management-panel, .definitions-panel, .details-section, .performance-panel { padding: 18px 18px 16px; }
 .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
@@ -98,13 +97,6 @@ select option { background: var(--surface); color: var(--text); }
 .outlet-cell dd { margin: 0; font-size: 15px; line-height: 1.45; font-weight: 700; }
 .outlet-cell dd.none { color: var(--muted); }
 .outlet-cell .by { display: block; margin-top: 6px; color: var(--muted); font-size: 13px; font-weight: 600; }
-.audit-score-link { display: inline-flex; align-items: center; gap: 7px; width: fit-content; border-radius: 9px; color: var(--accent-2); font-size: 22px; font-weight: 900; line-height: 1.15; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 4px; }
-.audit-score-link::after { content: '→'; font-size: 17px; text-decoration: none; transition: transform .16s ease; }
-.audit-score-link.good { color: var(--success); }
-.audit-score-link.mid { color: var(--warning); }
-.audit-score-link.bad { color: var(--danger); }
-.audit-score-link:hover::after { transform: translateX(3px); }
-.audit-score-link:focus-visible { outline: 3px solid rgba(14,149,184,.24); outline-offset: 4px; }
 .summary-layout { display: grid; grid-template-columns: 390px minmax(0, 1fr); gap: 18px; align-items: start; }
 .kpi-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: 22px; box-shadow: var(--shadow); padding: 16px 16px 14px; min-height: 168px; display: grid; align-content: start; gap: 8px; position: relative; }
@@ -117,7 +109,6 @@ select option { background: var(--surface); color: var(--text); }
 .kpi-action { margin-top: 2px; border: 0; padding: 0; background: transparent; color: var(--text); text-align: left; font-weight: 900; font-size: clamp(36px, 2.8vw, 52px); line-height: 1; cursor: pointer; }
 .kpi-action:hover { color: var(--accent-2); }
 .kpi-meta { font-size: 14px; line-height: 1.35; color: var(--muted); }
-.kpi-card > .kpi-meta:last-child { font-weight: 800; }
 .performance-panel { min-width: 0; }
 .table-wrap { overflow: auto; }
 #performance-table, .detail-table { width: 100%; border-collapse: separate; border-spacing: 0; }
@@ -139,41 +130,10 @@ select option { background: var(--surface); color: var(--text); }
 .details-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .details-title h2 { margin: 0; font-size: 28px; }
 .details-summary { display: flex; gap: 10px; flex-wrap: wrap; }
-.summary-pill { padding: 8px 12px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); font-weight: 700; color: var(--text); cursor: pointer; }
-.summary-pill:hover, .summary-pill:focus-visible, .summary-pill.is-active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.summary-pill { padding: 8px 12px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); font-weight: 700; color: var(--text); }
 .details-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .detail-table-wrap { overflow: auto; background: var(--details-bg); border-radius: 18px; }
 .detail-table { min-width: 1240px; }
-.remarks-heading { min-width: 190px; display: grid; gap: 6px; white-space: normal; }
-.remarks-heading select { min-height: 36px; border-radius: 10px; padding: 0 32px 0 10px; font-size: 12px; font-weight: 700; }
-.detail-officer-heading-cell { z-index: 5 !important; overflow: visible; }
-.detail-officer-heading { min-width: 180px; position: relative; }
-.detail-officer-filter { position: relative; font-size: 12px; font-weight: 700; }
-.detail-officer-filter summary {
-  position: relative; display: flex; align-items: center; min-height: 36px; padding: 0 30px 0 10px;
-  overflow: hidden; border: 1px solid var(--border-strong); border-radius: 10px;
-  background: var(--surface-2); color: var(--text); cursor: pointer; list-style: none;
-  text-overflow: ellipsis; white-space: nowrap;
-}
-.detail-officer-filter summary::-webkit-details-marker { display: none; }
-.detail-officer-filter summary::after { content: '▾'; position: absolute; right: 10px; color: var(--muted); }
-.detail-officer-filter[open] summary { border-color: var(--accent-2); box-shadow: 0 0 0 3px rgba(14,149,184,.14); }
-.detail-officer-filter[open] summary::after { content: '▴'; }
-.detail-officer-menu {
-  position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; width: 240px; padding: 8px;
-  border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow);
-}
-.detail-officer-menu input { min-height: 36px; padding: 0 10px; border-radius: 9px; font-size: 12px; font-weight: 700; }
-.detail-officer-options { display: grid; gap: 2px; max-height: 220px; margin-top: 7px; overflow-y: auto; }
-.detail-officer-option {
-  width: 100%; border: 0; border-radius: 8px; padding: 8px 9px; background: transparent;
-  color: var(--text); cursor: pointer; font-size: 12px; font-weight: 700; text-align: left;
-}
-.detail-officer-option:hover, .detail-officer-option:focus-visible { background: var(--surface-3); outline: none; }
-.detail-officer-option.is-selected { background: var(--accent); color: #fff; }
-.detail-officer-option[hidden] { display: none; }
-.detail-officer-no-match { padding: 10px 8px; color: var(--muted); font-size: 12px; text-align: center; }
-.detail-empty-row { text-align: center !important; color: var(--muted); font-weight: 700; }
 .detail-table td.flag-missing { color: var(--danger); font-weight: 800; }
 .detail-table td.flag-short { color: #b07300; font-weight: 800; }
 .detail-table td.flag-ok { color: var(--success); font-weight: 800; }
@@ -183,12 +143,10 @@ select option { background: var(--surface); color: var(--text); }
 .status-pending::before { background: var(--danger); }
 .status-extra::before { background: var(--info); }
 .status-never::before { background: var(--warning); }
-.status-upcoming::before { background: var(--info); }
 .definitions-text, .definitions-note, .source-footer { font-size: 14px; line-height: 1.65; color: var(--muted); }
 .admin-actions { margin-top: 16px; display: flex; gap: 10px; flex-wrap: wrap; }
 .source-footer { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
 .outlet-results { margin-top: 8px; display: grid; gap: 6px; max-height: 230px; overflow: auto; }
-.outlet-results[hidden] { display: none !important; }
 .outlet-hit, .outlet-empty { border-radius: 14px; border: 1px solid var(--border); background: var(--surface); padding: 10px 12px; text-align: left; }
 .outlet-hit { cursor: pointer; }
 .outlet-hit .hit-name { display: block; font-weight: 800; color: var(--text); }
@@ -197,7 +155,6 @@ select option { background: var(--surface); color: var(--text); }
 .error-box { white-space: pre-wrap; padding: 18px; background: #fff2f2; color: #7d2525; border: 1px solid #e1a5a5; border-radius: 14px; }
 html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border-color: #6d363e; }
 .drive-modal-backdrop { position: fixed; inset: 0; background: rgba(4,8,12,.62); display: grid; place-items: center; padding: 24px; z-index: 1200; }
-.drive-modal-backdrop[hidden] { display: none !important; }
 .drive-modal { width: min(760px, 100%); background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow); padding: 22px; }
 .drive-modal-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
 .drive-modal-head h2 { margin: 0; font-size: 28px; }
@@ -229,122 +186,16 @@ html[data-theme="dark"] .error-box { background: #241417; color: #ffd8db; border
   .details-summary { display: grid; grid-template-columns: 1fr; }
 }
 
-/* Response reconciliation panel */
-.reconciliation:empty { display: none; }
-.reconciliation tr.recon-drop td { color: var(--muted-text); font-size: 11.5px; }
-.reconciliation tr.recon-sub td, .reconciliation tr.recon-total td { border-top: 1px solid var(--line); }
-.reconciliation tr.recon-total td { font-size: 13px; }
-.reconciliation .recon-why { font-size: 11px; color: var(--muted-text); }
-.reconciliation .recon-note { margin: 10px 14px 14px; font-size: 11.5px; color: var(--muted-text); line-height: 1.6; }
-
-/* The compact KPI cards use the same typography and footprint. */
-.kpi-card[data-kpi-card="planned"],
-.kpi-card[data-kpi-card="accepted"],
-.kpi-card[data-kpi-card="month"] { padding: 7px 9px !important; min-height: 0 !important; }
-.kpi-card[data-kpi-card="planned"] .kpi-label,
-.kpi-card[data-kpi-card="accepted"] .kpi-label,
-.kpi-card[data-kpi-card="month"] .kpi-label { font-size: 8px !important; letter-spacing: .05em !important; min-height: 0 !important; margin-bottom: 2px !important; }
-.kpi-card[data-kpi-card="planned"] .kpi-action,
-.kpi-card[data-kpi-card="accepted"] .kpi-action,
-.kpi-card[data-kpi-card="month"] .kpi-action { font-size: 17px !important; line-height: 1.1 !important; }
-.kpi-card[data-kpi-card="planned"] .kpi-meta,
-.kpi-card[data-kpi-card="accepted"] .kpi-meta,
-.kpi-card[data-kpi-card="month"] .kpi-meta { font-size: 8px !important; line-height: 1.3 !important; }
-
-
-/* ── Visit-score trend (Trend workbook only) ─────────────────────────────
-   Uses this dashboard's own light-theme tokens; an earlier version borrowed
-   dark-theme variables that do not exist here, so the box rendered as bare
-   text. It also spans the full grid width so it sits BELOW the KPI cards
-   rather than becoming another cell beside them. */
-.trend-toggle {
-  grid-column: 1 / -1;
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%;
-  margin: 0; padding: 14px 16px; cursor: pointer; font: inherit; text-align: left;
-  background: var(--surface); color: var(--text);
-  border: 1px solid var(--border); border-top: 4px solid var(--accent-3);
-  border-radius: 14px; box-shadow: var(--shadow);
-}
-.trend-toggle:hover:not([disabled]) { background: var(--surface-2); border-color: var(--accent-3); }
-.trend-toggle b { font-size: 14px; color: var(--text); }
-.trend-toggle span span { font-size: 12px; color: var(--muted); display: block; margin-top: 3px; font-weight: 500; }
-.trend-toggle .chev { color: var(--accent-3); font-size: 16px; }
-.trend-toggle[disabled] { opacity: .55; cursor: not-allowed; border-top-color: var(--border-strong); box-shadow: none; }
-
-.trend-panel { grid-column: 1 / -1; }
-.trend-panel[hidden] { display: none !important; }
-.trend-controls {
-  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-  padding: 11px 16px; border-bottom: 1px solid var(--border); color: var(--text);
-}
-.trend-note { font-size: 11.5px; color: var(--muted); margin-left: auto; }
-.trend-chart { display: flex; align-items: flex-end; gap: 14px; padding: 20px 16px 10px; min-height: 190px; }
-.trend-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.trend-bar-wrap { width: 100%; height: 140px; display: flex; align-items: flex-end; justify-content: center; }
-.trend-bar { width: 100%; max-width: 56px; border-radius: 6px 6px 0 0; min-height: 4px; }
-.trend-val { font-size: 12.5px; font-weight: 800; }
-.trend-date { font-size: 10.5px; color: var(--muted); text-align: center; line-height: 1.3; }
-.trend-empty { padding: 24px 16px; text-align: center; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
-.trend-pick { margin: 0 16px 16px; text-align: center; }
-.trend-pick button {
-  padding: 8px 15px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700;
-  background: var(--accent); color: #fff; border: 1px solid var(--accent);
-}
-@media (max-width: 700px) { .trend-chart { gap: 7px; } .trend-bar-wrap { height: 110px; } .trend-date { font-size: 9px; } }
-
-/* Trend block sits below the summary layout, full width like the panels. */
-.trend-toggle, .trend-panel { margin: 14px 0 0; }
-
-/* Trend button styled as a KPI card rather than a wide bar. */
-.trend-toggle {
-  display: block !important; width: auto !important; max-width: 260px;
-  padding: 16px 18px !important; text-align: left;
-  border-top: 4px solid #1f9d55 !important; border-radius: 16px !important;
-}
-.trend-toggle b {
-  display: block; font-size: 12.5px !important; font-weight: 800; letter-spacing: .09em;
-  text-transform: uppercase; color: var(--accent) !important; line-height: 1.35;
-}
-.trend-toggle span span { font-size: 12.5px !important; color: var(--muted) !important; margin-top: 8px !important; }
-.trend-toggle .chev { display: none; }
-
-/* Bars sit together at the left rather than spreading across the panel. */
-.trend-chart { justify-content: flex-start !important; gap: 10px !important; }
-.trend-col { flex: 0 0 auto !important; width: 74px; }
-.trend-bar { max-width: none !important; }
-@media (max-width: 700px) { .trend-col { width: 52px; } .trend-chart { gap: 6px !important; } }
-
-/* Always present, just inert until an outlet is chosen. */
-.trend-toggle { grid-column: 1 / -1 !important; display: block !important; visibility: visible !important; }
-.trend-toggle[disabled] { display: block !important; }
-.trend-panel { grid-column: 1 / -1 !important; }
-
-/* The officer table must always own a full row of the summary grid; an added
-   sibling had been allowed to sit beside it, halving its width. */
-#performance-panel { grid-column: 1 / -1 !important; width: 100% !important; }
-.summary-layout > * { min-width: 0; }
-.officer-table-wrap { overflow-x: auto; }
-#performance-table { width: 100% !important; table-layout: auto; }
-/* Outside the grid now, so it needs its own spacing rather than a grid span. */
-.trend-toggle, .trend-panel { grid-column: auto !important; margin: 14px 0 0 !important; }
-
-/* Both the trend block and the officer table take a whole grid row, so they
-   stack (KPIs -> trend -> officer) instead of sitting side by side. */
-#summary-anchor > .trend-toggle,
-#summary-anchor > .trend-panel { grid-column: 1 / -1 !important; margin: 0 !important; }
-#summary-anchor > #performance-panel { grid-column: 1 / -1 !important; }
-
-.trend-pick { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
-.trend-pick button + button { background: var(--surface) !important; color: var(--accent) !important; }
-
-/* Keep all seven headline KPI cards in one row. On a narrow screen the row
-   scrolls horizontally instead of wrapping; card contents and sizing rules
-   (including the reduced Planned/Accepted cards) remain unchanged. */
-#summary-anchor > #kpis {
-  grid-column: 1 / -1 !important;
-  width: 100% !important;
-  grid-template-columns: repeat(7, minmax(150px, 1fr)) !important;
+/* Officer performance: internal vertical scroll with fixed table header */
+.officer-table-wrap {
+  max-height: 520px;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
-#summary-anchor > #kpis > .kpi-card { min-width: 150px; }
+.officer-table-wrap #performance-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
