@@ -27,7 +27,7 @@ const OFFICER_ALIASES = [
 
 const PC_DB = "visit-compliance-pc-raw-data";
 const PC_DB_VERSION = 1;
-const PC_READER_VERSION = "pc-response-dashboard-plan-v15-officer-detail-times";
+const PC_READER_VERSION = "pc-response-dashboard-plan-v16-outlet-level-never-visited";
 const DRIVE_WATCH_MS = 1000;
 const LEGACY_SHARED_SNAPSHOT_URL = "./data/shared_snapshot.json";
 const attendanceApi = () => globalThis.ShwapnoAttendance || null;
@@ -40,7 +40,7 @@ const DEFAULT_DEFINITIONS = Object.freeze({
   other: "Other / Unplanned Responses do not match the same officer, outlet code and planned date.",
   completed: "Distinct Planned Visits Completed counts each due assignment once.",
   remaining: "Remaining Visits are planned visits through the snapshot without a planned-date response.",
-  neverVisited: "Never Visited Outlets have no response from the assigned officer through the snapshot.",
+  neverVisited: "Never Visited Outlets have no accepted response from any officer for that outlet through the snapshot. Planned and unplanned responses both count as a visit.",
   completion: "Completion % is planned visits completed plus other/unplanned responses, divided by planned visits till date.",
 });
 
@@ -1104,7 +1104,7 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
     responseCounts.set(key, (responseCounts.get(key) || 0) + 1);
   });
   const completedKeys = new Set(due.filter((assignment) => responseCounts.get(planKey(assignment))).map(planKey));
-  const visitedPairs = new Set(responses.map((response) => response.officerKey + "|" + response.siteCode));
+  const visitedSites = new Set(responses.map((response) => response.siteCode));
   const assignmentsByOfficer = new Map();
   const dueByOfficer = new Map();
   const responsesByOfficer = new Map();
@@ -1145,8 +1145,7 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
 
   const neverByOfficer = new Map();
   due.forEach((assignment) => {
-    const pair = assignment.officerKey + "|" + assignment.siteCode;
-    if (visitedPairs.has(pair)) return;
+    if (visitedSites.has(assignment.siteCode)) return;
     if (!neverByOfficer.has(assignment.officerKey)) neverByOfficer.set(assignment.officerKey, new Set());
     neverByOfficer.get(assignment.officerKey).add(assignment.siteCode);
   });
@@ -1186,7 +1185,7 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
     const completed = dueOfficer.filter((assignment) => completedKeys.has(planKey(assignment))).map(planItem);
     const neverMap = new Map();
     dueOfficer.forEach((assignment) => {
-      if (!visitedPairs.has(officerKey + "|" + assignment.siteCode)) neverMap.set(assignment.siteCode, {
+      if (!visitedSites.has(assignment.siteCode)) neverMap.set(assignment.siteCode, {
         siteCode: assignment.siteCode,
         outletName: assignment.outletName,
         inTime: "",
@@ -1317,7 +1316,7 @@ function calculateLocalDashboard(baseData, schedule, parsedResponse, responseFil
     officers,
     details,
     outlets,
-    definitions: { ...DEFAULT_DEFINITIONS, ...(baseData?.definitions || {}) },
+    definitions: { ...DEFAULT_DEFINITIONS, ...(baseData?.definitions || {}), neverVisited: DEFAULT_DEFINITIONS.neverVisited },
   };
 }
 
