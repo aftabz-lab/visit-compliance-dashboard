@@ -767,7 +767,7 @@ def calculate(assignments: list[dict], all_responses: list[dict], officer_dimens
     due = [a for a in assignments if a["plannedDate"] <= snapshot_date]
     response_counts = Counter(response_plan_key(r) for r in responses)
     completed_keys = {plan_key(a) for a in due if response_counts[plan_key(a)] > 0}
-    visited_pairs = {(r["officerKey"], r["siteCode"]) for r in responses}
+    visited_sites = {r["siteCode"] for r in responses}
 
     metrics = {
         key: {
@@ -801,7 +801,7 @@ def calculate(assignments: list[dict], all_responses: list[dict], officer_dimens
     never_by_officer: dict[str, set[str]] = defaultdict(set)
     for a in due:
         ok = officer_plan_key(a)
-        if (ok, a["siteCode"]) not in visited_pairs:
+        if a["siteCode"] not in visited_sites:
             never_by_officer[ok].add(a["siteCode"])
     for ok, row in metrics.items():
         row["remainingVisits"] = row["totalPlannedTillDate"] - row["distinctPlannedVisitsCompleted"]
@@ -838,7 +838,7 @@ def calculate(assignments: list[dict], all_responses: list[dict], officer_dimens
         ]
         never_map: dict[str, dict] = {}
         for a in due_officer:
-            if (ok, a["siteCode"]) not in visited_pairs:
+            if a["siteCode"] not in visited_sites:
                 never_map.setdefault(a["siteCode"], {"siteCode": a["siteCode"], "outletName": a["outletName"]})
 
         planned_date_response_list = []
@@ -1156,7 +1156,7 @@ def main() -> None:
             "other": "Other / Unplanned Responses are accepted responses that do not match the same officer, outlet code and planned date.",
             "completed": "Distinct Planned Visits Completed counts each due officer/outlet/date assignment once when one or more matching responses exist.",
             "remaining": "Remaining Visits counts due officer/outlet/date assignments with no same-officer, same-outlet, same-date response.",
-            "neverVisited": "Never Visited Outlets Till Date counts each outlet code once for the officer when it was due on or before the snapshot and the officer has no response for that outlet on any date through the snapshot. A response on a non-planned date removes the outlet from this count. The summary card, drill-down list and table total show the number of distinct outlet codes never visited across the officers in view, so an outlet shared by a Zonal officer and an RHO is counted once there (the per-officer table column still reports it for each officer).",
+            "neverVisited": "Never Visited Outlets Till Date counts a due outlet only when no accepted Response Summary row exists for that outlet from any officer on any date through the snapshot. Any planned or unplanned response removes the outlet from this count. The summary card, drill-down list and table total show the number of distinct outlet codes never visited across the officers in view, so an outlet shared by a Zonal officer and an RHO is counted once there (the per-officer table column still reports it for each officer).",
             "completion": "Completion % = (Distinct Planned Visits Completed + Other / Unplanned Responses) ÷ Total Planned Visits (Till Date).",
         },
     }
