@@ -27,7 +27,7 @@ const OFFICER_ALIASES = [
 
 const PC_DB = "visit-compliance-pc-raw-data";
 const PC_DB_VERSION = 1;
-const PC_READER_VERSION = "pc-response-dashboard-plan-v16-outlet-level-never-visited";
+const PC_READER_VERSION = "pc-response-dashboard-plan-v17-shared-snapshot-never-visited";
 const DRIVE_WATCH_MS = 1000;
 const LEGACY_SHARED_SNAPSHOT_URL = "./data/shared_snapshot.json";
 const attendanceApi = () => globalThis.ShwapnoAttendance || null;
@@ -133,6 +133,65 @@ const nameKey = (value) => cleanText(value).toLocaleLowerCase();
 const looseNameKey = (value) => nameKey(value).replace(/[.,'’\`"()\-_/\\]+/g, " ").replace(/\s+/g, " ").trim();
 const siteKey = (value) => cleanText(value).toUpperCase();
 const pad2 = (value) => String(value).padStart(2, "0");
+
+// Older shared/browser snapshots can contain a Never Visited list calculated
+// with the former officer+outlet rule. Reconcile every loaded snapshot from
+// the response evidence it already contains so a response by any Zonal/RHO
+// removes that outlet from Never Visited for every officer immediately.
+export function reconcileNeverVisitedByOutlet(data) {
+  if (!validDashboardData(data)) return data;
+
+  const visitedSites = new Set();
+  Object.values(data.details || {}).forEach((detail) => {
+    [detail?.plannedDateResponseList, detail?.otherUnplannedResponseList].forEach((rows) => {
+      if (!Array.isArray(rows)) return;
+      rows.forEach((row) => {
+        const code = siteKey(row?.siteCode);
+        if (code) visitedSites.add(code);
+      });
+    });
+  });
+
+  let changed = false;
+  const details = {};
+  Object.entries(data.details || {}).forEach(([officerKey, detail]) => {
+    if (!detail || !Array.isArray(detail.neverVisited)) {
+      details[officerKey] = detail;
+      return;
+    }
+    const neverVisited = detail.neverVisited.filter((row) => {
+      const code = siteKey(row?.siteCode);
+      return !code || !visitedSites.has(code);
+    });
+    if (neverVisited.length !== detail.neverVisited.length) {
+      changed = true;
+      details[officerKey] = { ...detail, neverVisited };
+    } else {
+      details[officerKey] = detail;
+    }
+  });
+
+  const officers = data.officers.map((row) => {
+    const neverVisited = details[row?.officerKey]?.neverVisited;
+    if (!Array.isArray(neverVisited)) return row;
+    const neverVisitedOutlets = new Set(neverVisited.map((item) => siteKey(item?.siteCode)).filter(Boolean)).size;
+    if (Number(row?.neverVisitedOutlets || 0) === neverVisitedOutlets) return row;
+    changed = true;
+    return { ...row, neverVisitedOutlets };
+  });
+
+  const definitionChanged = data.definitions?.neverVisited !== DEFAULT_DEFINITIONS.neverVisited;
+  if (!changed && !definitionChanged) return data;
+  return {
+    ...data,
+    officers,
+    details,
+    definitions: {
+      ...(data.definitions || {}),
+      neverVisited: DEFAULT_DEFINITIONS.neverVisited,
+    },
+  };
+}
 
 function isoDate(year, month, day) {
   const y = Number(year);
@@ -2149,6 +2208,15 @@ export async function loadDashboardData() {
     localSource.initialize(),
     loadPublishedSharedDashboard(),
   ]);
+
+  // A shared or retained snapshot may have been published before the
+  // outlet-level rule was introduced. Correct that cached calculation at the
+  // loading boundary instead of waiting for this browser to reconnect to Drive.
+  if (local?.data) {
+    local.data = reconcileNeverVisitedByOutlet(local.data);
+    localSource.currentData = local.data;
+  }
+  if (shared?.data) shared.data = reconcileNeverVisitedByOutlet(shared.data);
 
   if (shouldUseSharedVisitSnapshot(local, shared)) {
     // Keep the shared copy as the in-memory baseline while Drive reconnects.

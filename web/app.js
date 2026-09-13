@@ -1,4 +1,4 @@
-import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-interactions-v4-outlet-level-never-visited";
+import { attachGoogleDriveDataSource, getDataStatus, loadDashboardData } from "./data-loader.js?v=visit-interactions-v5-shared-snapshot-never-visited";
 import { publishIfSignedIn, readCloudSnapshot } from "./supabase-sync.js?v=visit-compliance-v12-supabase";
 import { downloadCompiledBackupWorkbook } from "./backup-export.js?v=compiled-backup-v1";
 
