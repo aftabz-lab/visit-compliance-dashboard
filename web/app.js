@@ -1969,3 +1969,20 @@ async function init() {
   }
 }
 init();
+
+// SHWAPNO Ask AI: read-only backend data bridge v1.
+if (new URLSearchParams(location.search).get('snapshot-worker') !== '1') {
+  window.ShwapnoDashboardData = Object.freeze({version:1,id:'visit',async read({global=false}={}) {
+    if (!state.data) throw new Error('Visit backend data is still loading.');
+    const officers=global?state.data.officers:getOfficerRowsFiltered();
+    const visits=officers.flatMap(officer=>buildOfficerRows(officer,'all'));
+    const summaries=rowsWithDerived(officers);
+    const latest={field:'actualVisitDate',label:'visit / assessment',display:['officer','outletCode','outletName','actualVisitDate','responseId','inTime','outTime','visitDuration','visitStatus']};
+    return {id:'visit',ready:true,source:'Visit Compliance backend: '+(state.data.metadata.responseFile||'published responses'),snapshot:state.data.metadata.snapshotTakenAt||state.data.metadata.generatedAt,scope:state.data.metadata.reportMonth+'; '+(global?'all officers':'dashboard officer/status/outlet filters')+'; all response and planned rows, including rows outside the screen',
+      filters:[{label:'Report cut-off',value:state.data.metadata.snapshotDate},{label:'Officer scope',value:officers.map(r=>r.officer).join(', ')}],
+      facts:[{label:'Completed visits',value:totalCompleted(officers)},{label:'Planned visits till date',value:total(officers,'totalPlannedTillDate')},{label:'Pending visits',value:total(officers,'remainingVisits')}],
+      datasets:[{id:'officers',title:'Officer performance',rows:summaries,identity:['officer'],columns:[{key:'completed',label:'Completed visits'},{key:'planned',label:'Planned visits till date'},{key:'pending',label:'Pending visits'},{key:'completionPct',label:'Completion',unit:'%'}]},
+        {id:'visits',title:'Recorded visits and assessments',rows:visits,identity:['officer','outletCode','outletName'],latest},
+        {id:'outlets',title:'Outlet visit history and ownership',rows:Object.values(state.data.outlets||{}),identity:['siteCode','outletName','rhoName','zonalName']}]};
+  }});
+}

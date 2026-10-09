@@ -3478,7 +3478,19 @@ if (REQUESTED_OUTLET) {
   else if (folder) setState(`<span class="pill idle">reconnect Drive</span><br>Folder <b>${esc(folder.name)}</b> is already selected. Click Reconnect Google Drive.${state.rows.length ? " The retained snapshot remains visible." : ""}`);
   else if (state.rows.length) showLoaded("Use Drive setup to select the shared Google Drive folder.");
 })();
+
+// SHWAPNO Ask AI: read-only backend data bridge v1.
+if (new URLSearchParams(location.search).get('snapshot-worker') !== '1') window.ShwapnoDashboardData=Object.freeze({version:1,id:'audit',async read(){
+  if(!state.rows.length)throw new Error('Audit backend records are still loading or unavailable.');
+  const a=aggregate();
+  const outletRows=[...a.sites].map(([code,[got,max]])=>({OutletCode:code,OutletName:meta(code).name,RHO:meta(code).rho,Zonal:meta(code).zonal,Earned:got,Available:max,Score:pct(got,max)}));
+  const categories=[...a.cats].map(([Category,[Earned,Available]])=>({Category,Earned,Available,Score:pct(Earned,Available)}));
+  const responseRows=new Map();
+  for(const r of state.rows){const key=String(r['Site Code'])+'|'+String(r['Response ID']);if(!responseRows.has(key))responseRows.set(key,{OutletCode:r['Site Code'],OutletName:meta(r['Site Code']).name,ResponseId:r['Response ID'],Date:r.Date,RHO:meta(r['Site Code']).rho,Zonal:meta(r['Site Code']).zonal});}
+  return {id:'audit',ready:true,source:'Audit backend: '+(state.file||state.source),snapshot:state.savedAt?new Date(state.savedAt).toISOString():null,scope:'All published response/answer rows; score summaries use the existing latest-response-per-outlet rule and current category/outlet filters',filters:[{label:'Category',value:state.cat||'All'},{label:'Outlet',value:state.site||'All'}],facts:[{label:'Audit score',value:pct(a.total[0],a.total[1]),unit:'%'},{label:'Scored outlets',value:a.outlets.size},{label:'Latest scored audits',value:a.audits.size}],datasets:[{id:'outlets',title:'Latest outlet audit scores',rows:outletRows,identity:['OutletCode','OutletName','RHO','Zonal']},{id:'categories',title:'Category audit scores',rows:categories,identity:['Category']},{id:'responses',title:'All assessment response history',rows:[...responseRows.values()],identity:['OutletCode','OutletName','RHO','Zonal'],latest:{field:'Date',label:'assessment',display:['OutletCode','OutletName','ResponseId','Date']}},{id:'answers',title:'Complete audit answer records',rows:state.rows,identity:['Site Code','Question Category','Question Title']}]};
+}});
+
 </script>
-  <script defer src="https://aftabz-lab.github.io/azure-dashboard-chat.js?v=azure-chat-v1-20261007"></script>
+  <script defer src="https://aftabz-lab.github.io/azure-dashboard-chat.js?v=backend-data-v1-20261009"></script>
 </body>
 </html>
